@@ -57,6 +57,7 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           BOT_MAX_CAUSAS: ${{ github.event.inputs.max_causas || '25' }}
           BOT_MODE: ${{ github.event.inputs.mode || 'normal' }}
+          SKIP_HOUR_CHECK: '1'
         run: npx tsx src/bot/index.ts
       
       - name: 📸 Upload screenshots on failure

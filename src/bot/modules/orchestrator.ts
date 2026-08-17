@@ -48,9 +48,11 @@ export async function runBotSession(
   log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
   
   try {
-    // 0. Verificar horario permitido
-    if (!isWithinAllowedHours()) {
+    // 0. Verificar horario permitido (desactivado para pruebas manuales)
+    // Se puede reactivar después cambiando SKIP_HOUR_CHECK
+    if (!process.env.SKIP_HOUR_CHECK && !isWithinAllowedHours()) {
       log('warn', 'Fuera de horario permitido (8-18h Chile). Abortando.')
+      log('info', 'Tip: usa SKIP_HOUR_CHECK=1 para ignorar el horario')
       status.detenido_por = 'error_critico'
       status.errores.push('Fuera de horario permitido')
       return { status, data: results }
