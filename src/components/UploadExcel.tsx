@@ -3,6 +3,7 @@ import { useState, useCallback } from 'react'
 
 interface Stats {
   causas: number
+  causas_actualizadas?: number
   nna: number
   adultos: number
   audiencias: number
@@ -29,7 +30,13 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
       const data = await res.json()
       
       if (!res.ok) {
-        setError(data.error || 'Error al procesar')
+        const errorText = data.error || `Error ${res.status}: ${res.statusText}`
+        setError(errorText)
+        return
+      }
+
+      if (data.stats?.causas === 0 && data.stats?.causas_actualizadas === 0) {
+        setError('El archivo se procesó pero no se encontraron causas nuevas. ¿El archivo tiene una columna con RIT?')
         return
       }
 
@@ -76,7 +83,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
             <div className="text-4xl">✅</div>
             <p className="text-green-700 font-bold text-lg">¡Carga exitosa!</p>
             <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto text-sm">
-              <div className="bg-green-50 rounded p-2">📁 {result.causas} causas</div>
+              <div className="bg-green-50 rounded p-2">📁 {result.causas} nuevas</div>
               <div className="bg-green-50 rounded p-2">👶 {result.nna} NNA</div>
               <div className="bg-green-50 rounded p-2">👤 {result.adultos} adultos</div>
               <div className="bg-green-50 rounded p-2">📅 {result.audiencias} audiencias</div>
