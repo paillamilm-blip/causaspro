@@ -67,23 +67,16 @@ export async function getPJUDCredentials(): Promise<Credentials | null> {
     
     // Desencriptar si es necesario
     if (passConfig.encriptado) {
-      // Intentar desencriptar con pgcrypto
-      const { data: decrypted } = await supabase.rpc('decrypt_config_value', {
-        encrypted_text: password,
-        secret_key: encryptKey,
-      })
-      
-      if (decrypted) {
-        password = decrypted
-      } else {
-        // Fallback: intentar base64
-        try {
-          password = Buffer.from(password, 'base64').toString('utf-8')
-        } catch {
-          log('error', 'No se pudo desencriptar la contraseña')
-          return null
-        }
+      password = await decryptValue(password, supabase, encryptKey)
+      if (!password) {
+        log('error', 'No se pudo desencriptar la contraseña PJUD')
+        return null
       }
+    }
+    
+    // Desencriptar RUT si por alguna razón está encriptado
+    if (rutConfig.encriptado) {
+      rut = await decryptValue(rut, supabase, encryptKey) || rut
     }
     
     log('success', `Credenciales PJUD obtenidas (RUT: ${rut.slice(0, 4)}****)`)
@@ -132,11 +125,7 @@ export async function getIMAPCredentials(): Promise<{ host: string; user: string
       if (!c.valor) continue
       
       if (c.encriptado) {
-        const { data: decrypted } = await supabase.rpc('decrypt_config_value', {
-          encrypted_text: c.valor,
-          secret_key: encryptKey,
-        })
-        configMap[c.clave] = decrypted || Buffer.from(c.valor, 'base64').toString('utf-8')
+        configMap[c.clave] = await decryptValue(c.valor, supabase, encryptKey) || ''
       } else {
         configMap[c.clave] = c.valor
       }
@@ -152,5 +141,52 @@ export async function getIMAPCredentials(): Promise<{ host: string; user: string
     }
   } catch {
     return null
+  }
+}
+
+
+/**
+ * Desencripta un valor usando el prefijo para determinar el método:
+ * - "pgp:..." → desencriptar con pgcrypto RPC
+ * - "b64:..." → decodificar base64
+ * - sin prefijo (legacy) → intentar pgcrypto, luego base64
+ */
+async function decryptValue(
+  storedValue: string,
+  supabase: any,
+  encryptKey: string
+): Promise<string | null> {
+  if (!storedValue) return null
+  
+  // Método 1: prefijo pgp:
+  if (storedValue.startsWith('pgp:')) {
+    const encrypted = storedValue.slice(4)
+    const { data } = await supabase.rpc('decrypt_config_value', {
+      encrypted_text: encrypted,
+      secret_key: encryptKey,
+    })
+    return data || null
+  }
+  
+  // Método 2: prefijo b64:
+  if (storedValue.startsWith('b64:')) {
+    try {
+      return Buffer.from(storedValue.slice(4), 'base64').toString('utf-8')
+    } catch {
+      return null
+    }
+  }
+  
+  // Legacy (sin prefijo): intentar pgcrypto primero, luego base64
+  const { data } = await supabase.rpc('decrypt_config_value', {
+    encrypted_text: storedValue,
+    secret_key: encryptKey,
+  })
+  if (data) return data
+  
+  try {
+    return Buffer.from(storedValue, 'base64').toString('utf-8')
+  } catch {
+    return storedValue // Último recurso: devolver tal cual
   }
 }

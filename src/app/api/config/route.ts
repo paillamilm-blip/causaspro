@@ -73,11 +73,11 @@ export async function POST(req: NextRequest) {
         })
         
         if (encrypted) {
-          valorFinal = encrypted
-        }
-        // Si rpc no funciona, guardar con simple base64 como fallback
-        else {
-          valorFinal = Buffer.from(valor).toString('base64')
+          // Prefijo para identificar método de encriptación
+          valorFinal = `pgp:${encrypted}`
+        } else {
+          // Fallback: base64 con prefijo
+          valorFinal = `b64:${Buffer.from(valor).toString('base64')}`
         }
       }
       

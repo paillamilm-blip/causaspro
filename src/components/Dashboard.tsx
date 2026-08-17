@@ -40,14 +40,14 @@ function getSemaforo(nivel: number | null): { color: string; label: string; bg: 
 
 function getUrgenciaMotivo(causa: CausaResumen): string {
   const nivel = causa.nivel_urgencia
-  if (!nivel || nivel >= 10) return 'Sin alertas'
+  if (!nivel || nivel >= 10) return ''
   if (nivel === 1) return `⚡ Audiencia en ${Math.max(0, Math.round(causa.dias_para_audiencia || 0))} días`
   if (nivel === 2) return `⚠️ Medida cautelar vence en ${causa.dias_medida_vence} días`
   if (nivel === 3) return `📅 Audiencia en ${Math.round(causa.dias_para_audiencia || 0)} días`
   if (nivel === 4) return `😴 Sin actividad hace ${Math.round(causa.dias_sin_actividad || 0)} días`
   if (nivel === 5) return `⏳ Sin actividad hace ${Math.round(causa.dias_sin_actividad || 0)} días`
   if (nivel === 6) return '📋 Sin audiencia programada'
-  return 'Sin alertas'
+  return ''
 }
 
 function formatFecha(iso: string | null): string {
@@ -297,7 +297,7 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
               {c.nombres_nna && <span className="ml-1 text-gray-500">- {c.nombres_nna.substring(0, 60)}{c.nombres_nna.length > 60 ? '...' : ''}</span>}
             </div>
             {/* Motivo de urgencia */}
-            {c.nivel_urgencia !== null && c.nivel_urgencia < 10 && (
+            {c.nivel_urgencia !== null && c.nivel_urgencia <= 6 && (
               <div className={`mt-1 text-xs font-medium ${sem.color}`}>
                 {motivo}
               </div>
