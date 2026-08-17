@@ -8,7 +8,8 @@ name: 📧 Email - Interceptar asignaciones
 on:
   # Cada 30 minutos en horario laboral Chile (12:00-22:00 UTC = 8:00-18:00 Chile)
   schedule:
-    - cron: '*/30 12-22 * * 1-5'  # Cada 30min, Lun-Vie, horario Chile
+    - cron: '*/30 12-23 * * 1-5'  # Cada 30min, Lun-Vie, 8AM-7PM Chile
+    - cron: '*/30 0-0 * * 2-6'    # Cada 30min, hasta medianoche Chile
   
   # Ejecución manual
   workflow_dispatch:
