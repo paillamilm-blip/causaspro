@@ -7,6 +7,7 @@ import Link from 'next/link'
 
 export default function Home() {
   const [hasCausas, setHasCausas] = useState<boolean | null>(null)
+  const [causasCount, setCausasCount] = useState(0)
 
   useEffect(() => {
     checkCausas()
@@ -14,7 +15,24 @@ export default function Home() {
 
   async function checkCausas() {
     const { count } = await supabase.from('causas').select('*', { count: 'exact', head: true })
-    setHasCausas((count || 0) > 0)
+    const total = count || 0
+    setCausasCount(total)
+    setHasCausas(total > 0)
+  }
+
+  async function handleReset() {
+    if (!confirm('⚠️ ¿Estás segura? Esto borra TODAS las causas y datos. Es irreversible.')) return
+    if (!confirm('🚨 ÚLTIMA CONFIRMACIÓN: ¿Borrar todo?')) return
+    
+    const res = await fetch('/api/admin/reset', { method: 'DELETE' })
+    const data = await res.json()
+    if (data.ok) {
+      alert('✅ Todo borrado. Puedes subir un nuevo archivo.')
+      setHasCausas(false)
+      setCausasCount(0)
+    } else {
+      alert('Error: ' + data.error)
+    }
   }
 
   if (hasCausas === null) {
@@ -37,12 +55,22 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2">
             {hasCausas && (
-              <button
-                onClick={() => setHasCausas(false)}
-                className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
-              >
-                📤 Subir documento
-              </button>
+              <>
+                <span className="text-xs text-gray-400">{causasCount} causas</span>
+                <button
+                  onClick={() => setHasCausas(false)}
+                  className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+                >
+                  📤 Subir documento
+                </button>
+                <button
+                  onClick={handleReset}
+                  className="text-sm bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100 transition"
+                  title="Borrar todos los datos"
+                >
+                  🗑️
+                </button>
+              </>
             )}
             <Link
               href="/config"
