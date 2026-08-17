@@ -6,34 +6,35 @@
 export { runBotSession, runUrgentOnly, runTestSingle } from './modules/orchestrator'
 export { analyzeCausaUrgency, generateAlertSummary } from './modules/detection'
 export { initSupabase, getCausasToScrape } from './modules/supabaseSync'
+export { getPJUDCredentials, getIMAPCredentials } from './modules/credentials'
 export type { BotConfig, CausaScrapedData, BotRunStatus, ScrapeSessionResult } from './types'
 
 // CLI runner
 async function main() {
   const { runBotSession } = await import('./modules/orchestrator')
-  
-  // Credenciales desde variables de entorno
-  const rut = process.env.PJUD_RUT
-  const password = process.env.PJUD_PASSWORD
-  
-  if (!rut || !password) {
-    console.error('❌ Error: Variables de entorno PJUD_RUT y PJUD_PASSWORD requeridas')
-    console.error('')
-    console.error('Uso:')
-    console.error('  PJUD_RUT="12345678-9" PJUD_PASSWORD="mipass" npx tsx src/bot/index.ts')
-    console.error('')
-    console.error('O configura en .env.local:')
-    console.error('  PJUD_RUT=12345678-9')
-    console.error('  PJUD_PASSWORD=mipass')
-    process.exit(1)
-  }
+  const { getPJUDCredentials } = await import('./modules/credentials')
   
   console.log('🚀 Iniciando CausasPro Bot...')
-  console.log(`   RUT: ${rut.slice(0, 4)}****`)
   console.log(`   Hora Chile: ${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })}`)
   console.log('')
   
-  const result = await runBotSession({ rut, password })
+  // Obtener credenciales (env vars → Supabase DB)
+  const credentials = await getPJUDCredentials()
+  
+  if (!credentials) {
+    console.error('❌ Error: No se encontraron credenciales PJUD')
+    console.error('')
+    console.error('Opciones:')
+    console.error('  1. Variables de entorno: PJUD_RUT="12345678-9" PJUD_PASSWORD="pass"')
+    console.error('  2. Configurar en la app: /config')
+    console.error('')
+    process.exit(1)
+  }
+  
+  console.log(`   RUT: ${credentials.rut.slice(0, 4)}****`)
+  console.log('')
+  
+  const result = await runBotSession(credentials)
   
   // Output result
   console.log('\n📋 Resultado:')

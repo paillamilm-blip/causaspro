@@ -6,6 +6,8 @@ interface Stats {
   nna: number
   adultos: number
   audiencias: number
+  columnasDetectadas?: string[]
+  hoja?: string
 }
 
 export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
@@ -32,7 +34,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
       }
 
       setResult(data.stats)
-      setTimeout(() => onSuccess(), 2000)
+      setTimeout(() => onSuccess(), 2500)
     } catch (e: any) {
       setError(e.message || 'Error de conexión')
     } finally {
@@ -53,44 +55,72 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
   }
 
   return (
-    <div
-      onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
-      onDragLeave={() => setDragging(false)}
-      onDrop={onDrop}
-      className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer
-        ${dragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400 bg-white'}
-        ${loading ? 'opacity-60 pointer-events-none' : ''}
-      `}
-    >
-      {loading ? (
-        <div className="space-y-3">
-          <div className="animate-spin text-4xl">⚙️</div>
-          <p className="text-gray-600 font-medium">Procesando tu Excel...</p>
-          <p className="text-sm text-gray-400">Limpiando datos, normalizando RUT, cargando causas...</p>
-        </div>
-      ) : result ? (
-        <div className="space-y-3">
-          <div className="text-4xl">✅</div>
-          <p className="text-green-700 font-bold text-lg">¡Carga exitosa!</p>
-          <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto text-sm">
-            <div className="bg-green-50 rounded p-2">📁 {result.causas} causas</div>
-            <div className="bg-green-50 rounded p-2">👶 {result.nna} NNA</div>
-            <div className="bg-green-50 rounded p-2">👤 {result.adultos} adultos</div>
-            <div className="bg-green-50 rounded p-2">📅 {result.audiencias} audiencias</div>
+    <div className="space-y-4">
+      <div
+        onDragOver={(e) => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={onDrop}
+        className={`border-2 border-dashed rounded-2xl p-12 text-center transition-all cursor-pointer
+          ${dragging ? 'border-blue-500 bg-blue-50' : 'border-gray-300 hover:border-gray-400 bg-white'}
+          ${loading ? 'opacity-60 pointer-events-none' : ''}
+        `}
+      >
+        {loading ? (
+          <div className="space-y-3">
+            <div className="animate-spin text-4xl">⚙️</div>
+            <p className="text-gray-600 font-medium">Procesando documento...</p>
+            <p className="text-sm text-gray-400">Detectando columnas, limpiando datos, cargando causas...</p>
           </div>
-        </div>
-      ) : (
-        <div className="space-y-4">
-          <div className="text-5xl">📤</div>
-          <div>
-            <p className="text-gray-700 font-semibold text-lg">Arrastra tu Excel aquí</p>
-            <p className="text-gray-400 text-sm mt-1">o haz click para seleccionar archivo</p>
+        ) : result ? (
+          <div className="space-y-3">
+            <div className="text-4xl">✅</div>
+            <p className="text-green-700 font-bold text-lg">¡Carga exitosa!</p>
+            <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto text-sm">
+              <div className="bg-green-50 rounded p-2">📁 {result.causas} causas</div>
+              <div className="bg-green-50 rounded p-2">👶 {result.nna} NNA</div>
+              <div className="bg-green-50 rounded p-2">👤 {result.adultos} adultos</div>
+              <div className="bg-green-50 rounded p-2">📅 {result.audiencias} audiencias</div>
+            </div>
+            {result.columnasDetectadas && result.columnasDetectadas.length > 0 && (
+              <p className="text-xs text-gray-400 mt-2">
+                Columnas detectadas: {result.columnasDetectadas.length}
+              </p>
+            )}
           </div>
-          <label className="inline-block bg-blue-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-blue-700 transition">
-            Seleccionar archivo
-            <input type="file" accept=".xlsx,.xls" onChange={onFileInput} className="hidden" />
-          </label>
-          {error && <p className="text-red-500 text-sm mt-2">❌ {error}</p>}
+        ) : (
+          <div className="space-y-4">
+            <div className="text-5xl">📤</div>
+            <div>
+              <p className="text-gray-700 font-semibold text-lg">Arrastra tu documento aquí</p>
+              <p className="text-gray-400 text-sm mt-1">o haz click para seleccionar archivo</p>
+            </div>
+            <label className="inline-block bg-blue-600 text-white px-6 py-2 rounded-lg cursor-pointer hover:bg-blue-700 transition">
+              Seleccionar archivo
+              <input 
+                type="file" 
+                accept=".xlsx,.xls,.csv,.ods" 
+                onChange={onFileInput} 
+                className="hidden" 
+              />
+            </label>
+            {error && <p className="text-red-500 text-sm mt-2">❌ {error}</p>}
+          </div>
+        )}
+      </div>
+      
+      {/* Info de formatos aceptados */}
+      {!loading && !result && (
+        <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-500 space-y-2">
+          <p className="font-medium text-gray-600">📋 Formatos aceptados:</p>
+          <ul className="space-y-1 ml-4">
+            <li>• <strong>Excel</strong> (.xlsx, .xls) — cualquier formato con columna RIT</li>
+            <li>• <strong>CSV</strong> (.csv) — separado por comas o punto y coma</li>
+            <li>• <strong>LibreOffice</strong> (.ods)</li>
+          </ul>
+          <p className="mt-2 text-gray-400">
+            El sistema detecta automáticamente columnas como: RIT, Nombre, Apellido, Audiencia, Estado, Programa, etc.
+            Solo necesita al menos una columna con RIT (ej: P-1234-2024).
+          </p>
         </div>
       )}
     </div>

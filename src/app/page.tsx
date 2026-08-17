@@ -3,6 +3,7 @@ import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase'
 import UploadExcel from '@/components/UploadExcel'
 import Dashboard from '@/components/Dashboard'
+import Link from 'next/link'
 
 export default function Home() {
   const [hasCausas, setHasCausas] = useState<boolean | null>(null)
@@ -34,14 +35,23 @@ export default function Home() {
             <h1 className="text-xl font-bold text-gray-800">CausasPro</h1>
             <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded">Curaduría Ad Litem</span>
           </div>
-          {hasCausas && (
-            <button
-              onClick={() => setHasCausas(false)}
-              className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+          <div className="flex items-center gap-2">
+            {hasCausas && (
+              <button
+                onClick={() => setHasCausas(false)}
+                className="text-sm bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition"
+              >
+                📤 Subir documento
+              </button>
+            )}
+            <Link
+              href="/config"
+              className="text-sm bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition"
+              title="Configuración"
             >
-              📤 Subir nuevo Excel
-            </button>
-          )}
+              ⚙️
+            </Link>
+          </div>
         </div>
       </header>
 
@@ -50,8 +60,9 @@ export default function Home() {
         {!hasCausas ? (
           <div className="max-w-xl mx-auto space-y-6">
             <div className="text-center">
-              <h2 className="text-2xl font-bold text-gray-800">Sube tu Excel de causas</h2>
-              <p className="text-gray-500 mt-1">El sistema limpiará y organizará todas tus causas automáticamente</p>
+              <h2 className="text-2xl font-bold text-gray-800">Sube tu documento de causas</h2>
+              <p className="text-gray-500 mt-1">Excel, CSV o cualquier archivo con una columna RIT</p>
+              <p className="text-xs text-gray-400 mt-1">El sistema detecta automáticamente las columnas de tu archivo</p>
             </div>
             <UploadExcel onSuccess={() => { setHasCausas(true) }} />
           </div>

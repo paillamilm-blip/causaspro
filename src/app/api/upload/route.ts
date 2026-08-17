@@ -17,10 +17,11 @@ export async function POST(req: NextRequest) {
     const buffer = await file.arrayBuffer()
     
     // Parsear Excel
-    const { causas, nna, adultos, audiencias } = parseExcelBuffer(buffer)
+    const parseResult = parseExcelBuffer(buffer)
+    const { causas, nna, adultos, audiencias } = parseResult
 
     if (causas.length === 0) {
-      return NextResponse.json({ error: 'No se encontraron causas en el archivo' }, { status: 400 })
+      return NextResponse.json({ error: 'No se encontraron causas en el archivo. Asegúrate de que tenga una columna con RIT.' }, { status: 400 })
     }
 
     // Conectar a Supabase con service role
@@ -100,6 +101,8 @@ export async function POST(req: NextRequest) {
         nna: nnaCount,
         adultos: adultosCount,
         audiencias: audienciasCount,
+        columnasDetectadas: parseResult.columnasDetectadas || [],
+        hoja: parseResult.hoja || '',
       }
     })
 
