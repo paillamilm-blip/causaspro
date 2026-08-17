@@ -1,0 +1,41 @@
+# ============================================================
+# CausasPro Email Interceptor - Revisión automática de correos
+# Revisa cada 30 minutos en horario laboral
+# ============================================================
+
+name: 📧 Email - Interceptar asignaciones
+
+on:
+  # Cada 30 minutos en horario laboral Chile (12:00-22:00 UTC = 8:00-18:00 Chile)
+  schedule:
+    - cron: '*/30 12-22 * * 1-5'  # Cada 30min, Lun-Vie, horario Chile
+  
+  # Ejecución manual
+  workflow_dispatch:
+
+jobs:
+  check-emails:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: 📥 Checkout
+        uses: actions/checkout@v4
+      
+      - name: 🟢 Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+      
+      - name: 📦 Install dependencies
+        run: npm ci
+      
+      - name: 📧 Check emails
+        env:
+          IMAP_HOST: ${{ secrets.IMAP_HOST }}
+          IMAP_USER: ${{ secrets.IMAP_USER }}
+          IMAP_PASSWORD: ${{ secrets.IMAP_PASSWORD }}
+          NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npx tsx src/email/index.ts
