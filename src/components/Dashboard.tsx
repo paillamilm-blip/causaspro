@@ -26,16 +26,16 @@ interface CausaResumen {
 }
 
 // Semáforo basado en nivel_urgencia multi-criterio
-function getSemaforo(nivel: number | null): { color: string; label: string; bg: string; texto: string } {
+function getSemaforo(nivel: number | null): { color: string; label: string; bg: string; texto: string; dotColor: string } {
   if (nivel === null || nivel >= 10) 
-    return { color: 'text-green-600', label: '🟢', bg: 'bg-green-50 border-green-200', texto: 'Estable' }
+    return { color: 'text-green-600', label: '', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
   if (nivel <= 2) 
-    return { color: 'text-red-600', label: '🔴', bg: 'bg-red-50 border-red-200', texto: 'Crítico' }
+    return { color: 'text-red-600', label: '', bg: 'bg-red-50 border-red-200', texto: 'Crítico', dotColor: 'bg-red-500' }
   if (nivel <= 4) 
-    return { color: 'text-yellow-600', label: '🟡', bg: 'bg-yellow-50 border-yellow-200', texto: 'Atención' }
+    return { color: 'text-yellow-600', label: '', bg: 'bg-yellow-50 border-yellow-200', texto: 'Atención', dotColor: 'bg-yellow-400' }
   if (nivel <= 6) 
-    return { color: 'text-orange-500', label: '🟠', bg: 'bg-orange-50 border-orange-200', texto: 'Revisar' }
-  return { color: 'text-green-600', label: '🟢', bg: 'bg-green-50 border-green-200', texto: 'Estable' }
+    return { color: 'text-orange-500', label: '', bg: 'bg-orange-50 border-orange-200', texto: 'Revisar', dotColor: 'bg-orange-400' }
+  return { color: 'text-green-600', label: '', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
 }
 
 function getUrgenciaMotivo(causa: CausaResumen): string {
@@ -162,19 +162,27 @@ export default function Dashboard() {
         </div>
         <div className="bg-red-50 rounded-xl p-4 border border-red-200">
           <div className="text-2xl font-bold text-red-700">{criticas.length}</div>
-          <div className="text-xs text-red-600">🔴 Críticas</div>
+          <div className="text-xs text-red-600 flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> Críticas
+          </div>
         </div>
         <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-200">
           <div className="text-2xl font-bold text-yellow-700">{atencion.length}</div>
-          <div className="text-xs text-yellow-600">🟡 Atención</div>
+          <div className="text-xs text-yellow-600 flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> Atención
+          </div>
         </div>
         <div className="bg-orange-50 rounded-xl p-4 border border-orange-200">
           <div className="text-2xl font-bold text-orange-600">{revisar.length}</div>
-          <div className="text-xs text-orange-500">🟠 Revisar</div>
+          <div className="text-xs text-orange-500 flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full bg-orange-400"></span> Revisar
+          </div>
         </div>
         <div className="bg-green-50 rounded-xl p-4 border border-green-200">
           <div className="text-2xl font-bold text-green-700">{estables.length}</div>
-          <div className="text-xs text-green-600">🟢 Estables</div>
+          <div className="text-xs text-green-600 flex items-center gap-1">
+            <span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Estables
+          </div>
         </div>
       </div>
 
@@ -198,25 +206,25 @@ export default function Dashboard() {
       </div>
 
       {/* Leyenda */}
-      <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-        <span>🔴 Audiencia ≤2d / Medida por vencer</span>
-        <span>🟡 Audiencia ≤7d / Sin actividad &gt;30d</span>
-        <span>🟠 Sin actividad &gt;15d / Sin audiencia</span>
-        <span>🟢 Sin alertas</span>
+      <div className="flex flex-wrap gap-3 text-xs text-gray-500">
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Audiencia ≤2d / Medida por vencer</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-yellow-400"></span> Audiencia ≤7d / Sin actividad &gt;30d</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Sin actividad &gt;15d / Sin audiencia</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Sin alertas</span>
       </div>
 
       {/* Secciones por urgencia */}
       {criticas.length > 0 && (
-        <Section title="🔴 CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} />
+        <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
       )}
       {atencion.length > 0 && (
-        <Section title="🟡 ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} />
+        <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-yellow-400" />
       )}
       {revisar.length > 0 && (
-        <Section title="🟠 REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} />
+        <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
       )}
       {estables.length > 0 && (
-        <Section title="🟢 ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} />
+        <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" />
       )}
 
       {causasFiltradas.length === 0 && (
@@ -229,7 +237,7 @@ export default function Dashboard() {
   )
 }
 
-function Section({ title, causas, defaultOpen }: { title: string; causas: CausaResumen[]; defaultOpen: boolean }) {
+function Section({ title, causas, defaultOpen, dotColor }: { title: string; causas: CausaResumen[]; defaultOpen: boolean; dotColor: string }) {
   const [expanded, setExpanded] = useState(defaultOpen)
   const showing = expanded ? causas.slice(0, 50) : causas.slice(0, 5)
 
@@ -240,6 +248,7 @@ function Section({ title, causas, defaultOpen }: { title: string; causas: CausaR
         className="flex items-center gap-2 text-sm font-bold text-gray-600 uppercase tracking-wide mb-3 hover:text-gray-800"
       >
         <span>{expanded ? '▼' : '▶'}</span>
+        <span className={`inline-block w-3 h-3 rounded-full ${dotColor}`}></span>
         <span>{title} ({causas.length})</span>
       </button>
       {showing.length > 0 && (
@@ -274,7 +283,7 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
         <div className="flex items-start justify-between">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-lg">{sem.label}</span>
+              <span className={`inline-block w-4 h-4 rounded-full ${sem.dotColor} shadow-sm`}></span>
               <span className="font-mono font-bold text-sm text-gray-800">{c.rit}</span>
               {c.caratulado && (
                 <span className="font-semibold text-gray-700 truncate">{c.caratulado}</span>
