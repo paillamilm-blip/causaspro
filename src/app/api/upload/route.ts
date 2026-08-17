@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
 
     // 1. Insertar causas
     const { data: causasData, error: causasErr } = await supabase
-      .table('causas')
+      .from('causas')
       .insert(causas)
       .select('id, rit')
 
@@ -54,7 +54,7 @@ export async function POST(req: NextRequest) {
       // Insertar en lotes de 200
       for (let i = 0; i < nnaRecords.length; i += 200) {
         const batch = nnaRecords.slice(i, i + 200)
-        const { data } = await supabase.table('nna').insert(batch).select('id')
+        const { data } = await supabase.from('nna').insert(batch).select('id')
         nnaCount += data?.length || 0
       }
     }
@@ -71,7 +71,7 @@ export async function POST(req: NextRequest) {
     if (adultosRecords.length > 0) {
       for (let i = 0; i < adultosRecords.length; i += 200) {
         const batch = adultosRecords.slice(i, i + 200)
-        const { data } = await supabase.table('adultos').insert(batch).select('id')
+        const { data } = await supabase.from('adultos').insert(batch).select('id')
         adultosCount += data?.length || 0
       }
     }
@@ -87,7 +87,7 @@ export async function POST(req: NextRequest) {
 
     let audienciasCount = 0
     if (audienciasRecords.length > 0) {
-      const { data } = await supabase.table('audiencias').insert(audienciasRecords).select('id')
+      const { data } = await supabase.from('audiencias').insert(audienciasRecords).select('id')
       audienciasCount = data?.length || 0
     }
 
