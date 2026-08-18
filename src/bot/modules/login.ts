@@ -59,6 +59,25 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // Esperar un poco más por si carga lento
     await sleep(5000)
     
+    // PASO 1.5: Cerrar popup de AVISO si aparece
+    try {
+      const cerrarBtn = await page.$('button:has-text("Cerrar"), a:has-text("Cerrar"), .btn:has-text("Cerrar")')
+      if (cerrarBtn && await cerrarBtn.isVisible()) {
+        log('info', '  Cerrando popup de aviso...')
+        await cerrarBtn.click()
+        await sleep(2000)
+      }
+    } catch {}
+    
+    // También cerrar cualquier modal/overlay
+    try {
+      const closeModal = await page.$('.modal .close, .modal-close, button.close, [data-dismiss="modal"]')
+      if (closeModal && await closeModal.isVisible()) {
+        await closeModal.click()
+        await sleep(1000)
+      }
+    } catch {}
+    
     // PASO 2: Click en "Clave Única"
     log('info', '  Buscando botón "Clave Única"...')
     
