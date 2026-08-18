@@ -7,12 +7,12 @@ import type { BotConfig } from '../types'
 
 /** Configuración por defecto del bot */
 export const DEFAULT_CONFIG: BotConfig = {
-  // MODO PRIMERA CARGA: 200 causas por sesión
-  maxCausasPorSesion: 200,
+  // MODO TEST: 5 causas para probar rápido
+  maxCausasPorSesion: 5,
   
-  // Delays reducidos para primera carga (10-25 segundos)
-  delayMin: 10000,       // 10 segundos mínimo entre consultas
-  delayMax: 25000,       // 25 segundos máximo entre consultas
+  // Delays reducidos para test (5-10 segundos)
+  delayMin: 5000,        // 5 segundos mínimo entre consultas
+  delayMax: 10000,       // 10 segundos máximo entre consultas
   delayPostLogin: 3000,  // 3 segundos después del login
   
   // Timeouts
