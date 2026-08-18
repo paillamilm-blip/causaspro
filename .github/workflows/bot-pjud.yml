@@ -6,10 +6,14 @@
 name: 🤖 Bot PJUD - Scraping automático
 
 on:
-  # Cron: 1:30 PM y 2:00 AM hora Chile (UTC-4)
+  # MODO PRIMERA CARGA: 6 ejecuciones diarias para actualizar 900 causas rápido
   schedule:
-    - cron: '30 17 * * 1-5'  # 1:30 PM Chile, Lunes a Viernes
-    - cron: '0 6 * * 1-5'    # 2:00 AM Chile, Lunes a Viernes
+    - cron: '0 12 * * 1-5'   # 8:00 AM Chile
+    - cron: '0 14 * * 1-5'   # 10:00 AM Chile
+    - cron: '30 16 * * 1-5'  # 12:30 PM Chile
+    - cron: '0 19 * * 1-5'   # 3:00 PM Chile
+    - cron: '0 21 * * 1-5'   # 5:00 PM Chile
+    - cron: '0 6 * * 1-5'    # 2:00 AM Chile
   
   # También se puede ejecutar manualmente
   workflow_dispatch:
