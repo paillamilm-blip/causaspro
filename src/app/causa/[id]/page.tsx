@@ -8,6 +8,8 @@ interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
   programa_vigente: string; sintesis: string; notas: string; saj: string;
   fecha_apertura: string; updated_at: string;
+  datos_extra: Record<string, any> | null;
+  columnas_origen: string[] | null;
 }
 interface Nna {
   id: string; nombre: string; apellido: string; rut: string;
@@ -57,9 +59,18 @@ export default function CausaDetalle() {
 
   if (!causa) return (
     <div className="min-h-screen flex items-center justify-center">
-      <p>Causa no encontrada</p>
+      <p className="text-gray-500">Causa no encontrada</p>
     </div>
   )
+
+  // Campos importantes primero, luego el resto
+  const camposImportantes = ['rit', 'caratulado', 'estado', 'programa_vigente', 'sintesis', 'fecha_apertura', 'saj', 'notas']
+  const datosExtra = causa.datos_extra || {}
+  const columnasExtra = Object.keys(datosExtra).filter(k => {
+    // Excluir las que ya se muestran como campos importantes
+    const lower = k.toLowerCase()
+    return !lower.includes('rit') && !lower.includes('nombre') && !lower.includes('apellido')
+  })
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -67,7 +78,7 @@ export default function CausaDetalle() {
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center gap-4">
           <Link href="/" className="text-gray-400 hover:text-gray-600">← Volver</Link>
           <span className="font-mono font-bold">{causa.rit}</span>
-          <span className="font-semibold text-gray-700">{causa.caratulado}</span>
+          <span className="font-semibold text-gray-700">{causa.caratulado || ''}</span>
           {causa.programa_vigente && (
             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{causa.programa_vigente}</span>
           )}
@@ -75,20 +86,41 @@ export default function CausaDetalle() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
-        {/* Resumen Ejecutivo */}
+        {/* Datos principales */}
         <section className="bg-white rounded-xl border p-6">
-          <h2 className="font-bold text-gray-700 mb-3">📌 Resumen Ejecutivo</h2>
-          <p className="text-gray-600 leading-relaxed">{causa.sintesis || 'Sin síntesis registrada'}</p>
-          {causa.estado && (
-            <div className="mt-3 text-sm text-gray-500">
-              <strong>Estado:</strong> {causa.estado}
+          <h2 className="font-bold text-gray-700 mb-3">📌 Información Principal</h2>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-sm">
+            {causa.rit && <InfoRow label="RIT" value={causa.rit} />}
+            {causa.caratulado && <InfoRow label="Caratulado" value={causa.caratulado} />}
+            {causa.estado && <InfoRow label="Estado" value={causa.estado} />}
+            {causa.programa_vigente && <InfoRow label="Programa" value={causa.programa_vigente} />}
+            {causa.tipo && <InfoRow label="Tipo" value={causa.tipo} />}
+            {causa.fecha_apertura && <InfoRow label="Fecha Apertura" value={formatFecha(causa.fecha_apertura)} />}
+            {causa.saj && <InfoRow label="SAJ" value={causa.saj} />}
+          </div>
+          {causa.sintesis && (
+            <div className="mt-4 p-3 bg-gray-50 rounded-lg">
+              <span className="text-xs font-medium text-gray-500 uppercase">Síntesis</span>
+              <p className="text-sm text-gray-700 mt-1">{causa.sintesis}</p>
             </div>
           )}
         </section>
 
+        {/* TODOS los datos extras del Excel */}
+        {columnasExtra.length > 0 && (
+          <section className="bg-white rounded-xl border p-6">
+            <h2 className="font-bold text-gray-700 mb-3">📋 Todos los Datos del Documento</h2>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+              {columnasExtra.map(col => (
+                <InfoRow key={col} label={col} value={String(datosExtra[col])} />
+              ))}
+            </div>
+          </section>
+        )}
+
         {/* NNA */}
         <section className="bg-white rounded-xl border p-6">
-          <h2 className="font-bold text-gray-700 mb-3">👶 NNA en esta causa ({nnas.length})</h2>
+          <h2 className="font-bold text-gray-700 mb-3">👶 NNA ({nnas.length})</h2>
           {nnas.length === 0 ? (
             <p className="text-gray-400 text-sm">Sin NNA registrados</p>
           ) : (
@@ -131,7 +163,6 @@ export default function CausaDetalle() {
                   <div>
                     <div className="font-medium text-sm">{a.nombre}</div>
                     {a.relacion && <div className="text-xs text-gray-400">{a.relacion}</div>}
-                    {a.direccion && <div className="text-xs text-gray-400 mt-0.5">{a.direccion}</div>}
                   </div>
                   {a.telefono && (
                     <a href={`tel:${a.telefono}`} className="text-blue-600 text-sm font-mono hover:underline">
@@ -144,7 +175,7 @@ export default function CausaDetalle() {
           )}
         </section>
 
-        {/* Audiencias / Línea de tiempo */}
+        {/* Audiencias */}
         <section className="bg-white rounded-xl border p-6">
           <h2 className="font-bold text-gray-700 mb-3">📅 Audiencias</h2>
           {audiencias.length === 0 ? (
@@ -153,14 +184,13 @@ export default function CausaDetalle() {
             <div className="space-y-2">
               {audiencias.map(au => {
                 const fecha = new Date(au.fecha)
-                const esHoy = fecha.toDateString() === new Date().toDateString()
                 const esFuturo = fecha > new Date()
                 return (
-                  <div key={au.id} className={`flex items-center gap-3 p-2 rounded ${esHoy ? 'bg-red-50' : esFuturo ? 'bg-blue-50' : 'bg-gray-50'}`}>
-                    <span className="text-sm">{esHoy ? '🔴' : esFuturo ? '🔵' : '⚪'}</span>
-                    <span className="font-mono text-sm">{fecha.toLocaleDateString('es-CL')}</span>
+                  <div key={au.id} className={`flex items-center gap-3 p-2 rounded ${esFuturo ? 'bg-blue-50' : 'bg-gray-50'}`}>
+                    <span className={`inline-block w-3 h-3 rounded-full ${esFuturo ? 'bg-blue-500' : 'bg-gray-300'}`}></span>
+                    <span className="font-mono text-sm">{formatFecha(au.fecha)}</span>
                     <span className="text-sm text-gray-600">{au.tipo || 'Audiencia'}</span>
-                    {au.notas && <span className="text-xs text-gray-400">{au.notas}</span>}
+                    {esFuturo && <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">Próxima</span>}
                   </div>
                 )
               })}
@@ -168,14 +198,35 @@ export default function CausaDetalle() {
           )}
         </section>
 
-        {/* Notas/Entrevista */}
+        {/* Notas */}
         {causa.notas && (
           <section className="bg-white rounded-xl border p-6">
-            <h2 className="font-bold text-gray-700 mb-3">📝 Notas / Entrevista</h2>
-            <p className="text-sm text-gray-600 whitespace-pre-wrap leading-relaxed">{causa.notas}</p>
+            <h2 className="font-bold text-gray-700 mb-3">📝 Notas</h2>
+            <p className="text-sm text-gray-600 whitespace-pre-wrap">{causa.notas}</p>
           </section>
         )}
+
+        {/* Meta info */}
+        <div className="text-xs text-gray-400 text-center">
+          Última actualización: {formatFecha(causa.updated_at)}
+        </div>
       </main>
     </div>
   )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex gap-2 py-1.5 border-b border-gray-50">
+      <span className="text-gray-400 font-medium min-w-[120px] text-xs uppercase">{label}</span>
+      <span className="text-gray-700 text-sm">{value}</span>
+    </div>
+  )
+}
+
+function formatFecha(iso: string | null): string {
+  if (!iso) return '-'
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return iso
+  return d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }

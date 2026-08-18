@@ -2,11 +2,11 @@ import * as XLSX from 'xlsx'
 
 // ============================================================
 // CAUSASPRO - Parser Universal de Documentos
-// Acepta cualquier Excel/CSV que tenga una columna con RIT
-// Detecta automáticamente las columnas disponibles
+// Carga TODAS las columnas del Excel/CSV
+// Solo requiere que exista una columna con RIT
+// Las columnas extras se guardan en datos_extra (JSONB)
 // ============================================================
 
-// Tipos
 export interface CausaRaw {
   rit: string
   caratulado?: string
@@ -17,6 +17,10 @@ export interface CausaRaw {
   programa_vigente?: string
   saj?: string
   notas?: string
+  /** TODAS las columnas del Excel como JSON */
+  datos_extra?: Record<string, any>
+  /** Nombres originales de las columnas */
+  columnas_origen?: string[]
 }
 
 export interface NnaRaw {
@@ -51,112 +55,12 @@ export interface ParseResult {
   nna: NnaRaw[]
   adultos: AdultoRaw[]
   audiencias: AudienciaRaw[]
-  /** Columnas detectadas automáticamente */
+  /** Todas las columnas detectadas del archivo */
   columnasDetectadas: string[]
   /** Hoja utilizada */
   hoja: string
   /** Total filas procesadas */
   totalFilas: number
-}
-
-// ============================================================
-// DETECCIÓN INTELIGENTE DE COLUMNAS
-// ============================================================
-
-interface ColumnMapping {
-  rit: number
-  caratulado?: number
-  nombre?: number
-  apellido?: number
-  rut?: number
-  fecha_nacimiento?: number
-  edad?: number
-  nacionalidad?: number
-  direccion?: number
-  adulto?: number
-  relacion?: number
-  telefono?: number
-  colegio?: number
-  curso?: number
-  cesfam?: number
-  sintesis?: number
-  saj?: number
-  audiencia?: number
-  fecha_audiencia?: number
-  apertura?: number
-  fecha_ingreso?: number
-  entrevista?: number
-  estado?: number
-  programa?: number
-  curador?: number
-  tribunal?: number
-  juez?: number
-  materia?: number
-}
-
-/** Patrones para detectar columnas (case insensitive) */
-const COLUMN_PATTERNS: Record<keyof ColumnMapping, string[]> = {
-  rit: ['rit', 'rol', 'causa', 'nro causa', 'n° causa', 'numero causa'],
-  caratulado: ['caratulado', 'caratula', 'carátula', 'partes'],
-  nombre: ['nombre', 'nombres', 'nombre nna', 'nombre niño', 'primer nombre'],
-  apellido: ['apellido', 'apellidos', 'apellido paterno', 'ape paterno'],
-  rut: ['rut', 'run', 'rut nna', 'cedula'],
-  fecha_nacimiento: ['nacimiento', 'fec nac', 'fecha nac', 'f. nacimiento'],
-  edad: ['edad', 'años'],
-  nacionalidad: ['nacionalidad', 'pais', 'país'],
-  direccion: ['direccion', 'dirección', 'domicilio', 'dir'],
-  adulto: ['adulto', 'responsable', 'padre', 'madre', 'tutor', 'cuidador', 'adulto responsable'],
-  relacion: ['relacion', 'relación', 'parentesco', 'vinculo', 'vínculo'],
-  telefono: ['telefono', 'teléfono', 'fono', 'celular', 'tel', 'contacto'],
-  colegio: ['colegio', 'escuela', 'establecimiento', 'institucion educativa'],
-  curso: ['curso', 'nivel', 'grado'],
-  cesfam: ['cesfam', 'consultorio', 'centro salud', 'salud'],
-  sintesis: ['sintesis', 'síntesis', 'resumen', 'descripcion', 'descripción', 'detalle', 'observacion'],
-  saj: ['saj', 'sistema', 'codigo', 'código'],
-  audiencia: ['audiencia', 'fecha aud', 'fec aud', 'fecha audiencia', 'prox audiencia'],
-  fecha_audiencia: ['fecha aud', 'fec aud', 'audiencia', 'prox audiencia', 'proxima audiencia'],
-  apertura: ['apertura', 'fecha apertura', 'inicio', 'fecha inicio'],
-  fecha_ingreso: ['ingreso', 'fecha ing', 'fec ing', 'fecha ingreso', 'fecha asignacion'],
-  entrevista: ['entrevista', 'fecha entrevista', 'primera entrevista'],
-  estado: ['estado', 'etapa', 'situacion', 'situación', 'status'],
-  programa: ['programa', 'prog', 'programa vigente', 'tipo programa'],
-  curador: ['curador', 'abogado', 'profesional', 'asignado', 'curador ad litem'],
-  tribunal: ['tribunal', 'juzgado', 'corte'],
-  juez: ['juez', 'magistrado'],
-  materia: ['materia', 'tipo causa', 'tipo'],
-}
-
-/**
- * Detecta automáticamente las columnas de un header row
- */
-function detectColumns(headerCells: string[]): { mapping: ColumnMapping; detected: string[] } {
-  const mapping: Partial<ColumnMapping> = {}
-  const detected: string[] = []
-  
-  for (let i = 0; i < headerCells.length; i++) {
-    const cell = headerCells[i].toLowerCase().trim()
-    if (!cell) continue
-    
-    for (const [key, patterns] of Object.entries(COLUMN_PATTERNS)) {
-      if (mapping[key as keyof ColumnMapping] !== undefined) continue // Ya detectada
-      
-      for (const pattern of patterns) {
-        if (cell === pattern || cell.includes(pattern)) {
-          mapping[key as keyof ColumnMapping] = i
-          detected.push(`${key}→col${i}(${headerCells[i]})`)
-          break
-        }
-      }
-    }
-  }
-  
-  // Si no se detectó RIT, buscar celdas que parezcan RIT por contenido
-  if (mapping.rit === undefined) {
-    // Fallback: buscar columna que contenga algo tipo "P-123-2024"
-    return { mapping: mapping as ColumnMapping, detected }
-  }
-  
-  return { mapping: mapping as ColumnMapping, detected }
 }
 
 // ============================================================
@@ -181,13 +85,11 @@ function limpiarRut(val: any): string | undefined {
 function limpiarFecha(val: any): string | undefined {
   if (!val) return undefined
   
-  // Si Excel lo parseó como Date
   if (val instanceof Date) {
     if (isNaN(val.getTime())) return undefined
     return val.toISOString().split('T')[0]
   }
   
-  // Si es número serial de Excel
   if (typeof val === 'number' && val > 10000) {
     const d = new Date((val - 25569) * 86400 * 1000)
     if (!isNaN(d.getTime())) return d.toISOString().split('T')[0]
@@ -196,7 +98,6 @@ function limpiarFecha(val: any): string | undefined {
   const t = String(val).trim().split(' ')[0]
   if (!t || t === '<<' || t.toLowerCase() === 'obd') return undefined
 
-  // dd/mm/yyyy o dd-mm-yyyy
   const m1 = t.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})$/)
   if (m1) {
     let [, d, mo, y] = m1
@@ -207,7 +108,6 @@ function limpiarFecha(val: any): string | undefined {
     }
   }
   
-  // yyyy-mm-dd (ISO)
   const m2 = t.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})$/)
   if (m2) {
     const dt = new Date(Number(m2[1]), Number(m2[2]) - 1, Number(m2[3]))
@@ -221,19 +121,16 @@ function limpiarRIT(val: any): string | undefined {
   if (!val) return undefined
   let t = String(val).trim()
     .replace(/\s+/g, '')
-    .replace(/–/g, '-')  // Dash largo
-    .replace(/—/g, '-')  // Em dash
+    .replace(/–/g, '-')
+    .replace(/—/g, '-')
     .toUpperCase()
   
-  // Validar formato: LETRA-NUMERO-AÑO
   const match = t.match(/^([A-Z])-(\d{1,6})-(\d{4})$/)
   if (match) return `${match[1]}-${match[2]}-${match[3]}`
   
-  // Formato sin el primer guión: P1234-2024
   const match2 = t.match(/^([A-Z])(\d{1,6})-(\d{4})$/)
   if (match2) return `${match2[1]}-${match2[2]}-${match2[3]}`
   
-  // Formato completo con espacios: P - 1234 - 2024
   const match3 = t.replace(/\s/g, '').match(/^([A-Z])-?(\d{1,6})-?(\d{4})$/)
   if (match3) return `${match3[1]}-${match3[2]}-${match3[3]}`
   
@@ -251,21 +148,74 @@ function inferirPrograma(texto?: string): string | undefined {
 }
 
 function inferirTipo(rit: string): string | undefined {
-  if (rit.startsWith('P')) return 'P'  // Protección
-  if (rit.startsWith('C')) return 'C'  // Civil
-  if (rit.startsWith('X')) return 'X'  // Otros
-  if (rit.startsWith('F')) return 'F'  // Familia
+  if (rit.startsWith('P')) return 'P'
+  if (rit.startsWith('C')) return 'C'
+  if (rit.startsWith('X')) return 'X'
+  if (rit.startsWith('F')) return 'F'
   return undefined
 }
 
 // ============================================================
-// PARSER PRINCIPAL - UNIVERSAL
+// DETECCIÓN DE COLUMNAS CONOCIDAS (para mapear a campos SQL)
+// ============================================================
+
+function isRitHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l === 'rit' || l === 'rol' || l === 'causa' || l.includes('n° causa') || l.includes('nro causa')
+}
+
+function isNombreHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l === 'nombre' || l === 'nombres' || l.includes('nombre nna') || l.includes('primer nombre')
+}
+
+function isApellidoHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('apellido')
+}
+
+function isAudienciaHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('audiencia') || l === 'fecha aud' || l.includes('fec aud') || l.includes('prox audiencia')
+}
+
+function isCaratuladoHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('caratulado') || l.includes('caratula') || l.includes('carátula')
+}
+
+function isEstadoHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l === 'estado' || l === 'etapa' || l.includes('situacion')
+}
+
+function isSintesisHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('sintesis') || l.includes('síntesis') || l.includes('resumen') || l.includes('observacion')
+}
+
+function isAdultoHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('adulto') || l.includes('responsable') || l.includes('cuidador') || l.includes('tutor')
+}
+
+function isTelefonoHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l.includes('telefono') || l.includes('teléfono') || l.includes('fono') || l.includes('celular')
+}
+
+function isRutHeader(h: string): boolean {
+  const l = h.toLowerCase()
+  return l === 'rut' || l === 'run'
+}
+
+// ============================================================
+// PARSER PRINCIPAL
 // ============================================================
 
 export function parseExcelBuffer(buffer: ArrayBuffer): ParseResult {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
   
-  // Intentar con cada hoja hasta encontrar una con RIT
   let bestResult: ParseResult | null = null
   
   for (const sheetName of wb.SheetNames) {
@@ -282,7 +232,6 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParseResult {
   
   if (bestResult) return bestResult
   
-  // Fallback: retornar vacío
   return {
     causas: [],
     nna: [],
@@ -297,10 +246,10 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParseResult {
 function parseRows(rows: any[][], sheetName: string): ParseResult | null {
   if (rows.length < 2) return null
   
-  // Buscar fila de headers (buscar "RIT" en las primeras 10 filas)
+  // Buscar fila de headers
   let headerRow = -1
-  let colMap: ColumnMapping | null = null
-  let detected: string[] = []
+  let headers: string[] = []
+  let ritColIdx = -1
   
   for (let i = 0; i < Math.min(rows.length, 10); i++) {
     const row = rows[i]
@@ -308,113 +257,144 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
     
     const cells = row.map((c: any) => String(c || '').trim())
     
-    // ¿Alguna celda contiene "RIT" o similar?
-    const hasRIT = cells.some((c: string) => {
-      const lower = c.toLowerCase()
-      return lower === 'rit' || lower === 'rol' || lower === 'causa' || lower.includes('n° causa') || lower.includes('nro causa')
-    })
-    
-    if (hasRIT) {
-      const result = detectColumns(cells)
-      if (result.mapping.rit !== undefined) {
-        headerRow = i
-        colMap = result.mapping
-        detected = result.detected
-        break
-      }
+    // Buscar columna RIT
+    const ritIdx = cells.findIndex((c: string) => isRitHeader(c))
+    if (ritIdx >= 0) {
+      headerRow = i
+      headers = cells
+      ritColIdx = ritIdx
+      break
     }
   }
   
-  // Si no encontramos header, buscar RIT por contenido (primera columna con formato P-XXX-YYYY)
+  // Fallback: buscar por contenido
   if (headerRow === -1) {
-    const ritCol = findRITColumnByContent(rows)
-    if (ritCol !== null) {
-      headerRow = ritCol.headerRow
-      colMap = { rit: ritCol.col } as ColumnMapping
-      detected = [`rit→col${ritCol.col}(auto-detectado por contenido)`]
+    const found = findRITColumnByContent(rows)
+    if (found) {
+      headerRow = found.headerRow
+      ritColIdx = found.col
+      headers = rows[headerRow]?.map((c: any) => String(c || '').trim()) || []
     }
   }
   
-  if (headerRow === -1 || !colMap || colMap.rit === undefined) return null
+  if (headerRow === -1 || ritColIdx === -1) return null
   
-  // Parsear filas de datos
+  // Identificar columnas conocidas
+  const knownCols: Record<string, number> = { rit: ritColIdx }
+  
+  for (let i = 0; i < headers.length; i++) {
+    if (i === ritColIdx) continue
+    const h = headers[i]
+    if (!h) continue
+    
+    if (isNombreHeader(h) && !knownCols.nombre) knownCols.nombre = i
+    else if (isApellidoHeader(h) && !knownCols.apellido) knownCols.apellido = i
+    else if (isAudienciaHeader(h) && !knownCols.audiencia) knownCols.audiencia = i
+    else if (isCaratuladoHeader(h) && !knownCols.caratulado) knownCols.caratulado = i
+    else if (isEstadoHeader(h) && !knownCols.estado) knownCols.estado = i
+    else if (isSintesisHeader(h) && !knownCols.sintesis) knownCols.sintesis = i
+    else if (isAdultoHeader(h) && !knownCols.adulto) knownCols.adulto = i
+    else if (isTelefonoHeader(h) && !knownCols.telefono) knownCols.telefono = i
+    else if (isRutHeader(h) && !knownCols.rut_nna) knownCols.rut_nna = i
+  }
+  
+  // Parsear filas
   const causas: Map<string, CausaRaw> = new Map()
   const nnaList: NnaRaw[] = []
   const adultosList: AdultoRaw[] = []
   const audienciasList: AudienciaRaw[] = []
   let lastRit: string | undefined
   
+  // Los headers limpios (sin vacíos)
+  const cleanHeaders = headers.filter(h => h && h.trim())
+  
   for (let i = headerRow + 1; i < rows.length; i++) {
     const row = rows[i]
-    if (!row || row.every((c: any) => !c)) continue  // Fila vacía
-    
-    const get = (key: keyof ColumnMapping) => {
-      const idx = colMap![key]
-      return idx !== undefined ? row[idx] : undefined
-    }
+    if (!row || row.every((c: any) => !c)) continue
     
     // RIT
-    let rit = limpiarRIT(get('rit'))
+    let rit = limpiarRIT(row[ritColIdx])
     if (rit) {
       lastRit = rit
     } else {
       rit = lastRit
     }
-    
     if (!rit) continue
     
-    // Causa (solo primera vez que aparece este RIT)
+    // ==========================================
+    // GUARDAR TODAS LAS COLUMNAS en datos_extra
+    // ==========================================
+    const datosExtra: Record<string, any> = {}
+    for (let col = 0; col < headers.length; col++) {
+      if (col === ritColIdx) continue // RIT ya está en su campo propio
+      const headerName = headers[col]
+      if (!headerName) continue
+      
+      const value = row[col]
+      if (value === null || value === undefined || String(value).trim() === '') continue
+      
+      // Guardar el valor limpio
+      if (value instanceof Date) {
+        datosExtra[headerName] = value.toISOString().split('T')[0]
+      } else {
+        datosExtra[headerName] = String(value).trim()
+      }
+    }
+    
+    // Causa (primera vez que aparece este RIT)
     if (!causas.has(rit)) {
-      const estadoText = limpiarTexto(get('estado'))
-      const programaText = limpiarTexto(get('programa'))
+      const estadoVal = knownCols.estado !== undefined ? limpiarTexto(row[knownCols.estado]) : undefined
       
       causas.set(rit, {
         rit,
-        caratulado: limpiarTexto(get('caratulado'), 200),
+        caratulado: knownCols.caratulado !== undefined ? limpiarTexto(row[knownCols.caratulado], 200) : undefined,
         tipo: inferirTipo(rit),
-        fecha_apertura: limpiarFecha(get('apertura')) || limpiarFecha(get('fecha_ingreso')),
-        sintesis: limpiarTexto(get('sintesis')),
-        estado: estadoText,
-        programa_vigente: programaText || inferirPrograma(estadoText || ''),
-        saj: limpiarTexto(get('saj'), 30),
-        notas: limpiarTexto(get('entrevista')),
+        fecha_apertura: undefined,
+        sintesis: knownCols.sintesis !== undefined ? limpiarTexto(row[knownCols.sintesis]) : undefined,
+        estado: estadoVal,
+        programa_vigente: inferirPrograma(estadoVal || ''),
+        notas: undefined,
+        // TODAS las columnas extras
+        datos_extra: datosExtra,
+        columnas_origen: cleanHeaders,
       })
+    } else {
+      // Si la causa ya existe pero tiene más datos en esta fila, mergear datos_extra
+      const existing = causas.get(rit)!
+      if (existing.datos_extra) {
+        for (const [key, val] of Object.entries(datosExtra)) {
+          if (!existing.datos_extra[key]) {
+            existing.datos_extra[key] = val
+          }
+        }
+      }
     }
     
-    // NNA (si hay columna de nombre)
-    const nombre = limpiarTexto(get('nombre'), 100)
-    const apellido = limpiarTexto(get('apellido'), 100)
+    // NNA
+    const nombre = knownCols.nombre !== undefined ? limpiarTexto(row[knownCols.nombre], 100) : undefined
+    const apellido = knownCols.apellido !== undefined ? limpiarTexto(row[knownCols.apellido], 100) : undefined
     
     if (nombre || apellido) {
       nnaList.push({
         _rit: rit,
         nombre,
         apellido,
-        rut: limpiarRut(get('rut')),
-        fecha_nacimiento: limpiarFecha(get('fecha_nacimiento')),
-        edad: get('edad') && !isNaN(Number(get('edad'))) ? Number(Number(get('edad')).toFixed(1)) : undefined,
-        nacionalidad: limpiarTexto(get('nacionalidad'), 50),
-        direccion: limpiarTexto(get('direccion')),
-        colegio: limpiarTexto(get('colegio'), 200),
-        curso: limpiarTexto(get('curso'), 50),
-        cesfam: limpiarTexto(get('cesfam'), 200),
+        rut: knownCols.rut_nna !== undefined ? limpiarRut(row[knownCols.rut_nna]) : undefined,
       })
     }
     
     // Adulto
-    const adultoNombre = limpiarTexto(get('adulto'), 300)
+    const adultoNombre = knownCols.adulto !== undefined ? limpiarTexto(row[knownCols.adulto], 300) : undefined
     if (adultoNombre) {
       adultosList.push({
         _rit: rit,
         nombre: adultoNombre,
-        relacion: limpiarTexto(get('relacion'), 80),
-        telefono: limpiarTexto(get('telefono'), 200),
-        direccion: limpiarTexto(get('direccion')),
+        telefono: knownCols.telefono !== undefined ? limpiarTexto(row[knownCols.telefono], 200) : undefined,
       })
     }
     
     // Audiencia
-    const fechaAud = limpiarFecha(get('audiencia')) || limpiarFecha(get('fecha_audiencia'))
+    const fechaAud = knownCols.audiencia !== undefined ? limpiarFecha(row[knownCols.audiencia]) : undefined
     if (fechaAud) {
       audienciasList.push({ _rit: rit, fecha: fechaAud })
     }
@@ -436,36 +416,22 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
     nna: nnaList,
     adultos: adultosDedup,
     audiencias: audienciasList,
-    columnasDetectadas: detected,
+    columnasDetectadas: cleanHeaders,
     hoja: sheetName,
     totalFilas: rows.length - headerRow - 1,
   }
 }
 
-/**
- * Busca la columna que contiene RITs por su contenido (formato P-XXX-YYYY)
- * Útil cuando no hay headers claros
- */
 function findRITColumnByContent(rows: any[][]): { col: number; headerRow: number } | null {
-  // Revisar las primeras filas para encontrar una columna con formato RIT
   for (let startRow = 0; startRow < Math.min(rows.length, 5); startRow++) {
     for (let col = 0; col < (rows[startRow]?.length || 0); col++) {
       let ritCount = 0
-      
-      // Contar cuántas filas tienen formato RIT en esta columna
       for (let row = startRow + 1; row < Math.min(rows.length, startRow + 10); row++) {
         const val = rows[row]?.[col]
-        if (val && limpiarRIT(val)) {
-          ritCount++
-        }
+        if (val && limpiarRIT(val)) ritCount++
       }
-      
-      // Si >50% de las filas tienen RIT, esta es la columna
-      if (ritCount >= 3) {
-        return { col, headerRow: startRow }
-      }
+      if (ritCount >= 3) return { col, headerRow: startRow }
     }
   }
-  
   return null
 }

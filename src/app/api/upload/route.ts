@@ -13,21 +13,20 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'No se recibió archivo' }, { status: 400 })
     }
 
-    // Leer archivo
     const buffer = await file.arrayBuffer()
-    
-    // Parsear Excel
     const parseResult = parseExcelBuffer(buffer)
     const { causas, nna, adultos, audiencias } = parseResult
 
     if (causas.length === 0) {
-      return NextResponse.json({ error: 'No se encontraron causas en el archivo. Asegúrate de que tenga una columna con RIT.' }, { status: 400 })
+      return NextResponse.json({ 
+        error: 'No se encontraron causas en el archivo. Asegúrate de que tenga una columna con RIT (ej: P-1234-2024).',
+        columnasEncontradas: parseResult.columnasDetectadas,
+      }, { status: 400 })
     }
 
-    // Conectar a Supabase con service role
     const supabase = createAdminClient()
 
-    // 1. Verificar cuáles RIT ya existen para evitar duplicados
+    // 1. Verificar cuáles RIT ya existen
     const rits = causas.map(c => c.rit)
     const { data: existingCausas } = await supabase
       .from('causas')
@@ -39,18 +38,32 @@ export async function POST(req: NextRequest) {
       existingRitMap[c.rit] = c.id
     }
 
-    // Separar causas nuevas de las que ya existen
     const causasNuevas = causas.filter(c => !existingRitMap[c.rit])
     const causasExistentes = causas.filter(c => existingRitMap[c.rit])
 
-    // 2. Insertar solo causas nuevas
+    // 2. Insertar causas nuevas (con datos_extra y columnas_origen)
     const ritToId: Record<string, string> = { ...existingRitMap }
     let causasInsertadas = 0
 
     if (causasNuevas.length > 0) {
+      // Preparar datos para insertar (incluir datos_extra)
+      const insertData = causasNuevas.map(c => ({
+        rit: c.rit,
+        caratulado: c.caratulado || null,
+        tipo: c.tipo || null,
+        fecha_apertura: c.fecha_apertura || null,
+        sintesis: c.sintesis || null,
+        estado: c.estado || null,
+        programa_vigente: c.programa_vigente || null,
+        saj: c.saj || null,
+        notas: c.notas || null,
+        datos_extra: c.datos_extra || {},
+        columnas_origen: c.columnas_origen || [],
+      }))
+
       const { data: causasData, error: causasErr } = await supabase
         .from('causas')
-        .insert(causasNuevas)
+        .insert(insertData)
         .select('id, rit')
 
       if (causasErr) {
@@ -64,19 +77,24 @@ export async function POST(req: NextRequest) {
       causasInsertadas = causasData?.length || 0
     }
 
-    // 3. Actualizar causas existentes (refresh updated_at)
+    // 3. Actualizar causas existentes (refresh datos_extra + updated_at)
+    let causasActualizadas = 0
     for (const c of causasExistentes) {
-      await supabase
+      const { error } = await supabase
         .from('causas')
         .update({
           estado: c.estado || undefined,
           programa_vigente: c.programa_vigente || undefined,
+          datos_extra: c.datos_extra || {},
+          columnas_origen: c.columnas_origen || [],
           updated_at: new Date().toISOString(),
         })
         .eq('rit', c.rit)
+      
+      if (!error) causasActualizadas++
     }
 
-    // 4. Insertar NNA (solo para causas que tenemos ID)
+    // 4. Insertar NNA
     const nnaRecords = nna
       .filter(n => ritToId[n._rit])
       .map(n => {
@@ -110,7 +128,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // 6. Insertar audiencias (evitar duplicados por fecha+causa)
+    // 6. Insertar audiencias
     const audienciasRecords = audiencias
       .filter(a => ritToId[a._rit] && a.fecha)
       .map(a => ({
@@ -121,12 +139,8 @@ export async function POST(req: NextRequest) {
 
     let audienciasCount = 0
     if (audienciasRecords.length > 0) {
-      // Insertar de a una para evitar crash por duplicados
       for (const aud of audienciasRecords) {
-        const { data } = await supabase
-          .from('audiencias')
-          .insert(aud)
-          .select('id')
+        const { data } = await supabase.from('audiencias').insert(aud).select('id')
         if (data && data.length > 0) audienciasCount++
       }
     }
@@ -135,12 +149,13 @@ export async function POST(req: NextRequest) {
       ok: true,
       stats: {
         causas: causasInsertadas,
-        causas_actualizadas: causasExistentes.length,
+        causas_actualizadas: causasActualizadas,
         nna: nnaCount,
         adultos: adultosCount,
         audiencias: audienciasCount,
         columnasDetectadas: parseResult.columnasDetectadas || [],
         hoja: parseResult.hoja || '',
+        totalFilas: parseResult.totalFilas,
       }
     })
 
