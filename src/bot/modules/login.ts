@@ -94,20 +94,51 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     await sleep(1000)
     log('info', '  Avisos cerrados')
     
-    // PASO 2: Click en "Clave Única"
-    log('info', '  Buscando botón "Clave Única"...')
+    // PASO 2: Click en "Clave Única" usando JavaScript (force click)
+    log('info', '  Buscando y clickeando "Clave Única"...')
     
-    const claveUnicaBtn = await findClaveUnicaButton(page)
+    const clicked = await page.evaluate(() => {
+      // Buscar TODOS los elementos que contengan "Clave Única"
+      const allElements = document.querySelectorAll('a, span, div, button, li, p')
+      for (const el of allElements) {
+        const text = el.textContent || ''
+        if (text.trim().includes('Clave Única') || text.trim().includes('Clave Unica')) {
+          // Verificar que sea un link o tenga href
+          if (el.tagName === 'A') {
+            (el as HTMLElement).click()
+            return 'clicked-link'
+          }
+        }
+      }
+      // Segundo intento: buscar href que contenga claveunica o autenticacion
+      const links = document.querySelectorAll('a[href]')
+      for (const link of links) {
+        const href = link.getAttribute('href') || ''
+        const text = link.textContent || ''
+        if (href.includes('claveunica') || href.includes('autenticacion') || 
+            text.includes('Clave') && text.includes('nica')) {
+          (link as HTMLElement).click()
+          return 'clicked-href'
+        }
+      }
+      // Tercer intento: buscar por el ícono de clave única (⊙)
+      for (const el of allElements) {
+        const text = el.textContent || ''
+        if (text.includes('Clave') && el.closest('a')) {
+          (el.closest('a') as HTMLElement).click()
+          return 'clicked-parent'
+        }
+      }
+      return null
+    })
     
-    if (!claveUnicaBtn) {
-      log('error', 'No se encontró el botón "Clave Única" en el portal')
-      // Tomar screenshot para debug
-      await page.screenshot({ path: '/tmp/bot_error_no_claveunica_btn.png' }).catch(() => {})
-      return { success: false, error: 'Botón "Clave Única" no encontrado en el portal. El diseño puede haber cambiado.' }
+    if (!clicked) {
+      log('error', 'No se encontró link "Clave Única" en la página')
+      await page.screenshot({ path: '/tmp/bot_error_no_claveunica.png' }).catch(() => {})
+      return { success: false, error: 'Botón "Clave Única" no encontrado' }
     }
     
-    await sleep(1000 + Math.random() * 1000)
-    await claveUnicaBtn.click()
+    log('info', `  Click realizado (${clicked})`)
     
     // PASO 3: Esperar redirección a accounts.claveunica.gob.cl
     log('info', '  Esperando redirección a Clave Única...')
