@@ -335,9 +335,18 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
       
       // Guardar el valor limpio
       if (value instanceof Date) {
-        datosExtra[headerName] = value.toISOString().split('T')[0]
+        if (!isNaN(value.getTime())) {
+          datosExtra[headerName] = value.toISOString().split('T')[0]
+        }
+      } else if (typeof value === 'number') {
+        if (!isNaN(value) && isFinite(value)) {
+          datosExtra[headerName] = value
+        }
       } else {
-        datosExtra[headerName] = String(value).trim()
+        const strVal = String(value).trim()
+        if (strVal && strVal.toLowerCase() !== 'nan' && strVal.toLowerCase() !== 'none') {
+          datosExtra[headerName] = strVal
+        }
       }
     }
     
