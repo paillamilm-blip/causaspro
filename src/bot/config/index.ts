@@ -48,7 +48,6 @@ export const OJV_SELECTORS = {
   passwordInput: '#pword, input[name="pword"], input[name="password"], #passInput',
   loginButton: '#loginButton, input[type="submit"], button[type="submit"]',
   loginError: '.error-message, .alert-danger, .msg-error',
-  
   // Navegación post-login
   menuConsultas: 'a[href*="consulta"], a:has-text("Consulta")',
   menuMisCausas: 'a[href*="mis_causas"], a:has-text("Mis Causas")',

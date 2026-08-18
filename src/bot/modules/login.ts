@@ -1,16 +1,16 @@
 // ============================================================
 // CAUSASPRO BOT - Login Module
-// Maneja autenticación en Oficina Judicial Virtual (OJV)
+// Login via Clave Única en Oficina Judicial Virtual (OJV)
+// Flujo: OJV → Click "Clave Única" → accounts.claveunica.gob.cl → RUN + Pass
 // ============================================================
 
 import type { Page, Browser, BrowserContext } from 'playwright'
 import type { OJVCredentials, LoginResult } from '../types'
-import { OJV_URLS, OJV_SELECTORS, DEFAULT_CONFIG } from '../config'
-import { formatRut, humanDelay, sleep, log } from '../utils'
+import { OJV_URLS, DEFAULT_CONFIG } from '../config'
+import { sleep, log } from '../utils'
 
 /**
  * Crea un contexto de navegador con fingerprint realista
- * Anti-detección: simula un usuario real de Chrome en Windows
  */
 export async function createStealthContext(browser: Browser): Promise<BrowserContext> {
   const context = await browser.newContext({
@@ -18,261 +18,373 @@ export async function createStealthContext(browser: Browser): Promise<BrowserCon
     viewport: DEFAULT_CONFIG.viewport,
     locale: 'es-CL',
     timezoneId: 'America/Santiago',
-    
-    // Simular permisos de un navegador real
     permissions: ['geolocation'],
-    geolocation: { latitude: -33.4489, longitude: -70.6693 }, // Santiago, Chile
-    
-    // Headers extras para parecer más real
+    geolocation: { latitude: -33.4489, longitude: -70.6693 },
     extraHTTPHeaders: {
       'Accept-Language': 'es-CL,es;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Upgrade-Insecure-Requests': '1',
     },
-    
-    // Ignorar errores HTTPS (portal a veces tiene certificados con issues)
     ignoreHTTPSErrors: true,
   })
 
-  // Anti-detección: inyectar scripts para ocultar automatización
+  // Anti-detección
   await context.addInitScript(() => {
-    // Ocultar webdriver
     Object.defineProperty(navigator, 'webdriver', { get: () => false })
-    
-    // Chrome runtime fake
     // @ts-ignore
     window.chrome = { runtime: {} }
-    
-    // Plugins fake (navegador real tiene plugins)
-    Object.defineProperty(navigator, 'plugins', {
-      get: () => [1, 2, 3, 4, 5] // Simula 5 plugins
-    })
-    
-    // Languages
-    Object.defineProperty(navigator, 'languages', {
-      get: () => ['es-CL', 'es', 'en-US', 'en']
-    })
-    
-    // Platform
-    Object.defineProperty(navigator, 'platform', {
-      get: () => 'Win32'
-    })
+    Object.defineProperty(navigator, 'languages', { get: () => ['es-CL', 'es', 'en'] })
   })
 
   return context
 }
 
 /**
- * Login en la Oficina Judicial Virtual
- * Intenta login con credenciales del portal PJUD (no ClaveÚnica)
+ * Login en OJV via Clave Única
+ * Flujo:
+ * 1. Ir a oficinajudicialvirtual.pjud.cl
+ * 2. Click en "Clave Única" 
+ * 3. Redirige a accounts.claveunica.gob.cl
+ * 4. Ingresar RUN + contraseña
+ * 5. Vuelve al portal logueado
  */
 export async function loginOJV(page: Page, credentials: OJVCredentials): Promise<LoginResult> {
-  log('info', 'Iniciando login en Oficina Judicial Virtual...')
+  log('info', 'Iniciando login en OJV via Clave Única...')
   
   try {
-    // 1. Navegar al portal
-    await page.goto(OJV_URLS.login, { 
+    // PASO 1: Ir al portal OJV
+    log('info', '  Navegando a oficinajudicialvirtual.pjud.cl...')
+    await page.goto(OJV_URLS.home, { 
       waitUntil: 'networkidle',
       timeout: DEFAULT_CONFIG.navigationTimeout 
     })
+    await sleep(3000 + Math.random() * 2000)
     
-    // Esperar un momento (comportamiento humano)
-    await sleep(2000 + Math.random() * 2000)
+    // PASO 2: Click en "Clave Única"
+    log('info', '  Buscando botón "Clave Única"...')
     
-    // 2. Verificar si hay captcha
-    const captchaElement = await page.$(OJV_SELECTORS.captcha)
-    if (captchaElement) {
-      log('error', 'CAPTCHA detectado en login - no se puede proceder automáticamente')
-      return { success: false, error: 'CAPTCHA detectado. Requiere intervención manual.' }
+    const claveUnicaBtn = await findClaveUnicaButton(page)
+    
+    if (!claveUnicaBtn) {
+      log('error', 'No se encontró el botón "Clave Única" en el portal')
+      // Tomar screenshot para debug
+      await page.screenshot({ path: '/tmp/bot_error_no_claveunica_btn.png' }).catch(() => {})
+      return { success: false, error: 'Botón "Clave Única" no encontrado en el portal. El diseño puede haber cambiado.' }
     }
     
-    // 3. Verificar si estamos bloqueados
-    const blockedElement = await page.$(OJV_SELECTORS.blocked)
-    if (blockedElement) {
-      log('error', 'Acceso bloqueado por el portal')
-      return { success: false, error: 'Acceso bloqueado. Esperar e intentar más tarde.' }
-    }
+    await sleep(1000 + Math.random() * 1000)
+    await claveUnicaBtn.click()
     
-    // 4. Buscar formulario de login
-    // El portal puede tener varios formatos de login, intentamos varios selectores
-    const rutInput = await findElement(page, [
-      '#uname',
-      'input[name="uname"]', 
-      'input[name="rut"]',
-      '#rutInput',
-      'input[placeholder*="RUT"]',
-      'input[placeholder*="rut"]',
-      'input[type="text"]:first-of-type',
-    ])
+    // PASO 3: Esperar redirección a accounts.claveunica.gob.cl
+    log('info', '  Esperando redirección a Clave Única...')
     
-    if (!rutInput) {
-      // Tal vez hay un botón para ir al login primero
-      const loginLink = await page.$('a:has-text("Iniciar"), a:has-text("Ingresar"), button:has-text("Ingresar")')
-      if (loginLink) {
-        await loginLink.click()
-        await page.waitForLoadState('networkidle')
-        await sleep(2000)
+    try {
+      await page.waitForURL('**/accounts.claveunica.gob.cl/**', { timeout: 15000 })
+    } catch {
+      // Tal vez ya cargó pero con otra URL
+      const currentUrl = page.url()
+      if (!currentUrl.includes('claveunica')) {
+        // Intentar esperar más
+        await sleep(5000)
+        const url2 = page.url()
+        if (!url2.includes('claveunica')) {
+          log('error', `No redirigió a Clave Única. URL actual: ${url2}`)
+          await page.screenshot({ path: '/tmp/bot_error_no_redirect.png' }).catch(() => {})
+          return { success: false, error: 'No se redirigió a Clave Única' }
+        }
       }
     }
-
-    // Reintentar encontrar el input de RUT
-    const rutField = rutInput || await findElement(page, [
-      '#uname',
-      'input[name="uname"]', 
-      'input[name="rut"]',
-      '#rutInput',
-      'input[placeholder*="RUT"]',
-      'input[type="text"]',
-    ])
-
-    if (!rutField) {
-      log('error', 'No se encontró campo de RUT en el formulario de login')
-      return { success: false, error: 'Campo de RUT no encontrado. El portal puede haber cambiado.' }
+    
+    await page.waitForLoadState('networkidle')
+    await sleep(2000 + Math.random() * 2000)
+    
+    log('info', '  En página de Clave Única...')
+    
+    // PASO 4: Ingresar RUN
+    log('info', '  Ingresando RUN...')
+    
+    const runInput = await findRunInput(page)
+    if (!runInput) {
+      log('error', 'No se encontró campo de RUN en Clave Única')
+      await page.screenshot({ path: '/tmp/bot_error_no_run_field.png' }).catch(() => {})
+      return { success: false, error: 'Campo RUN no encontrado en Clave Única' }
     }
     
-    // 5. Escribir RUT (simulando tipeo humano)
-    const formattedRut = formatRut(credentials.rut)
-    await rutField.click()
-    await sleep(300 + Math.random() * 500)
-    await typeHumanLike(page, rutField, formattedRut)
+    // Formatear RUN (sin puntos, con guión)
+    const runFormatted = formatRun(credentials.rut)
     
-    // 6. Tab al password (comportamiento humano)
-    await sleep(500 + Math.random() * 800)
+    await runInput.click()
+    await sleep(500)
+    await runInput.fill('')
+    await sleep(300)
     
-    const passwordField = await findElement(page, [
-      '#pword',
-      'input[name="pword"]',
-      'input[name="password"]',
-      '#passInput',
-      'input[type="password"]',
-    ])
+    // Escribir RUN carácter por carácter
+    for (const char of runFormatted) {
+      await runInput.type(char, { delay: 80 + Math.random() * 120 })
+    }
     
-    if (!passwordField) {
+    await sleep(1000 + Math.random() * 1000)
+    
+    // PASO 5: Click en continuar/siguiente (si hay paso intermedio)
+    const continueBtn = await page.$('button:has-text("Continuar"), button:has-text("Siguiente"), input[type="submit"]')
+    if (continueBtn) {
+      await continueBtn.click()
+      await page.waitForLoadState('networkidle')
+      await sleep(2000)
+    }
+    
+    // PASO 6: Ingresar contraseña
+    log('info', '  Ingresando contraseña...')
+    
+    const passwordInput = await findPasswordInput(page)
+    if (!passwordInput) {
+      // Puede ser que RUN y password estén en la misma página
       log('error', 'No se encontró campo de contraseña')
-      return { success: false, error: 'Campo de contraseña no encontrado.' }
+      await page.screenshot({ path: '/tmp/bot_error_no_pass_field.png' }).catch(() => {})
+      return { success: false, error: 'Campo de contraseña no encontrado' }
     }
     
-    await passwordField.click()
-    await sleep(300 + Math.random() * 400)
-    await typeHumanLike(page, passwordField, credentials.password)
+    await passwordInput.click()
+    await sleep(500)
     
-    // 7. Esperar un momento antes de submit (humano)
-    await sleep(800 + Math.random() * 1200)
+    // Escribir contraseña
+    for (const char of credentials.password) {
+      await passwordInput.type(char, { delay: 60 + Math.random() * 100 })
+    }
     
-    // 8. Submit
-    const submitButton = await findElement(page, [
-      '#loginButton',
-      'input[type="submit"]',
-      'button[type="submit"]',
-      'button:has-text("Ingresar")',
-      'button:has-text("Entrar")',
-      'input[value="Ingresar"]',
-      'input[value="Entrar"]',
-    ])
+    await sleep(1000 + Math.random() * 1500)
     
-    if (submitButton) {
-      await submitButton.click()
+    // PASO 7: Click en Ingresar/Autenticar
+    log('info', '  Enviando formulario...')
+    
+    const submitBtn = await findSubmitButton(page)
+    if (submitBtn) {
+      await submitBtn.click()
     } else {
-      // Fallback: Enter en el campo de password
       await page.keyboard.press('Enter')
     }
     
-    // 9. Esperar respuesta
-    await page.waitForLoadState('networkidle', { timeout: DEFAULT_CONFIG.navigationTimeout })
-    await sleep(2000)
+    // PASO 8: Esperar que vuelva al portal OJV
+    log('info', '  Esperando autenticación...')
     
-    // 10. Verificar si el login fue exitoso
-    const loginSuccess = await verifyLoginSuccess(page)
+    try {
+      await page.waitForURL('**pjud.cl**', { timeout: 30000 })
+    } catch {
+      // Verificar si hay error de login
+      const errorMsg = await getLoginError(page)
+      if (errorMsg) {
+        log('error', `Login fallido: ${errorMsg}`)
+        return { success: false, error: errorMsg }
+      }
+      // Puede ser que ya esté logueado
+    }
     
-    if (loginSuccess) {
-      log('success', 'Login exitoso en OJV')
-      // Delay post-login (anti-detección)
-      await humanDelay(3000, DEFAULT_CONFIG.delayPostLogin)
+    await page.waitForLoadState('networkidle')
+    await sleep(3000)
+    
+    // PASO 9: Verificar login exitoso
+    const isLogged = await verifyLoginSuccess(page)
+    
+    if (isLogged) {
+      log('success', '✅ Login exitoso en OJV via Clave Única')
       return { success: true }
     }
     
-    // Verificar mensajes de error
-    const errorMsg = await getErrorMessage(page)
-    log('error', `Login fallido: ${errorMsg}`)
-    return { success: false, error: errorMsg }
+    // Último intento: verificar URL
+    const finalUrl = page.url()
+    if (finalUrl.includes('pjud.cl') && !finalUrl.includes('index.php')) {
+      log('success', '✅ Login aparentemente exitoso (redirigido)')
+      return { success: true }
+    }
+    
+    log('error', `Login no confirmado. URL: ${finalUrl}`)
+    await page.screenshot({ path: '/tmp/bot_error_login_unconfirmed.png' }).catch(() => {})
+    return { success: false, error: 'No se pudo confirmar el login' }
     
   } catch (error: any) {
     log('error', `Error durante login: ${error.message}`)
+    await page.screenshot({ path: '/tmp/bot_error_exception.png' }).catch(() => {})
     return { success: false, error: error.message }
   }
 }
 
-/**
- * Verifica si estamos logueados correctamente
- */
-async function verifyLoginSuccess(page: Page): Promise<boolean> {
-  // Indicadores de login exitoso:
-  const successIndicators = [
-    'a:has-text("Cerrar Sesión")',
-    'a:has-text("Salir")',
-    'a:has-text("Mi Perfil")',
-    '.usuario-logueado',
-    '#userMenu',
-    'a[href*="logout"]',
-    'a[href*="cerrar"]',
-    ':has-text("Bienvenido")',
-    'a:has-text("Mis Causas")',
-  ]
-  
-  for (const selector of successIndicators) {
-    try {
-      const element = await page.$(selector)
-      if (element) return true
-    } catch {}
-  }
-  
-  // También verificar la URL (si cambió del login)
-  const currentUrl = page.url()
-  if (!currentUrl.includes('login') && !currentUrl.includes('index.php')) {
-    return true
-  }
-  
-  return false
-}
+// ============================================================
+// HELPERS
+// ============================================================
 
 /**
- * Extrae mensaje de error del formulario
+ * Busca el botón "Clave Única" en la página principal del portal
  */
-async function getErrorMessage(page: Page): Promise<string> {
-  const errorSelectors = [
-    '.error-message',
-    '.alert-danger',
-    '.msg-error',
-    '.error',
-    '#errorMsg',
-    'p.text-danger',
-    'span.error',
+async function findClaveUnicaButton(page: Page): Promise<any | null> {
+  const selectors = [
+    'a:has-text("Clave Única")',
+    'a:has-text("Clave Unica")',
+    'a:has-text("ClaveÚnica")',
+    'button:has-text("Clave Única")',
+    'a[href*="claveunica"]',
+    'a[href*="ClaveUnica"]',
+    '.clave-unica',
+    '#claveUnica',
+    // El menú del portal tiene opciones como lista
+    'li:has-text("Clave Única") a',
+    'li:has-text("Clave Unica") a',
   ]
   
-  for (const selector of errorSelectors) {
+  for (const sel of selectors) {
     try {
-      const element = await page.$(selector)
-      if (element) {
-        const text = await element.textContent()
-        if (text?.trim()) return text.trim()
+      const el = await page.$(sel)
+      if (el) {
+        const isVisible = await el.isVisible()
+        if (isVisible) return el
       }
     } catch {}
   }
   
-  return 'Credenciales incorrectas o error desconocido'
+  // Intentar por texto parcial en links
+  const allLinks = await page.$$('a')
+  for (const link of allLinks) {
+    try {
+      const text = await link.textContent()
+      if (text && (text.includes('Clave') && text.includes('nica'))) {
+        const isVisible = await link.isVisible()
+        if (isVisible) return link
+      }
+    } catch {}
+  }
+  
+  return null
 }
 
 /**
- * Encuentra el primer elemento que coincida con alguno de los selectores
+ * Busca el campo de RUN en la página de Clave Única
  */
-async function findElement(page: Page, selectors: string[]): Promise<any | null> {
-  for (const selector of selectors) {
+async function findRunInput(page: Page): Promise<any | null> {
+  const selectors = [
+    'input[name="run"]',
+    'input[id="run"]',
+    'input[placeholder*="RUN"]',
+    'input[placeholder*="RUT"]',
+    'input[placeholder*="Ingresa tu RUN"]',
+    'input[name="rut"]',
+    'input[id="rut"]',
+    'input[type="text"]',
+    '#run',
+    '#rut',
+  ]
+  
+  for (const sel of selectors) {
     try {
-      const element = await page.$(selector)
-      if (element) {
-        const isVisible = await element.isVisible()
-        if (isVisible) return element
+      const el = await page.$(sel)
+      if (el && await el.isVisible()) return el
+    } catch {}
+  }
+  return null
+}
+
+/**
+ * Busca el campo de contraseña
+ */
+async function findPasswordInput(page: Page): Promise<any | null> {
+  const selectors = [
+    'input[type="password"]',
+    'input[name="password"]',
+    'input[name="clave"]',
+    'input[id="password"]',
+    'input[placeholder*="Contraseña"]',
+    'input[placeholder*="Clave"]',
+  ]
+  
+  for (const sel of selectors) {
+    try {
+      const el = await page.$(sel)
+      if (el && await el.isVisible()) return el
+    } catch {}
+  }
+  return null
+}
+
+/**
+ * Busca el botón de submit
+ */
+async function findSubmitButton(page: Page): Promise<any | null> {
+  const selectors = [
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Ingresar")',
+    'button:has-text("Autenticar")',
+    'button:has-text("Iniciar")',
+    'button:has-text("Entrar")',
+    'button:has-text("Acceder")',
+    '#login-submit',
+    '.btn-primary',
+  ]
+  
+  for (const sel of selectors) {
+    try {
+      const el = await page.$(sel)
+      if (el && await el.isVisible()) return el
+    } catch {}
+  }
+  return null
+}
+
+/**
+ * Formatea RUN para Clave Única (sin puntos, con guión)
+ * Input: "17.692.174-9" o "17692174-9" o "176921749"
+ * Output: "17692174-9"
+ */
+function formatRun(rut: string): string {
+  let clean = rut.replace(/\./g, '').replace(/\s/g, '').trim()
+  if (!clean.includes('-') && clean.length > 1) {
+    clean = clean.slice(0, -1) + '-' + clean.slice(-1)
+  }
+  return clean
+}
+
+/**
+ * Verifica si el login fue exitoso
+ */
+async function verifyLoginSuccess(page: Page): Promise<boolean> {
+  const indicators = [
+    'a:has-text("Cerrar Sesión")',
+    'a:has-text("Salir")',
+    'a[href*="logout"]',
+    'a[href*="cerrar"]',
+    ':has-text("Bienvenido")',
+    'a:has-text("Mis Causas")',
+    'a:has-text("Consulta")',
+    '.usuario-logueado',
+    '#userMenu',
+  ]
+  
+  for (const sel of indicators) {
+    try {
+      const el = await page.$(sel)
+      if (el) return true
+    } catch {}
+  }
+  return false
+}
+
+/**
+ * Obtiene mensaje de error de login
+ */
+async function getLoginError(page: Page): Promise<string | null> {
+  const selectors = [
+    '.error',
+    '.alert-danger',
+    '.msg-error',
+    '.error-message',
+    'p.text-danger',
+    ':has-text("RUN o Clave incorrecta")',
+    ':has-text("credenciales")',
+    ':has-text("incorrecto")',
+  ]
+  
+  for (const sel of selectors) {
+    try {
+      const el = await page.$(sel)
+      if (el) {
+        const text = await el.textContent()
+        if (text?.trim()) return text.trim()
       }
     } catch {}
   }
@@ -280,50 +392,27 @@ async function findElement(page: Page, selectors: string[]): Promise<any | null>
 }
 
 /**
- * Simula tipeo humano con velocidad variable
- * Anti-detección: no escribe todo de golpe
- */
-async function typeHumanLike(page: Page, element: any, text: string): Promise<void> {
-  // Limpiar campo primero
-  await element.fill('')
-  await sleep(100)
-  
-  // Escribir carácter por carácter con delay variable
-  for (const char of text) {
-    await element.type(char, { delay: 50 + Math.random() * 150 })
-    
-    // Pausa más larga ocasional (simula pensar)
-    if (Math.random() < 0.1) {
-      await sleep(200 + Math.random() * 400)
-    }
-  }
-}
-
-/**
  * Verifica si la sesión sigue activa
  */
 export async function isSessionActive(page: Page): Promise<boolean> {
   try {
-    const logoutLink = await page.$('a[href*="logout"], a:has-text("Cerrar Sesión"), a:has-text("Salir")')
-    return logoutLink !== null
+    const el = await page.$('a[href*="logout"], a:has-text("Cerrar Sesión"), a:has-text("Salir")')
+    return el !== null
   } catch {
     return false
   }
 }
 
 /**
- * Logout limpio de la sesión
+ * Logout
  */
 export async function logoutOJV(page: Page): Promise<void> {
   try {
-    log('info', 'Cerrando sesión en OJV...')
     const logoutLink = await page.$('a[href*="logout"], a:has-text("Cerrar Sesión"), a:has-text("Salir")')
     if (logoutLink) {
       await logoutLink.click()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('networkidle').catch(() => {})
     }
-    log('success', 'Sesión cerrada correctamente')
-  } catch (error: any) {
-    log('warn', `Error al cerrar sesión: ${error.message}`)
-  }
+    log('info', 'Sesión cerrada')
+  } catch {}
 }
