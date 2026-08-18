@@ -112,21 +112,22 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // PASO 3: Esperar redirección a accounts.claveunica.gob.cl
     log('info', '  Esperando redirección a Clave Única...')
     
-    try {
-      await page.waitForURL('**/accounts.claveunica.gob.cl/**', { timeout: 15000 })
-    } catch {
-      // Tal vez ya cargó pero con otra URL
+    // Esperar hasta 30 segundos a que la URL cambie
+    let redirected = false
+    for (let i = 0; i < 15; i++) {
+      await sleep(2000)
       const currentUrl = page.url()
-      if (!currentUrl.includes('claveunica')) {
-        // Intentar esperar más
-        await sleep(5000)
-        const url2 = page.url()
-        if (!url2.includes('claveunica')) {
-          log('error', `No redirigió a Clave Única. URL actual: ${url2}`)
-          await page.screenshot({ path: '/tmp/bot_error_no_redirect.png' }).catch(() => {})
-          return { success: false, error: 'No se redirigió a Clave Única' }
-        }
+      if (currentUrl.includes('claveunica')) {
+        redirected = true
+        break
       }
+    }
+    
+    if (!redirected) {
+      const finalUrl = page.url()
+      log('error', `No redirigió a Clave Única. URL actual: ${finalUrl}`)
+      await page.screenshot({ path: '/tmp/bot_error_no_redirect.png' }).catch(() => {})
+      return { success: false, error: 'No se redirigió a Clave Única' }
     }
     
     await page.waitForLoadState('domcontentloaded')
@@ -250,38 +251,50 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
  * Busca el botón "Clave Única" en la página principal del portal
  */
 async function findClaveUnicaButton(page: Page): Promise<any | null> {
+  // Esperar que el menú cargue
+  await page.waitForTimeout(2000)
+  
+  // Método 1: Playwright getByText (más confiable)
+  try {
+    const el = await page.getByText('Clave Única', { exact: false }).first()
+    if (el && await el.isVisible()) return el
+  } catch {}
+  
+  // Método 2: Selectores CSS
   const selectors = [
     'a:has-text("Clave Única")',
     'a:has-text("Clave Unica")',
-    'a:has-text("ClaveÚnica")',
-    'button:has-text("Clave Única")',
+    'span:has-text("Clave Única")',
     'a[href*="claveunica"]',
     'a[href*="ClaveUnica"]',
-    '.clave-unica',
-    '#claveUnica',
-    // El menú del portal tiene opciones como lista
-    'li:has-text("Clave Única") a',
-    'li:has-text("Clave Unica") a',
+    'a[href*="autenticacion"]',
   ]
   
   for (const sel of selectors) {
     try {
       const el = await page.$(sel)
-      if (el) {
-        const isVisible = await el.isVisible()
-        if (isVisible) return el
-      }
+      if (el) return el
     } catch {}
   }
   
-  // Intentar por texto parcial en links
+  // Método 3: Buscar en todos los links
   const allLinks = await page.$$('a')
   for (const link of allLinks) {
     try {
       const text = await link.textContent()
-      if (text && (text.includes('Clave') && text.includes('nica'))) {
-        const isVisible = await link.isVisible()
-        if (isVisible) return link
+      if (text && text.includes('Clave') && text.includes('nica')) {
+        return link
+      }
+    } catch {}
+  }
+  
+  // Método 4: Buscar en CUALQUIER elemento clickeable
+  const clickables = await page.$$('a, span, div, button, li')
+  for (const el of clickables) {
+    try {
+      const text = await el.textContent()
+      if (text && text.trim().includes('Clave Única')) {
+        return el
       }
     } catch {}
   }
