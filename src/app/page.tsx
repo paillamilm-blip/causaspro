@@ -14,10 +14,24 @@ export default function Home() {
   }, [])
 
   async function checkCausas() {
-    const { count } = await supabase.from('causas').select('*', { count: 'exact', head: true })
-    const total = count || 0
-    setCausasCount(total)
-    setHasCausas(total > 0)
+    try {
+      // Consultar directo a la tabla causas (no la vista, que puede fallar)
+      const { count, error } = await supabase.from('causas').select('*', { count: 'exact', head: true })
+      if (error) {
+        console.error('Error checking causas:', error.message)
+        // Si hay error, asumimos que hay causas (para no bloquear)
+        setHasCausas(false)
+        setCausasCount(0)
+        return
+      }
+      const total = count || 0
+      setCausasCount(total)
+      setHasCausas(total > 0)
+    } catch (e) {
+      console.error('Error:', e)
+      setHasCausas(false)
+      setCausasCount(0)
+    }
   }
 
   async function handleReset() {

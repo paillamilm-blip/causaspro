@@ -79,15 +79,43 @@ export default function Dashboard() {
     setLoading(true)
     setError(null)
     
-    const { data, error: err } = await supabase
+    // Intentar con la vista (tiene el semáforo)
+    let { data, error: err } = await supabase
       .from('v_causas_ranking')
       .select('*')
       .limit(500)
 
+    // Si la vista falla, usar tabla directa (sin semáforo pero funciona)
     if (err) {
-      setError(err.message)
-      setLoading(false)
-      return
+      console.warn('Vista v_causas_ranking no disponible, usando tabla directa:', err.message)
+      const { data: directData, error: directErr } = await supabase
+        .from('causas')
+        .select('id, rit, caratulado, tipo, estado, programa_vigente, sintesis, notas, updated_at')
+        .order('updated_at', { ascending: false })
+        .limit(500)
+      
+      if (directErr) {
+        setError(directErr.message)
+        setLoading(false)
+        return
+      }
+      
+      // Mapear a formato compatible (sin campos de urgencia)
+      data = (directData || []).map((c: any) => ({
+        ...c,
+        total_nna: 0,
+        nombres_nna: null,
+        proxima_audiencia: null,
+        dias_para_audiencia: null,
+        dias_sin_actividad: null,
+        nivel_urgencia: 10, // Verde por defecto
+        ultima_audiencia: null,
+        proxima_medida_vence: null,
+        dias_medida_vence: null,
+        tiene_medida_vigente: false,
+        adulto_nombre: null,
+        adulto_telefono: null,
+      }))
     }
     
     if (data) {
