@@ -94,51 +94,73 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     await sleep(1000)
     log('info', '  Avisos cerrados')
     
-    // PASO 2: Click en "Clave Única" usando JavaScript (force click)
-    log('info', '  Buscando y clickeando "Clave Única"...')
+    // PASO 2: Click en "Todos los servicios" PRIMERO, luego "Clave Única"
+    log('info', '  Clickeando "Todos los servicios"...')
     
-    const clicked = await page.evaluate(() => {
-      // Buscar TODOS los elementos que contengan "Clave Única"
-      const allElements = document.querySelectorAll('a, span, div, button, li, p')
+    // Paso 2a: Click en "Todos los servicios" (botón amarillo)
+    await page.evaluate(() => {
+      const allElements = document.querySelectorAll('a, button, span, div')
       for (const el of allElements) {
-        const text = el.textContent || ''
-        if (text.trim().includes('Clave Única') || text.trim().includes('Clave Unica')) {
-          // Verificar que sea un link o tenga href
-          if (el.tagName === 'A') {
-            (el as HTMLElement).click()
-            return 'clicked-link'
-          }
+        const text = (el.textContent || '').trim()
+        if (text === 'Todos los servicios' || text.includes('Todos los servicios')) {
+          (el as HTMLElement).click()
+          return true
         }
       }
-      // Segundo intento: buscar href que contenga claveunica o autenticacion
+      return false
+    })
+    
+    await sleep(3000)
+    
+    // Paso 2b: Scroll un poco para que aparezca "Clave Única"
+    await page.evaluate(() => {
+      window.scrollBy(0, 300)
+    })
+    
+    await sleep(2000)
+    
+    // Paso 2c: Click en "Clave Única"
+    log('info', '  Clickeando "Clave Única"...')
+    
+    const clicked = await page.evaluate(() => {
+      const allElements = document.querySelectorAll('a, span, div, button, li, p')
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim()
+        if (text === 'Clave Única' || text === 'Clave Unica') {
+          if (el.tagName === 'A') {
+            (el as HTMLElement).click()
+            return 'clicked-a'
+          }
+          // Si no es <a>, buscar el <a> padre
+          const parentLink = el.closest('a')
+          if (parentLink) {
+            (parentLink as HTMLElement).click()
+            return 'clicked-parent-a'
+          }
+          // Click directo
+          (el as HTMLElement).click()
+          return 'clicked-direct'
+        }
+      }
+      // Buscar por href
       const links = document.querySelectorAll('a[href]')
       for (const link of links) {
         const href = link.getAttribute('href') || ''
-        const text = link.textContent || ''
-        if (href.includes('claveunica') || href.includes('autenticacion') || 
-            text.includes('Clave') && text.includes('nica')) {
+        if (href.includes('claveunica') || href.includes('autenticacion')) {
           (link as HTMLElement).click()
           return 'clicked-href'
-        }
-      }
-      // Tercer intento: buscar por el ícono de clave única (⊙)
-      for (const el of allElements) {
-        const text = el.textContent || ''
-        if (text.includes('Clave') && el.closest('a')) {
-          (el.closest('a') as HTMLElement).click()
-          return 'clicked-parent'
         }
       }
       return null
     })
     
     if (!clicked) {
-      log('error', 'No se encontró link "Clave Única" en la página')
+      log('error', 'No se encontró "Clave Única" después de "Todos los servicios"')
       await page.screenshot({ path: '/tmp/bot_error_no_claveunica.png' }).catch(() => {})
-      return { success: false, error: 'Botón "Clave Única" no encontrado' }
+      return { success: false, error: 'Botón "Clave Única" no encontrado después de abrir servicios' }
     }
     
-    log('info', `  Click realizado (${clicked})`)
+    log('info', `  Click Clave Única realizado (${clicked})`)
     
     // PASO 3: Esperar redirección a accounts.claveunica.gob.cl
     log('info', '  Esperando redirección a Clave Única...')
