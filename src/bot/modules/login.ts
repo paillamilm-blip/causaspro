@@ -60,20 +60,35 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     await sleep(5000)
     
     // PASO 1.5: Cerrar popup de AVISO si aparece
+    log('info', '  Verificando si hay popup de aviso...')
     try {
-      const cerrarBtn = await page.$('button:has-text("Cerrar"), a:has-text("Cerrar"), .btn:has-text("Cerrar")')
-      if (cerrarBtn && await cerrarBtn.isVisible()) {
-        log('info', '  Cerrando popup de aviso...')
-        await cerrarBtn.click()
-        await sleep(2000)
-      }
-    } catch {}
+      // Forzar cierre del modal con JavaScript (más confiable que click)
+      await page.evaluate(() => {
+        // Cerrar modal Bootstrap
+        const modal = document.querySelector('#no-disponible') as HTMLElement
+        if (modal) {
+          modal.style.display = 'none'
+          modal.classList.remove('in', 'show')
+        }
+        // Quitar backdrop
+        const backdrop = document.querySelector('.modal-backdrop') as HTMLElement
+        if (backdrop) backdrop.remove()
+        // Quitar clase del body
+        document.body.classList.remove('modal-open')
+        document.body.style.overflow = ''
+        document.body.style.paddingRight = ''
+      })
+      log('info', '  Popup cerrado')
+      await sleep(1000)
+    } catch {
+      // Si no hay modal, continuar normal
+    }
     
-    // También cerrar cualquier modal/overlay
+    // También intentar click en botón Cerrar por si quedó
     try {
-      const closeModal = await page.$('.modal .close, .modal-close, button.close, [data-dismiss="modal"]')
-      if (closeModal && await closeModal.isVisible()) {
-        await closeModal.click()
+      const cerrarBtn = await page.$('.modal-footer button, button:has-text("Cerrar")')
+      if (cerrarBtn) {
+        await cerrarBtn.click({ force: true }).catch(() => {})
         await sleep(1000)
       }
     } catch {}
