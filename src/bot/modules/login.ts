@@ -59,39 +59,40 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // Esperar un poco más por si carga lento
     await sleep(5000)
     
-    // PASO 1.5: Cerrar popup de AVISO si aparece
-    log('info', '  Verificando si hay popup de aviso...')
-    try {
-      // Forzar cierre del modal con JavaScript (más confiable que click)
-      await page.evaluate(() => {
-        // Cerrar modal Bootstrap
-        const modal = document.querySelector('#no-disponible') as HTMLElement
-        if (modal) {
-          modal.style.display = 'none'
-          modal.classList.remove('in', 'show')
-        }
-        // Quitar backdrop
-        const backdrop = document.querySelector('.modal-backdrop') as HTMLElement
-        if (backdrop) backdrop.remove()
-        // Quitar clase del body
-        document.body.classList.remove('modal-open')
-        document.body.style.overflow = ''
-        document.body.style.paddingRight = ''
-      })
-      log('info', '  Popup cerrado')
-      await sleep(1000)
-    } catch {
-      // Si no hay modal, continuar normal
-    }
+    // PASO 1.5: Cerrar CUALQUIER popup/modal/aviso que aparezca
+    log('info', '  Cerrando avisos del portal...')
+    // Esperar a que los modales carguen
+    await sleep(3000)
     
-    // También intentar click en botón Cerrar por si quedó
-    try {
-      const cerrarBtn = await page.$('.modal-footer button, button:has-text("Cerrar")')
-      if (cerrarBtn) {
-        await cerrarBtn.click({ force: true }).catch(() => {})
-        await sleep(1000)
-      }
-    } catch {}
+    // Método 1: Eliminar TODOS los modales con JavaScript
+    await page.evaluate(() => {
+      // Eliminar todos los modales
+      document.querySelectorAll('.modal, .modal-backdrop, [role="dialog"]').forEach(el => {
+        (el as HTMLElement).style.display = 'none';
+        el.remove();
+      });
+      // Limpiar body
+      document.body.classList.remove('modal-open');
+      document.body.style.overflow = '';
+      document.body.style.paddingRight = '';
+      document.body.style.removeProperty('overflow');
+    }).catch(() => {})
+    
+    await sleep(1000)
+    
+    // Método 2: Si jQuery/Bootstrap está disponible, cerrar modales
+    await page.evaluate(() => {
+      try {
+        // @ts-ignore
+        if (window.$ || window.jQuery) {
+          // @ts-ignore
+          (window.$ || window.jQuery)('.modal').modal('hide');
+        }
+      } catch {}
+    }).catch(() => {})
+    
+    await sleep(1000)
+    log('info', '  Avisos cerrados')
     
     // PASO 2: Click en "Clave Única"
     log('info', '  Buscando botón "Clave Única"...')
