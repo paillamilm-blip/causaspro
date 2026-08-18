@@ -1,5 +1,6 @@
 'use client'
 import { useState, useCallback } from 'react'
+import * as XLSX from 'xlsx'
 
 interface Stats {
   causas: number
@@ -14,6 +15,7 @@ interface Stats {
 export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
   const [dragging, setDragging] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState('')
   const [result, setResult] = useState<Stats | null>(null)
   const [error, setError] = useState<string | null>(null)
 
@@ -21,12 +23,38 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
     setLoading(true)
     setError(null)
     setResult(null)
-
-    const formData = new FormData()
-    formData.append('file', file)
+    setStatus('Leyendo archivo...')
 
     try {
-      const res = await fetch('/api/upload', { method: 'POST', body: formData })
+      // PASO 1: Parsear Excel EN EL NAVEGADOR (evita límite 4.5MB de Vercel)
+      setStatus('Detectando columnas...')
+      const buffer = await file.arrayBuffer()
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
+      
+      // Usar primera hoja
+      const sheetName = wb.SheetNames[0]
+      const ws = wb.Sheets[sheetName]
+      const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
+      
+      if (rows.length < 2) {
+        setError('El archivo está vacío o no tiene suficientes filas')
+        setLoading(false)
+        return
+      }
+
+      // PASO 2: Enviar datos parseados al servidor (JSON, mucho más pequeño)
+      setStatus(`Procesando ${rows.length} filas...`)
+      
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          rows: rows,
+          sheetName: sheetName,
+          fileName: file.name,
+        }),
+      })
+      
       const data = await res.json()
       
       if (!res.ok) {
@@ -35,8 +63,8 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
         return
       }
 
-      if (data.stats?.causas === 0 && data.stats?.causas_actualizadas === 0) {
-        setError('El archivo se procesó pero no se encontraron causas nuevas. ¿El archivo tiene una columna con RIT?')
+      if (data.stats?.causas === 0 && (data.stats?.causas_actualizadas || 0) === 0) {
+        setError('El archivo se procesó pero no se encontraron causas. ¿El archivo tiene una columna con RIT (ej: P-1234-2024)?')
         return
       }
 
@@ -46,6 +74,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
       setError(e.message || 'Error de conexión')
     } finally {
       setLoading(false)
+      setStatus('')
     }
   }, [onSuccess])
 
@@ -76,7 +105,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
           <div className="space-y-3">
             <div className="animate-spin text-4xl">⚙️</div>
             <p className="text-gray-600 font-medium">Procesando documento...</p>
-            <p className="text-sm text-gray-400">Detectando columnas, limpiando datos, cargando causas...</p>
+            <p className="text-sm text-gray-400">{status}</p>
           </div>
         ) : result ? (
           <div className="space-y-3">
@@ -84,13 +113,13 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
             <p className="text-green-700 font-bold text-lg">¡Carga exitosa!</p>
             <div className="grid grid-cols-2 gap-2 max-w-xs mx-auto text-sm">
               <div className="bg-green-50 rounded p-2">📁 {result.causas} nuevas</div>
+              <div className="bg-blue-50 rounded p-2">🔄 {result.causas_actualizadas || 0} actualizadas</div>
               <div className="bg-green-50 rounded p-2">👶 {result.nna} NNA</div>
-              <div className="bg-green-50 rounded p-2">👤 {result.adultos} adultos</div>
               <div className="bg-green-50 rounded p-2">📅 {result.audiencias} audiencias</div>
             </div>
             {result.columnasDetectadas && result.columnasDetectadas.length > 0 && (
               <p className="text-xs text-gray-400 mt-2">
-                Columnas detectadas: {result.columnasDetectadas.length}
+                {result.columnasDetectadas.length} columnas cargadas
               </p>
             )}
           </div>
@@ -115,7 +144,6 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
         )}
       </div>
       
-      {/* Info de formatos aceptados */}
       {!loading && !result && (
         <div className="bg-gray-50 rounded-xl p-4 text-xs text-gray-500 space-y-2">
           <p className="font-medium text-gray-600">📋 Formatos aceptados:</p>
@@ -125,8 +153,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
             <li>• <strong>LibreOffice</strong> (.ods)</li>
           </ul>
           <p className="mt-2 text-gray-400">
-            El sistema detecta automáticamente columnas como: RIT, Nombre, Apellido, Audiencia, Estado, Programa, etc.
-            Solo necesita al menos una columna con RIT (ej: P-1234-2024).
+            Se cargan TODAS las columnas de tu archivo. Solo necesita al menos una columna con RIT (ej: P-1234-2024).
           </p>
         </div>
       )}

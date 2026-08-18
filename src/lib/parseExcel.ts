@@ -444,3 +444,24 @@ function findRITColumnByContent(rows: any[][]): { col: number; headerRow: number
   }
   return null
 }
+
+
+
+/**
+ * Versión que recibe rows ya parseados (desde el frontend)
+ * El frontend usa XLSX.js para leer el archivo y envía los rows como JSON
+ */
+export function parseExcelRows(rows: any[][], sheetName: string): ParseResult {
+  const result = parseRows(rows, sheetName)
+  if (result) return result
+  
+  return {
+    causas: [],
+    nna: [],
+    adultos: [],
+    audiencias: [],
+    columnasDetectadas: [],
+    hoja: sheetName,
+    totalFilas: 0,
+  }
+}
