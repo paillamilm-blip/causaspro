@@ -6,7 +6,7 @@
 name: 🤖 Bot PJUD - Scraping automático
 
 on:
-  # PRIMERA CARGA: cada 2 horas en la noche, descansa 7AM-11:30AM, luego normal
+  # PRIMERA CARGA: cada 2 horas en la noche, descansa 7AM-1:30PM, luego normal
   schedule:
     - cron: '0 0 * * *'    # 8:00 PM Chile
     - cron: '0 2 * * *'    # 10:00 PM Chile
@@ -14,8 +14,7 @@ on:
     - cron: '0 6 * * *'    # 2:00 AM Chile
     - cron: '0 8 * * *'    # 4:00 AM Chile
     - cron: '0 10 * * *'   # 6:00 AM Chile (última - después descansa)
-    - cron: '30 15 * * *'  # 11:30 AM Chile (retoma)
-    - cron: '30 17 * * *'  # 1:30 PM Chile
+    - cron: '30 17 * * *'  # 1:30 PM Chile (retoma horario normal)
     - cron: '30 19 * * *'  # 3:30 PM Chile
     - cron: '30 21 * * *'  # 5:30 PM Chile
   
