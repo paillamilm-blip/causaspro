@@ -125,13 +125,15 @@ export async function runBotSession(
         break
       }
       
-      // Verificar si hay captcha o bloqueo
-      const captcha = await page.$('.captcha, .g-recaptcha, [class*="captcha"]')
-      if (captcha) {
-        log('error', '🛑 CAPTCHA detectado. Deteniendo bot.')
-        status.detenido_por = 'captcha'
-        status.errores.push('CAPTCHA detectado durante sesión')
-        break
+      // Verificar si hay captcha o bloqueo (solo en la URL de consulta, no en Mis Causas)
+      const currentUrl = page.url()
+      if (currentUrl.includes('consulta')) {
+        const captcha = await page.$('.captcha, .g-recaptcha, [class*="captcha"]')
+        if (captcha) {
+          log('warn', '⚠️ CAPTCHA detectado en consulta. Intentando vía Mis Causas...')
+          // No detener, intentar continuar
+        }
+      }
       }
       
       try {

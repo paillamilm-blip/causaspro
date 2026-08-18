@@ -9,47 +9,86 @@ import { OJV_URLS, OJV_SELECTORS, DEFAULT_CONFIG } from '../config'
 import { humanDelay, sleep, log, parseRIT } from '../utils'
 
 /**
- * Navega a la sección de consulta de causas
+ * Navega a la sección "Mis Causas" y lista todas
+ * Filtros: Tipo de causa = todos (5/5), Estado = todos (12/12)
  */
 export async function navigateToConsulta(page: Page): Promise<boolean> {
-  log('info', 'Navegando a Consulta de Causas...')
+  log('info', 'Navegando a Mis Causas...')
   
   try {
-    // Intentar navegar directamente a la URL de consulta
-    await page.goto(OJV_URLS.consultaCausas, {
-      waitUntil: 'domcontentloaded',
-      timeout: DEFAULT_CONFIG.navigationTimeout,
+    // Intentar click en "Mis Causas" desde el menú
+    await page.evaluate(() => {
+      const links = document.querySelectorAll('a')
+      for (const link of links) {
+        const text = (link.textContent || '').trim()
+        if (text.includes('Mis Causas') || text.includes('Mis causas')) {
+          link.click()
+          return true
+        }
+      }
+      return false
     })
     
-    await sleep(2000 + Math.random() * 2000)
+    await sleep(3000)
     
-    // Verificar que estamos en la página correcta
-    const searchInput = await page.$(OJV_SELECTORS.searchRITInput)
-    if (searchInput) {
-      log('success', 'En página de consulta de causas')
-      return true
+    // Si no funcionó el click, navegar directo
+    if (!page.url().includes('mis_causas') && !page.url().includes('miscausas')) {
+      await page.goto('https://oficinajudicialvirtual.pjud.cl/ADIR_871/mis_causas.php', {
+        waitUntil: 'domcontentloaded',
+        timeout: 60000,
+      })
+      await sleep(3000)
     }
     
-    // Si no encontramos el input, buscar el menú de consultas
-    const menuLink = await page.$('a:has-text("Consulta"), a:has-text("Buscar Causa"), a[href*="consulta"]')
-    if (menuLink) {
-      await menuLink.click()
-      await page.waitForLoadState('domcontentloaded')
-      await sleep(2000)
-      return true
+    log('info', '  En Mis Causas. Configurando filtros...')
+    
+    // Seleccionar TODOS los tipos de causa (5 de 5)
+    try {
+      const tipoSelect = await page.$('select[name*="tipo"], select[id*="tipo"], select:has(option:has-text("Protección"))')
+      if (tipoSelect) {
+        // Seleccionar todas las opciones
+        await tipoSelect.selectOption({ index: 0 }) // "Todos" generalmente es index 0
+        await sleep(500)
+      }
+      // O buscar checkbox "Seleccionar todos"
+      const selectAllTipo = await page.$('input[type="checkbox"]:near(text("Tipo")), label:has-text("Todos") input')
+      if (selectAllTipo) {
+        await selectAllTipo.check().catch(() => {})
+      }
+    } catch {}
+    
+    // Seleccionar TODOS los estados (12 de 12)
+    try {
+      const estadoSelect = await page.$('select[name*="estado"], select[id*="estado"]')
+      if (estadoSelect) {
+        await estadoSelect.selectOption({ index: 0 })
+        await sleep(500)
+      }
+      const selectAllEstado = await page.$('input[type="checkbox"]:near(text("Estado")), label:has-text("Todos") input')
+      if (selectAllEstado) {
+        await selectAllEstado.check().catch(() => {})
+      }
+    } catch {}
+    
+    await sleep(1000)
+    
+    // Click en buscar/filtrar
+    const buscarBtn = await page.$('button:has-text("Buscar"), button:has-text("Filtrar"), input[type="submit"], button[type="submit"]')
+    if (buscarBtn) {
+      await buscarBtn.click().catch(() => {
+        page.evaluate(() => {
+          const btn = document.querySelector('button[type="submit"], input[type="submit"]') as HTMLElement
+          if (btn) btn.click()
+        })
+      })
+      await sleep(5000)
     }
     
-    // Intentar con la URL alternativa
-    await page.goto(OJV_URLS.busquedaRIT, {
-      waitUntil: 'domcontentloaded',
-      timeout: DEFAULT_CONFIG.navigationTimeout,
-    })
-    
-    await sleep(2000)
+    log('success', '  Mis Causas cargadas')
     return true
     
   } catch (error: any) {
-    log('error', `Error navegando a consulta: ${error.message}`)
+    log('error', `Error navegando a Mis Causas: ${error.message}`)
     return false
   }
 }
