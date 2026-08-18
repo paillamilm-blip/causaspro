@@ -15,11 +15,19 @@ export default function Home() {
 
   async function checkCausas() {
     try {
-      // Consultar directo a la tabla causas (no la vista, que puede fallar)
       const { count, error } = await supabase.from('causas').select('*', { count: 'exact', head: true })
       if (error) {
         console.error('Error checking causas:', error.message)
-        // Si hay error, asumimos que hay causas (para no bloquear)
+        // Si hay error de conexión, intentar con fetch directo
+        try {
+          const res = await fetch('/api/admin/reset')
+          const data = await res.json()
+          if (data.datos_actuales?.causas > 0) {
+            setCausasCount(data.datos_actuales.causas)
+            setHasCausas(true)
+            return
+          }
+        } catch {}
         setHasCausas(false)
         setCausasCount(0)
         return
