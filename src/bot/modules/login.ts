@@ -53,10 +53,11 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // PASO 1: Ir al portal OJV
     log('info', '  Navegando a oficinajudicialvirtual.pjud.cl...')
     await page.goto(OJV_URLS.home, { 
-      waitUntil: 'networkidle',
-      timeout: DEFAULT_CONFIG.navigationTimeout 
+      waitUntil: 'domcontentloaded',
+      timeout: 90000 
     })
-    await sleep(3000 + Math.random() * 2000)
+    // Esperar un poco más por si carga lento
+    await sleep(5000)
     
     // PASO 2: Click en "Clave Única"
     log('info', '  Buscando botón "Clave Única"...')
@@ -93,7 +94,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
       }
     }
     
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await sleep(2000 + Math.random() * 2000)
     
     log('info', '  En página de Clave Única...')
@@ -127,7 +128,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     const continueBtn = await page.$('button:has-text("Continuar"), button:has-text("Siguiente"), input[type="submit"]')
     if (continueBtn) {
       await continueBtn.click()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await sleep(2000)
     }
     
@@ -177,7 +178,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
       // Puede ser que ya esté logueado
     }
     
-    await page.waitForLoadState('networkidle')
+    await page.waitForLoadState('domcontentloaded')
     await sleep(3000)
     
     // PASO 9: Verificar login exitoso
@@ -411,7 +412,7 @@ export async function logoutOJV(page: Page): Promise<void> {
     const logoutLink = await page.$('a[href*="logout"], a:has-text("Cerrar Sesión"), a:has-text("Salir")')
     if (logoutLink) {
       await logoutLink.click()
-      await page.waitForLoadState('networkidle').catch(() => {})
+      await page.waitForLoadState('domcontentloaded').catch(() => {})
     }
     log('info', 'Sesión cerrada')
   } catch {}

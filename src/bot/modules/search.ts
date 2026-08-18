@@ -17,7 +17,7 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
   try {
     // Intentar navegar directamente a la URL de consulta
     await page.goto(OJV_URLS.consultaCausas, {
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
       timeout: DEFAULT_CONFIG.navigationTimeout,
     })
     
@@ -34,14 +34,14 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     const menuLink = await page.$('a:has-text("Consulta"), a:has-text("Buscar Causa"), a[href*="consulta"]')
     if (menuLink) {
       await menuLink.click()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await sleep(2000)
       return true
     }
     
     // Intentar con la URL alternativa
     await page.goto(OJV_URLS.busquedaRIT, {
-      waitUntil: 'networkidle',
+      waitUntil: 'domcontentloaded',
       timeout: DEFAULT_CONFIG.navigationTimeout,
     })
     
@@ -109,7 +109,7 @@ export async function searchByRIT(page: Page, causa: CausaToScrape): Promise<boo
     }
     
     // Esperar resultados
-    await page.waitForLoadState('networkidle', { timeout: DEFAULT_CONFIG.navigationTimeout })
+    await page.waitForLoadState('domcontentloaded', { timeout: DEFAULT_CONFIG.navigationTimeout })
     await sleep(2000 + Math.random() * 2000)
     
     // Verificar si hay resultados
@@ -140,7 +140,7 @@ export async function navigateToCausaDetail(page: Page, rit: string): Promise<bo
     if (causaLink) {
       await sleep(500 + Math.random() * 1000)
       await causaLink.click()
-      await page.waitForLoadState('networkidle', { timeout: DEFAULT_CONFIG.navigationTimeout })
+      await page.waitForLoadState('domcontentloaded', { timeout: DEFAULT_CONFIG.navigationTimeout })
       await sleep(2000)
       log('success', `Navegado al detalle de ${rit}`)
       return true
@@ -157,7 +157,7 @@ export async function navigateToCausaDetail(page: Page, rit: string): Promise<bo
     const firstRow = await page.$('table tbody tr:first-child a, .resultado:first-child a')
     if (firstRow) {
       await firstRow.click()
-      await page.waitForLoadState('networkidle')
+      await page.waitForLoadState('domcontentloaded')
       await sleep(2000)
       return true
     }
