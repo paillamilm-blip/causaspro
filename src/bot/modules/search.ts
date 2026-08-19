@@ -129,6 +129,22 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     })
     await sleep(5000)
     
+    // DEBUG: Imprimir estructura de tabs
+    const tabsDebug = await page.evaluate(() => {
+      // Buscar elementos que contengan "Familia" y "Corte Suprema"
+      const allEls = document.querySelectorAll('*')
+      const tabInfo: string[] = []
+      for (const el of allEls) {
+        const text = (el.textContent || '').trim()
+        // Solo elementos con texto corto (tabs, no contenedores)
+        if (text === 'Familia' || text === 'Corte Suprema' || text === 'Civil') {
+          tabInfo.push(`<${el.tagName} class="${el.className}" id="${el.id}" onclick="${el.getAttribute('onclick') || ''}" href="${(el as any).href || ''}">${text}</${el.tagName}>`)
+        }
+      }
+      return tabInfo.slice(0, 10)
+    })
+    log('info', `  TABS HTML: ${JSON.stringify(tabsDebug)}`)
+    
     // Verificar que Familia cargó en la TABLA
     const verified = await verifyFamiliaTab(page, 15000)
     
@@ -138,6 +154,9 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
       log('warn', '  ⚠️ Familia no confirmado en tabla, intentando click...')
       await clickFamiliaTab(page)
       await sleep(5000)
+      // Tomar screenshot para debug
+      await page.screenshot({ path: 'screenshot-familia-fail.png' }).catch(() => {})
+      log('info', '  Screenshot guardado: screenshot-familia-fail.png')
     }
     
     return true
