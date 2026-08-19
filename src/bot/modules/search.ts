@@ -38,13 +38,23 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(4000)
     
-    // Click en tab "Familia"
+    // Click en tab "Familia" (puede estar como link, botón, o li)
     log('info', '  Seleccionando tab Familia...')
     await page.evaluate(() => {
-      const tabs = document.querySelectorAll('a, li, button')
-      for (const tab of tabs) {
-        const text = (tab.textContent || '').trim()
+      // Buscar en todos los elementos clickeables
+      const elements = document.querySelectorAll('a, li, button, span, div')
+      for (const el of elements) {
+        const text = (el.textContent || '').trim()
+        // Buscar exactamente "Familia" (no "Familia Santiago" u otro)
         if (text === 'Familia') {
+          (el as HTMLElement).click()
+          return true
+        }
+      }
+      // Segundo intento: buscar tabs/pills
+      const tabs = document.querySelectorAll('[role="tab"], .nav-link, .tab-link, li a')
+      for (const tab of tabs) {
+        if ((tab.textContent || '').trim() === 'Familia') {
           (tab as HTMLElement).click()
           return true
         }
@@ -52,7 +62,7 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
       return false
     })
     
-    await sleep(3000)
+    await sleep(4000) // Esperar más porque puede recargar
     log('success', '  En Mis Causas > Familia')
     return true
     
@@ -222,10 +232,11 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
     
     for (const table of tables) {
       const headers = table.querySelectorAll('th')
-      // Verificar que es la tabla correcta (tiene columna Rit)
+      // Verificar que es la tabla correcta (tiene columna Rit o Rol)
       let isCorrect = false
       for (const th of headers) {
-        if ((th.textContent || '').trim().toLowerCase().includes('rit')) {
+        const text = (th.textContent || '').trim().toLowerCase()
+        if (text.includes('rit') || text.includes('rol') || text.includes('causa')) {
           isCorrect = true
           break
         }
@@ -250,9 +261,9 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
         let startIdx = 0
         
         for (let i = 0; i < cells.length; i++) {
-          // Buscar celda que parezca RIT (formato X-123-2026)
-          if (cells[i].match(/[A-Z]-\d+-\d{4}/)) {
-            rit = cells[i]
+          // Buscar celda que parezca RIT/ROL (formato X-123-2026 o 12345-2026)
+          if (cells[i].match(/[A-Z]?-?\d+-\d{4}/)) {
+            rit = cells[i].trim()
             startIdx = i
             break
           }
