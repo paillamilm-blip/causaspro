@@ -7,13 +7,13 @@ import type { BotConfig } from '../types'
 
 /** Configuración por defecto del bot */
 export const DEFAULT_CONFIG: BotConfig = {
-  // MODO PRODUCCIÓN: 200 causas por sesión
-  maxCausasPorSesion: 200,
+  // MODO EVIDENCIA: 3 causas, visible, para demostrar que funciona
+  maxCausasPorSesion: 3,
   
-  // Delays para producción (10-25 segundos)
-  delayMin: 10000,       // 10 segundos mínimo entre consultas
-  delayMax: 25000,       // 25 segundos máximo entre consultas
-  delayPostLogin: 3000,  // 3 segundos después del login
+  // Delays cortos para demo
+  delayMin: 5000,        // 5 segundos
+  delayMax: 10000,       // 10 segundos
+  delayPostLogin: 3000,
   
   // Timeouts
   navigationTimeout: 60000,  // 60 segundos para cargar página
@@ -21,7 +21,7 @@ export const DEFAULT_CONFIG: BotConfig = {
   
   // Debug
   screenshotOnError: true,
-  headless: true,  // Modo invisible (producción)
+  headless: false,  // VISIBLE para ver evidencia
   
   // Fingerprint: simular un navegador real
   userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
