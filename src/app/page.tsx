@@ -115,6 +115,16 @@ export default function Home() {
               <p className="text-xs text-gray-400 mt-1">El sistema detecta automáticamente las columnas de tu archivo</p>
             </div>
             <UploadExcel onSuccess={() => { setHasCausas(true) }} />
+            {/* Botón para ir directo al dashboard si ya hay datos */}
+            <div className="text-center pt-4 border-t">
+              <p className="text-sm text-gray-400 mb-2">¿Ya cargaste datos antes?</p>
+              <button
+                onClick={() => setHasCausas(true)}
+                className="text-sm bg-gray-100 text-gray-600 px-4 py-2 rounded-lg hover:bg-gray-200 transition"
+              >
+                📊 Ir al Panel de Control
+              </button>
+            </div>
           </div>
         ) : (
           <Dashboard />
