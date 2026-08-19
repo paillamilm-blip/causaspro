@@ -69,16 +69,23 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     })
     
     log('info', `  Tab Familia: ${familiaClicked || 'NO encontrado'}`)
-    await sleep(5000)
     
-    // Verificar resultado
-    const pageContent = await page.evaluate(() => {
-      const body = document.body.textContent || ''
-      if (body.includes('Juzgado de Familia')) return 'OK-familia'
-      if (body.includes('Corte Suprema') && !body.includes('Juzgado de Familia')) return 'STILL-corte-suprema'
-      return 'unknown'
-    })
-    log('info', `  Resultado tab: ${pageContent}`)
+    // Esperar a que la tabla se actualice con datos de Familia
+    // (el contenido cambia dinámicamente después del click)
+    await sleep(3000)
+    
+    // Esperar hasta que aparezca "Juzgado de Familia" en la tabla o max 15 segundos
+    for (let i = 0; i < 5; i++) {
+      const hasFamily = await page.evaluate(() => {
+        const body = document.body.textContent || ''
+        return body.includes('Juzgado de Familia') || body.includes('Familia Santiago') || body.includes('Familia San Miguel')
+      })
+      if (hasFamily) {
+        log('info', '  ✓ Tabla de Familia cargada')
+        break
+      }
+      await sleep(3000)
+    }
     
     log('success', '  En Mis Causas > Familia')
     return true
