@@ -247,40 +247,6 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     return []
   }
 }
-    
-    await sleep(1000)
-    
-    // Click en Buscar con JavaScript
-    log('info', '  Click en Buscar...')
-    await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn')
-      for (const btn of buttons) {
-        const text = (btn.textContent || '').trim()
-        const value = (btn as HTMLInputElement).value || ''
-        if (text === 'Buscar' || value === 'Buscar' || text.includes('Buscar')) {
-          (btn as HTMLElement).click()
-          return true
-        }
-      }
-      // Fallback: submit form
-      const form = document.querySelector('form')
-      if (form) { form.submit(); return true }
-      return false
-    })
-    
-    await sleep(5000)
-    
-    // Leer la tabla de resultados
-    const causas = await readResultsTable(page)
-    log('info', `  → ${causas.length} causas encontradas para ${year}`)
-    
-    return causas
-    
-  } catch (error: any) {
-    log('error', `Error buscando año ${year}: ${error.message}`)
-    return []
-  }
-}
 
 export interface CausaFoundInPortal {
   rit: string
@@ -420,7 +386,7 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
             let rit = ''
             let startIdx = 0
             for (let i = 0; i < cells.length; i++) {
-              if (cells[i].match(/[A-Z]-\d+-\d{4}/)) { rit = cells[i]; startIdx = i; break }
+              if (cells[i].match(/[A-Z]?-?\d+-\d{4}/)) { rit = cells[i]; startIdx = i; break }
             }
             if (!rit) continue
             rows.push({ rit, tribunal: cells[startIdx+1]||'', caratulado: cells[startIdx+2]||'', fecha_ingreso: cells[startIdx+3]||'', estado_procesal: cells[startIdx+4]||'', institucion: cells[startIdx+5]||'', href })
