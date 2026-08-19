@@ -1,25 +1,21 @@
 // ============================================================
 // CAUSASPRO BOT - Orchestrator
-// Controla la ejecución completa: login → scrape → sync
-// Anti-detección: delays humanos, límite de sesión, horario
+// Flujo: Login → Mis Causas → Listar por año → Leer tabla → Scrape detalles → Sync
 // ============================================================
 
 import { chromium, Browser, BrowserContext, Page } from 'playwright'
-import type { BotConfig, BotRunStatus, CausaScrapedData, CausaToScrape, ScrapeSessionResult } from '../types'
+import type { BotConfig, BotRunStatus, CausaScrapedData, ScrapeSessionResult } from '../types'
 import { DEFAULT_CONFIG } from '../config'
 import { createStealthContext, loginOJV, logoutOJV, isSessionActive } from './login'
-import { navigateToConsulta, searchByRIT, navigateToCausaDetail } from './search'
+import { navigateToConsulta, searchByYear, navigateToCausaDetail, CausaFoundInPortal } from './search'
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { getCausasToScrape, saveCausaData, saveBotRunStatus, markCausaScraped } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log } from '../utils'
+import { createClient } from '@supabase/supabase-js'
 
 /**
  * Ejecuta una sesión completa del bot
- * - Login
- * - Scrapear N causas (con delays anti-detección)
- * - Sync con Supabase
- * - Logout
  */
 export async function runBotSession(
   credentials: { rut: string; password: string },
@@ -44,15 +40,13 @@ export async function runBotSession(
   let page: Page | null = null
   
   log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
-  log('info', `🤖 CausasPro Bot - Sesión ${runId}`)
+  log('info', `🤖 CausasPro Bot — Sesión ${runId}`)
   log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
   
   try {
-    // 0. Verificar horario permitido (desactivado para pruebas manuales)
-    // Se puede reactivar después cambiando SKIP_HOUR_CHECK
+    // 0. Verificar horario
     if (!process.env.SKIP_HOUR_CHECK && !isWithinAllowedHours()) {
-      log('warn', 'Fuera de horario permitido (8-18h Chile). Abortando.')
-      log('info', 'Tip: usa SKIP_HOUR_CHECK=1 para ignorar el horario')
+      log('warn', 'Fuera de horario permitido. Usa SKIP_HOUR_CHECK=1 para ignorar.')
       status.detenido_por = 'error_critico'
       status.errores.push('Fuera de horario permitido')
       return { status, data: results }
@@ -62,19 +56,11 @@ export async function runBotSession(
     log('info', 'Lanzando navegador...')
     browser = await chromium.launch({
       headless: cfg.headless,
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--disable-features=IsolateOrigins,site-per-process',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-        '--disable-dev-shm-usage',
-      ],
+      args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
     })
     
     context = await createStealthContext(browser)
     page = await context.newPage()
-    
-    // Configurar timeouts
     page.setDefaultTimeout(cfg.selectorTimeout)
     page.setDefaultNavigationTimeout(cfg.navigationTimeout)
     
@@ -89,161 +75,155 @@ export async function runBotSession(
       return { status, data: results }
     }
     
-    // 3. Obtener causas a scrapear
-    log('info', `Obteniendo causas a scrapear (max ${cfg.maxCausasPorSesion})...`)
-    const causas = await getCausasToScrape(cfg.maxCausasPorSesion, cfg.priorizarUrgentes)
-    status.total_causas = causas.length
+    // 3. Navegar a Mis Causas
+    const navOk = await navigateToConsulta(page)
+    if (!navOk) {
+      log('error', 'No se pudo navegar a Mis Causas')
+      status.detenido_por = 'error_critico'
+      status.errores.push('No se pudo navegar a Mis Causas')
+      return { status, data: results }
+    }
     
-    if (causas.length === 0) {
-      log('warn', 'No hay causas para scrapear')
+    // 4. Listar causas por año (2024, 2025, 2026)
+    log('info', 'Listando causas del portal por año...')
+    const allPortalCausas: CausaFoundInPortal[] = []
+    
+    for (const year of ['2026', '2025', '2024']) {
+      const causasYear = await searchByYear(page, year)
+      allPortalCausas.push(...causasYear)
+      
+      if (allPortalCausas.length >= cfg.maxCausasPorSesion) {
+        log('info', `  Alcanzado límite de ${cfg.maxCausasPorSesion} causas`)
+        break
+      }
+      
+      await sleep(3000)
+    }
+    
+    log('info', `📋 ${allPortalCausas.length} causas encontradas en el portal`)
+    status.total_causas = allPortalCausas.length
+    
+    if (allPortalCausas.length === 0) {
+      log('warn', 'No se encontraron causas en el portal')
       status.detenido_por = 'completado'
       return { status, data: results }
     }
     
-    log('info', `📋 ${causas.length} causas a procesar`)
+    // 5. Sincronizar con Supabase (actualizar datos básicos de la tabla)
+    log('info', 'Actualizando datos básicos en Supabase...')
+    const supabase = initSupabase()
     
-    // 4. Navegar a consulta de causas
-    const navOk = await navigateToConsulta(page)
-    if (!navOk) {
-      log('error', 'No se pudo navegar a la sección de consulta')
-      status.detenido_por = 'error_critico'
-      status.errores.push('No se pudo navegar a consulta de causas')
-      return { status, data: results }
-    }
-    
-    // 5. Scrapear cada causa
-    for (let i = 0; i < causas.length; i++) {
-      const causa = causas[i]
-      
-      log('info', `\n[${i + 1}/${causas.length}] Procesando ${causa.rit}...`)
-      
-      // Verificar sesión activa
-      if (!await isSessionActive(page)) {
-        log('error', 'Sesión expirada. Abortando.')
-        status.detenido_por = 'error_critico'
-        status.errores.push('Sesión expirada durante scraping')
-        break
-      }
-      
-      // Verificar si hay captcha o bloqueo (solo en la URL de consulta, no en Mis Causas)
-      const currentUrl = page.url()
-      if (currentUrl.includes('consulta')) {
-        const captcha = await page.$('.captcha, .g-recaptcha, [class*="captcha"]')
-        if (captcha) {
-          log('warn', '⚠️ CAPTCHA detectado en consulta. Intentando vía Mis Causas...')
-          // No detener, intentar continuar
-        }
-      }
-      }
-      
+    for (const pc of allPortalCausas) {
       try {
-        // Buscar la causa
-        const found = await searchByRIT(page, causa)
+        // Buscar si existe en la base de datos
+        const { data: existing } = await supabase
+          .from('causas')
+          .select('id')
+          .eq('rit', pc.rit)
+          .limit(1)
         
-        if (!found) {
-          log('warn', `  ${causa.rit} no encontrada`)
-          status.fallidas++
-          status.procesadas++
-          continue
-        }
-        
-        // Navegar al detalle
-        const inDetail = await navigateToCausaDetail(page, causa.rit)
-        
-        if (!inDetail) {
-          log('warn', `  No se pudo abrir detalle de ${causa.rit}`)
-          status.fallidas++
-          status.procesadas++
-          continue
-        }
-        
-        // Scrapear datos completos
-        const scrapedData = await scrapeCausaCompleta(page, causa)
-        
-        // Analizar urgencia
-        const analysis = analyzeCausaUrgency(scrapedData)
-        
-        // Guardar en Supabase
-        const saved = await saveCausaData(scrapedData, analysis)
-        
-        if (saved) {
-          status.exitosas++
-          results.push(scrapedData)
-          await markCausaScraped(causa.id)
+        if (existing && existing.length > 0) {
+          // Actualizar datos del portal
+          await supabase
+            .from('causas')
+            .update({
+              caratulado: pc.caratulado || undefined,
+              estado: pc.estado_procesal || undefined,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('rit', pc.rit)
           
-          // Mostrar alerta si es urgente
-          if (analysis.requiere_accion_inmediata) {
-            log('warn', `  ${generateAlertSummary(analysis)}`)
-          }
+          status.exitosas++
         } else {
-          status.fallidas++
+          // Causa nueva (está en el portal pero no en la BD) → crearla
+          await supabase
+            .from('causas')
+            .insert({
+              rit: pc.rit,
+              caratulado: pc.caratulado || null,
+              estado: pc.estado_procesal || null,
+              tipo: pc.rit.startsWith('P') ? 'P' : pc.rit.startsWith('C') ? 'C' : pc.rit.startsWith('X') ? 'X' : null,
+              fecha_apertura: parseDateCL(pc.fecha_ingreso),
+              notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
+            })
+          
+          status.exitosas++
+          log('info', `  + Nueva causa: ${pc.rit}`)
         }
         
         status.procesadas++
-        
-      } catch (error: any) {
-        log('error', `  Error procesando ${causa.rit}: ${error.message}`)
+      } catch (err: any) {
         status.fallidas++
         status.procesadas++
-        status.errores.push(`${causa.rit}: ${error.message}`)
+        status.errores.push(`${pc.rit}: ${err.message}`)
+      }
+    }
+    
+    // 6. Entrar a detalles de las primeras N causas (para movimientos/audiencias)
+    const maxDetails = Math.min(cfg.maxCausasPorSesion, 10) // Max 10 detalles por sesión
+    log('info', `\nExtrayendo detalles de las primeras ${maxDetails} causas...`)
+    
+    for (let i = 0; i < Math.min(allPortalCausas.length, maxDetails); i++) {
+      const pc = allPortalCausas[i]
+      log('info', `  [${i+1}/${maxDetails}] Detalle de ${pc.rit}...`)
+      
+      try {
+        const opened = await navigateToCausaDetail(page, pc.rit)
         
-        // Si es un error de navegación, tomar screenshot
-        if (cfg.screenshotOnError && page) {
-          try {
-            await page.screenshot({ 
-              path: `/tmp/bot_error_${causa.rit.replace(/[^a-zA-Z0-9]/g, '_')}.png` 
-            })
-          } catch {}
+        if (opened) {
+          // Extraer datos del detalle
+          const { data: causaDb } = await supabase
+            .from('causas')
+            .select('id')
+            .eq('rit', pc.rit)
+            .single()
+          
+          if (causaDb) {
+            const scrapedData = await scrapeCausaCompleta(page, { id: causaDb.id, rit: pc.rit })
+            const analysis = analyzeCausaUrgency(scrapedData)
+            await saveCausaData(scrapedData, analysis)
+            results.push(scrapedData)
+            
+            if (analysis.requiere_accion_inmediata) {
+              log('warn', `  ${generateAlertSummary(analysis)}`)
+            }
+          }
         }
+        
+        // Volver a la lista
+        await page.goBack()
+        await sleep(3000)
+        
+      } catch (err: any) {
+        log('warn', `  Error en detalle ${pc.rit}: ${err.message}`)
       }
       
-      // ANTI-DETECCIÓN: Delay entre causas
-      if (i < causas.length - 1) {
-        await humanDelay(cfg.delayMin, cfg.delayMax)
-      }
-      
-      // Verificar límite de sesión (por si queremos cortar antes)
-      if (status.procesadas >= cfg.maxCausasPorSesion) {
-        log('info', `Límite de sesión alcanzado (${cfg.maxCausasPorSesion} causas)`)
-        status.detenido_por = 'limite_sesion'
-        break
-      }
-      
-      // Volver a la página de búsqueda para la siguiente causa
-      await navigateToConsulta(page)
-      await sleep(1000 + Math.random() * 2000)
+      // Delay entre detalles
+      await humanDelay(cfg.delayMin, cfg.delayMax)
     }
     
-    // 6. Logout limpio
-    if (page) {
-      await logoutOJV(page)
-    }
-    
-    status.detenido_por = status.detenido_por || 'completado'
+    // 7. Logout
+    if (page) await logoutOJV(page)
+    status.detenido_por = 'completado'
     
   } catch (error: any) {
-    log('error', `Error crítico en sesión: ${error.message}`)
+    log('error', `Error crítico: ${error.message}`)
     status.detenido_por = 'error_critico'
     status.errores.push(error.message)
   } finally {
-    // Cerrar navegador
     if (page) await page.close().catch(() => {})
     if (context) await context.close().catch(() => {})
     if (browser) await browser.close().catch(() => {})
     
-    // Guardar status
     status.finished_at = new Date().toISOString()
     await saveBotRunStatus(status).catch(() => {})
     
-    // Resumen final
     log('info', `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
     log('info', `📊 Resumen sesión ${runId}:`)
     log('info', `   Total: ${status.total_causas} | Procesadas: ${status.procesadas}`)
     log('success', `   Exitosas: ${status.exitosas} | Fallidas: ${status.fallidas}`)
     log('info', `   Detenido por: ${status.detenido_por}`)
-    if (status.errores.length > 0) {
-      log('warn', `   Errores: ${status.errores.length}`)
-    }
+    if (status.errores.length > 0) log('warn', `   Errores: ${status.errores.length}`)
     log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
   }
   
@@ -251,32 +231,19 @@ export async function runBotSession(
 }
 
 /**
- * Ejecuta el bot en modo "solo las urgentes"
- * Scrapea solo las causas con nivel_urgencia alto
+ * Parsea fecha chilena dd/mm/yyyy a yyyy-mm-dd
  */
-export async function runUrgentOnly(
-  credentials: { rut: string; password: string }
-): Promise<ScrapeSessionResult> {
-  return runBotSession(credentials, {
-    maxCausasPorSesion: 10, // Menos causas, más rápido
-    delayMin: 20000,         // Delays menores (es urgente)
-    delayMax: 60000,
-    priorizarUrgentes: true,
-  })
+function parseDateCL(dateStr: string): string | null {
+  if (!dateStr) return null
+  const match = dateStr.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+  if (!match) return null
+  return `${match[3]}-${match[2].padStart(2, '0')}-${match[1].padStart(2, '0')}`
 }
 
-/**
- * Ejecuta una prueba rápida (1 causa) para verificar que todo funciona
- */
-export async function runTestSingle(
-  credentials: { rut: string; password: string },
-  rit: string
-): Promise<ScrapeSessionResult> {
-  return runBotSession(credentials, {
-    maxCausasPorSesion: 1,
-    delayMin: 5000,
-    delayMax: 10000,
-    screenshotOnError: true,
-    headless: false, // Visible para debugging
-  })
+export async function runUrgentOnly(credentials: { rut: string; password: string }): Promise<ScrapeSessionResult> {
+  return runBotSession(credentials, { maxCausasPorSesion: 10, delayMin: 5000, delayMax: 15000 })
+}
+
+export async function runTestSingle(credentials: { rut: string; password: string }): Promise<ScrapeSessionResult> {
+  return runBotSession(credentials, { maxCausasPorSesion: 5, delayMin: 3000, delayMax: 8000, headless: false })
 }

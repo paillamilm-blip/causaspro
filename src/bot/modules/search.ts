@@ -1,27 +1,26 @@
 // ============================================================
-// CAUSASPRO BOT - Search Module
-// Busca causas por RIT en la OJV
+// CAUSASPRO BOT - Search Module (via Mis Causas)
+// Lee todas las causas desde "Mis Causas" filtrando por año
+// NO usa Consulta Causas (tiene CAPTCHA)
 // ============================================================
 
 import type { Page } from 'playwright'
 import type { CausaToScrape } from '../types'
-import { OJV_URLS, OJV_SELECTORS, DEFAULT_CONFIG } from '../config'
-import { humanDelay, sleep, log, parseRIT } from '../utils'
+import { sleep, log } from '../utils'
 
 /**
- * Navega a la sección "Mis Causas" y lista todas
- * Filtros: Tipo de causa = todos (5/5), Estado = todos (12/12)
+ * Navega a "Mis Causas" > Tab Familia > Filtra por año > Lee tabla
  */
 export async function navigateToConsulta(page: Page): Promise<boolean> {
   log('info', 'Navegando a Mis Causas...')
   
   try {
-    // Intentar click en "Mis Causas" desde el menú
-    await page.evaluate(() => {
+    // Click en "Mis Causas" del menú izquierdo
+    const clicked = await page.evaluate(() => {
       const links = document.querySelectorAll('a')
       for (const link of links) {
         const text = (link.textContent || '').trim()
-        if (text.includes('Mis Causas') || text.includes('Mis causas')) {
+        if (text === 'Mis Causas' || text === 'Mis causas') {
           link.click()
           return true
         }
@@ -29,62 +28,32 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
       return false
     })
     
-    await sleep(3000)
-    
-    // Si no funcionó el click, navegar directo
-    if (!page.url().includes('mis_causas') && !page.url().includes('miscausas')) {
-      await page.goto('https://oficinajudicialvirtual.pjud.cl/ADIR_871/mis_causas.php', {
+    if (!clicked) {
+      // Navegar directo
+      await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php', {
         waitUntil: 'domcontentloaded',
         timeout: 60000,
       })
-      await sleep(3000)
     }
     
-    log('info', '  En Mis Causas. Configurando filtros...')
+    await sleep(4000)
     
-    // Seleccionar TODOS los tipos de causa (5 de 5)
-    try {
-      const tipoSelect = await page.$('select[name*="tipo"], select[id*="tipo"], select:has(option:has-text("Protección"))')
-      if (tipoSelect) {
-        // Seleccionar todas las opciones
-        await tipoSelect.selectOption({ index: 0 }) // "Todos" generalmente es index 0
-        await sleep(500)
+    // Click en tab "Familia"
+    log('info', '  Seleccionando tab Familia...')
+    await page.evaluate(() => {
+      const tabs = document.querySelectorAll('a, li, button')
+      for (const tab of tabs) {
+        const text = (tab.textContent || '').trim()
+        if (text === 'Familia') {
+          (tab as HTMLElement).click()
+          return true
+        }
       }
-      // O buscar checkbox "Seleccionar todos"
-      const selectAllTipo = await page.$('input[type="checkbox"]:near(text("Tipo")), label:has-text("Todos") input')
-      if (selectAllTipo) {
-        await selectAllTipo.check().catch(() => {})
-      }
-    } catch {}
+      return false
+    })
     
-    // Seleccionar TODOS los estados (12 de 12)
-    try {
-      const estadoSelect = await page.$('select[name*="estado"], select[id*="estado"]')
-      if (estadoSelect) {
-        await estadoSelect.selectOption({ index: 0 })
-        await sleep(500)
-      }
-      const selectAllEstado = await page.$('input[type="checkbox"]:near(text("Estado")), label:has-text("Todos") input')
-      if (selectAllEstado) {
-        await selectAllEstado.check().catch(() => {})
-      }
-    } catch {}
-    
-    await sleep(1000)
-    
-    // Click en buscar/filtrar
-    const buscarBtn = await page.$('button:has-text("Buscar"), button:has-text("Filtrar"), input[type="submit"], button[type="submit"]')
-    if (buscarBtn) {
-      await buscarBtn.click().catch(() => {
-        page.evaluate(() => {
-          const btn = document.querySelector('button[type="submit"], input[type="submit"]') as HTMLElement
-          if (btn) btn.click()
-        })
-      })
-      await sleep(5000)
-    }
-    
-    log('success', '  Mis Causas cargadas')
+    await sleep(3000)
+    log('success', '  En Mis Causas > Familia')
     return true
     
   } catch (error: any) {
@@ -94,247 +63,288 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 /**
- * Busca una causa específica por RIT
- * Retorna true si encontró la causa y navegó al detalle
+ * Busca causas por año en Mis Causas y retorna la lista de RITs encontrados
  */
-export async function searchByRIT(page: Page, causa: CausaToScrape): Promise<boolean> {
-  log('info', `Buscando causa ${causa.rit}...`)
+export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
+  log('info', `  Buscando causas del año ${year}...`)
   
   try {
-    const ritParsed = parseRIT(causa.rit)
-    if (!ritParsed) {
-      log('warn', `RIT inválido: ${causa.rit}`)
-      return false
+    // Limpiar campo Rol y Rit (dejar vacíos)
+    await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input[type="text"], input[type="number"]')
+      inputs.forEach(input => {
+        const name = input.getAttribute('name') || ''
+        const id = input.getAttribute('id') || ''
+        // Limpiar Rol y Rit pero NO el Rut
+        if (name.toLowerCase().includes('rol') || id.toLowerCase().includes('rol') ||
+            name.toLowerCase().includes('rit') || id.toLowerCase().includes('rit')) {
+          // No limpiar si es el campo de número de RIT tipo "9"
+        }
+      })
+    })
+    
+    // Poner el año
+    const yearInput = await page.$('input[name*="ano"], input[name*="año"], input[id*="ano"], input[placeholder*="Año"]')
+    if (yearInput) {
+      await yearInput.fill('')
+      await sleep(300)
+      await yearInput.fill(year)
+    } else {
+      // Buscar por posición (el campo Año está después de Rol)
+      await page.evaluate((y) => {
+        const inputs = document.querySelectorAll('input[type="text"], input[type="number"]')
+        // El campo Año generalmente es el 4to o 5to input
+        for (const input of inputs) {
+          const placeholder = input.getAttribute('placeholder') || ''
+          const name = input.getAttribute('name') || ''
+          if (placeholder.includes('Año') || placeholder.includes('año') || name.includes('ano')) {
+            (input as HTMLInputElement).value = y
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+            input.dispatchEvent(new Event('change', { bubbles: true }))
+            return
+          }
+        }
+        // Fallback: buscar input cerca de texto "Año"
+        const labels = document.querySelectorAll('label, span, td, th')
+        for (const label of labels) {
+          if ((label.textContent || '').includes('Año')) {
+            const input = label.parentElement?.querySelector('input') || 
+                          label.nextElementSibling as HTMLInputElement
+            if (input && input.tagName === 'INPUT') {
+              (input as HTMLInputElement).value = y
+              input.dispatchEvent(new Event('input', { bubbles: true }))
+              input.dispatchEvent(new Event('change', { bubbles: true }))
+              return
+            }
+          }
+        }
+      }, year)
     }
     
-    // Buscar el campo de búsqueda por RIT
-    // El portal puede tener campos separados para tipo, número y año
-    const singleRitInput = await findSearchInput(page)
+    await sleep(1000)
     
-    if (singleRitInput) {
-      // Campo único de RIT
-      await singleRitInput.click()
-      await sleep(300 + Math.random() * 500)
-      await singleRitInput.fill('')
-      await sleep(200)
-      
-      // Escribir RIT completo
-      await typeWithDelay(page, singleRitInput, causa.rit)
-      
-    } else {
-      // Campos separados: tipo (letra), número, año
-      const success = await fillSeparatedRITFields(page, ritParsed)
-      if (!success) {
-        log('error', `No se encontraron campos de búsqueda para ${causa.rit}`)
-        return false
+    // Click en Buscar
+    log('info', '  Click en Buscar...')
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, input[type="submit"], a')
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim()
+        const value = btn.getAttribute('value') || ''
+        if (text === 'Buscar' || value === 'Buscar') {
+          (btn as HTMLElement).click()
+          return true
+        }
       }
-    }
+      // Fallback: submit del form
+      const form = document.querySelector('form')
+      if (form) form.submit()
+      return false
+    })
     
-    // Seleccionar tribunal si está disponible y tenemos la info
-    if (causa.tribunal) {
-      await selectTribunal(page, causa.tribunal)
-    }
+    await sleep(5000)
     
-    // Esperar un momento antes de buscar (humano)
-    await sleep(800 + Math.random() * 1500)
+    // Leer la tabla de resultados
+    const causas = await readResultsTable(page)
+    log('info', `  → ${causas.length} causas encontradas para ${year}`)
     
-    // Click en buscar
-    const searchBtn = await findSearchButton(page)
-    if (searchBtn) {
-      await searchBtn.click()
-    } else {
-      // Fallback: Enter
-      await page.keyboard.press('Enter')
-    }
-    
-    // Esperar resultados
-    await page.waitForLoadState('domcontentloaded', { timeout: DEFAULT_CONFIG.navigationTimeout })
-    await sleep(2000 + Math.random() * 2000)
-    
-    // Verificar si hay resultados
-    const hasResults = await checkSearchResults(page, causa.rit)
-    
-    if (hasResults) {
-      log('success', `Causa ${causa.rit} encontrada`)
-      return true
-    }
-    
-    log('warn', `Causa ${causa.rit} no encontrada en resultados`)
-    return false
+    return causas
     
   } catch (error: any) {
-    log('error', `Error buscando ${causa.rit}: ${error.message}`)
-    return false
+    log('error', `Error buscando año ${year}: ${error.message}`)
+    return []
   }
+}
+
+export interface CausaFoundInPortal {
+  rit: string
+  tribunal: string
+  caratulado: string
+  fecha_ingreso: string
+  estado_procesal: string
+  institucion: string
+  detailLink?: string // URL o selector para ver detalle
 }
 
 /**
- * Navega al detalle de la causa desde los resultados de búsqueda
+ * Lee la tabla de resultados de Mis Causas
+ */
+async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
+  const causas: CausaFoundInPortal[] = []
+  
+  const data = await page.evaluate(() => {
+    const rows: any[] = []
+    // Buscar la tabla de resultados
+    const tables = document.querySelectorAll('table')
+    
+    for (const table of tables) {
+      const headers = table.querySelectorAll('th')
+      // Verificar que es la tabla correcta (tiene columna Rit)
+      let isCorrect = false
+      for (const th of headers) {
+        if ((th.textContent || '').trim().toLowerCase().includes('rit')) {
+          isCorrect = true
+          break
+        }
+      }
+      
+      if (!isCorrect) continue
+      
+      // Leer filas
+      const trs = table.querySelectorAll('tbody tr, tr')
+      for (const tr of trs) {
+        const tds = tr.querySelectorAll('td')
+        if (tds.length < 4) continue
+        
+        const cells = Array.from(tds).map(td => (td.textContent || '').trim())
+        
+        // Buscar link de detalle (lupa)
+        const detailLink = tr.querySelector('a[href]')
+        const href = detailLink ? detailLink.getAttribute('href') : null
+        
+        // La primera celda puede tener un ícono de lupa + RIT
+        let rit = ''
+        let startIdx = 0
+        
+        for (let i = 0; i < cells.length; i++) {
+          // Buscar celda que parezca RIT (formato X-123-2026)
+          if (cells[i].match(/[A-Z]-\d+-\d{4}/)) {
+            rit = cells[i]
+            startIdx = i
+            break
+          }
+        }
+        
+        if (!rit) continue
+        
+        rows.push({
+          rit,
+          tribunal: cells[startIdx + 1] || '',
+          caratulado: cells[startIdx + 2] || '',
+          fecha_ingreso: cells[startIdx + 3] || '',
+          estado_procesal: cells[startIdx + 4] || '',
+          institucion: cells[startIdx + 5] || '',
+          href,
+        })
+      }
+      
+      if (rows.length > 0) break // Ya encontramos la tabla correcta
+    }
+    
+    return rows
+  })
+  
+  for (const row of data) {
+    causas.push({
+      rit: row.rit,
+      tribunal: row.tribunal,
+      caratulado: row.caratulado,
+      fecha_ingreso: row.fecha_ingreso,
+      estado_procesal: row.estado_procesal,
+      institucion: row.institucion,
+      detailLink: row.href,
+    })
+  }
+  
+  // Verificar si hay paginación
+  const hasNextPage = await page.evaluate(() => {
+    const paginators = document.querySelectorAll('a:has-text("Siguiente"), a:has-text(">"), .pagination .next a, a[aria-label="Next"]')
+    return paginators.length > 0
+  })
+  
+  if (hasNextPage) {
+    log('info', '  Hay más páginas, cargando...')
+    // Click siguiente y leer más
+    let pageNum = 2
+    while (pageNum <= 20) { // Máximo 20 páginas
+      const clickedNext = await page.evaluate(() => {
+        const next = document.querySelector('a:has-text("Siguiente"), a:has-text(">"), .pagination .next a') as HTMLElement
+        if (next) { next.click(); return true }
+        return false
+      })
+      
+      if (!clickedNext) break
+      
+      await sleep(3000)
+      
+      const moreData = await page.evaluate(() => {
+        const rows: any[] = []
+        const tables = document.querySelectorAll('table')
+        for (const table of tables) {
+          const trs = table.querySelectorAll('tbody tr, tr')
+          for (const tr of trs) {
+            const tds = tr.querySelectorAll('td')
+            if (tds.length < 4) continue
+            const cells = Array.from(tds).map(td => (td.textContent || '').trim())
+            const detailLink = tr.querySelector('a[href]')
+            const href = detailLink ? detailLink.getAttribute('href') : null
+            let rit = ''
+            let startIdx = 0
+            for (let i = 0; i < cells.length; i++) {
+              if (cells[i].match(/[A-Z]-\d+-\d{4}/)) { rit = cells[i]; startIdx = i; break }
+            }
+            if (!rit) continue
+            rows.push({ rit, tribunal: cells[startIdx+1]||'', caratulado: cells[startIdx+2]||'', fecha_ingreso: cells[startIdx+3]||'', estado_procesal: cells[startIdx+4]||'', institucion: cells[startIdx+5]||'', href })
+          }
+          if (rows.length > 0) break
+        }
+        return rows
+      })
+      
+      if (moreData.length === 0) break
+      
+      for (const row of moreData) {
+        causas.push({
+          rit: row.rit, tribunal: row.tribunal, caratulado: row.caratulado,
+          fecha_ingreso: row.fecha_ingreso, estado_procesal: row.estado_procesal,
+          institucion: row.institucion, detailLink: row.href,
+        })
+      }
+      
+      pageNum++
+    }
+  }
+  
+  return causas
+}
+
+/**
+ * Click en la lupa de una causa para ver su detalle
  */
 export async function navigateToCausaDetail(page: Page, rit: string): Promise<boolean> {
   try {
-    // Buscar link a la causa en la tabla de resultados
-    const causaLink = await page.$(`a:has-text("${rit}"), tr:has-text("${rit}") a, a[href*="detalle"]`)
-    
-    if (causaLink) {
-      await sleep(500 + Math.random() * 1000)
-      await causaLink.click()
-      await page.waitForLoadState('domcontentloaded', { timeout: DEFAULT_CONFIG.navigationTimeout })
-      await sleep(2000)
-      log('success', `Navegado al detalle de ${rit}`)
-      return true
-    }
-    
-    // Si la búsqueda fue directa y ya estamos en el detalle
-    const movimientosTab = await page.$(OJV_SELECTORS.tabMovimientos)
-    if (movimientosTab) {
-      log('info', 'Ya estamos en el detalle de la causa')
-      return true
-    }
-    
-    // Intentar hacer click en la primera fila de resultados
-    const firstRow = await page.$('table tbody tr:first-child a, .resultado:first-child a')
-    if (firstRow) {
-      await firstRow.click()
-      await page.waitForLoadState('domcontentloaded')
-      await sleep(2000)
-      return true
-    }
-    
-    log('warn', 'No se pudo navegar al detalle de la causa')
-    return false
-    
-  } catch (error: any) {
-    log('error', `Error navegando al detalle: ${error.message}`)
-    return false
-  }
-}
-
-// ============================================================
-// HELPERS PRIVADOS
-// ============================================================
-
-async function findSearchInput(page: Page): Promise<any | null> {
-  const selectors = [
-    '#rit',
-    'input[name="rit"]',
-    'input[placeholder*="RIT"]',
-    'input[placeholder*="rit"]',
-    'input[name="rol"]',
-    '#txtRit',
-    'input[id*="rit" i]',
-  ]
-  
-  for (const sel of selectors) {
-    try {
-      const el = await page.$(sel)
-      if (el && await el.isVisible()) return el
-    } catch {}
-  }
-  return null
-}
-
-async function fillSeparatedRITFields(
-  page: Page, 
-  rit: { tipo: string; numero: string; año: string }
-): Promise<boolean> {
-  try {
-    // Campo tipo (P, C, X, etc.)
-    const tipoField = await page.$('input[name*="tipo"], select[name*="tipo"], #tipoRit, input[maxlength="1"]')
-    if (tipoField) {
-      const tagName = await tipoField.evaluate((el: Element) => el.tagName)
-      if (tagName === 'SELECT') {
-        await tipoField.selectOption({ label: rit.tipo })
-      } else {
-        await tipoField.fill(rit.tipo)
+    // Buscar la fila con el RIT y hacer click en la lupa
+    const clicked = await page.evaluate((targetRit) => {
+      const rows = document.querySelectorAll('table tr')
+      for (const row of rows) {
+        const text = row.textContent || ''
+        if (text.includes(targetRit)) {
+          const link = row.querySelector('a[href], button, .btn')
+          if (link) {
+            (link as HTMLElement).click()
+            return true
+          }
+        }
       }
-      await sleep(300)
+      return false
+    }, rit)
+    
+    if (clicked) {
+      await sleep(4000)
+      log('info', `  Detalle de ${rit} abierto`)
+      return true
     }
     
-    // Campo número
-    const numField = await page.$('input[name*="numero"], input[name*="rol"], #numRit, input[type="number"]')
-    if (numField) {
-      await numField.fill(rit.numero)
-      await sleep(300)
-    }
-    
-    // Campo año
-    const yearField = await page.$('input[name*="ano"], input[name*="año"], select[name*="ano"], #anoRit')
-    if (yearField) {
-      const tagName = await yearField.evaluate((el: Element) => el.tagName)
-      if (tagName === 'SELECT') {
-        await yearField.selectOption({ value: rit.año })
-      } else {
-        await yearField.fill(rit.año)
-      }
-      await sleep(300)
-    }
-    
-    return true
+    return false
   } catch {
     return false
   }
 }
 
-async function selectTribunal(page: Page, tribunal: string): Promise<void> {
-  try {
-    const select = await page.$(OJV_SELECTORS.searchTribunalSelect)
-    if (select) {
-      // Buscar opción que contenga el nombre del tribunal
-      const options = await select.$$('option')
-      for (const option of options) {
-        const text = await option.textContent()
-        if (text && text.toLowerCase().includes(tribunal.toLowerCase())) {
-          const value = await option.getAttribute('value')
-          if (value) {
-            await select.selectOption({ value })
-            await sleep(500)
-          }
-          break
-        }
-      }
-    }
-  } catch {}
-}
-
-async function findSearchButton(page: Page): Promise<any | null> {
-  const selectors = [
-    '#btnBuscar',
-    'button:has-text("Buscar")',
-    'input[value="Buscar"]',
-    'input[type="submit"]',
-    'button[type="submit"]',
-    'a:has-text("Buscar")',
-    '.btn-buscar',
-  ]
-  
-  for (const sel of selectors) {
-    try {
-      const el = await page.$(sel)
-      if (el && await el.isVisible()) return el
-    } catch {}
-  }
-  return null
-}
-
-async function checkSearchResults(page: Page, rit: string): Promise<boolean> {
-  // Verificar si hay resultados
-  const noResults = await page.$(':has-text("No se encontraron"), :has-text("sin resultados"), :has-text("0 resultado")')
-  if (noResults) return false
-  
-  // Verificar si hay tabla de resultados o si estamos en el detalle directo
-  const resultsTable = await page.$('table tbody tr, .resultado-causa, .detalle-causa')
-  if (resultsTable) return true
-  
-  // Verificar si el RIT aparece en la página
-  const pageContent = await page.textContent('body')
-  if (pageContent && pageContent.includes(rit)) return true
-  
-  return false
-}
-
-async function typeWithDelay(page: Page, element: any, text: string): Promise<void> {
-  for (const char of text) {
-    await element.type(char, { delay: 80 + Math.random() * 120 })
-  }
+/**
+ * Buscar por RIT específico (para compatibilidad con orchestrator)
+ */
+export async function searchByRIT(page: Page, causa: CausaToScrape): Promise<boolean> {
+  // En el nuevo flujo, las causas ya están listadas en la tabla
+  // Solo necesitamos hacer click en la lupa de la causa correcta
+  return navigateToCausaDetail(page, causa.rit)
 }
