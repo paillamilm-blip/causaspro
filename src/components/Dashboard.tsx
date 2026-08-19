@@ -21,6 +21,9 @@ interface CausaResumen {
   proxima_medida_vence: string | null
   dias_medida_vence: number | null
   tiene_medida_vigente: boolean
+  tiene_traslado_curador: boolean
+  ultimo_movimiento: string | null
+  fecha_ultimo_movimiento: string | null
   adulto_nombre: string | null
   adulto_telefono: string | null
 }
@@ -240,6 +243,39 @@ export default function Dashboard() {
         <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Sin actividad &gt;15d / Sin audiencia</span>
         <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Sin alertas</span>
       </div>
+
+      {/* 🚨 ALERTA: TRASLADOS AL CURADOR */}
+      {causasFiltradas.filter(c => c.tiene_traslado_curador).length > 0 && (
+        <div className="bg-red-100 border-2 border-red-400 rounded-xl p-4 animate-pulse">
+          <div className="flex items-center gap-2 mb-3">
+            <span className="text-2xl">🚨</span>
+            <h2 className="font-bold text-red-800 text-lg">NUEVOS TRASLADOS AL CURADOR</h2>
+            <span className="bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
+              {causasFiltradas.filter(c => c.tiene_traslado_curador).length}
+            </span>
+          </div>
+          <div className="space-y-2">
+            {causasFiltradas.filter(c => c.tiene_traslado_curador).map(c => (
+              <Link key={c.id} href={`/causa/${c.id}`}>
+                <div className="bg-white border border-red-300 rounded-lg p-3 hover:shadow-md transition cursor-pointer">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="font-mono font-bold text-red-700">{c.rit}</span>
+                      {c.caratulado && <span className="ml-2 text-gray-700">{c.caratulado}</span>}
+                    </div>
+                    <div className="text-xs text-red-600 font-medium">
+                      {c.ultimo_movimiento || 'TRASLADO AL CURADOR'}
+                    </div>
+                  </div>
+                  {c.nombres_nna && (
+                    <div className="text-xs text-gray-500 mt-1">👶 {c.nombres_nna.substring(0, 60)}</div>
+                  )}
+                </div>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Secciones por urgencia */}
       {criticas.length > 0 && (
