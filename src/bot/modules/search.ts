@@ -38,31 +38,41 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(4000)
     
-    // Click en tab "Familia" (puede estar como link, botón, o li)
+    // Click en tab "Familia" — es el 7mo tab de la lista
     log('info', '  Seleccionando tab Familia...')
-    await page.evaluate(() => {
-      // Buscar en todos los elementos clickeables
-      const elements = document.querySelectorAll('a, li, button, span, div')
-      for (const el of elements) {
-        const text = (el.textContent || '').trim()
-        // Buscar exactamente "Familia" (no "Familia Santiago" u otro)
+    
+    const familiaClicked = await page.evaluate(() => {
+      // Método 1: Buscar por texto exacto en links dentro de tabs/nav
+      const allLinks = document.querySelectorAll('a, li a, ul li a, .nav a, [role="tab"]')
+      for (const link of allLinks) {
+        const text = (link.textContent || '').trim()
         if (text === 'Familia') {
-          (el as HTMLElement).click()
-          return true
+          (link as HTMLElement).click()
+          return 'clicked-by-text'
         }
       }
-      // Segundo intento: buscar tabs/pills
-      const tabs = document.querySelectorAll('[role="tab"], .nav-link, .tab-link, li a')
-      for (const tab of tabs) {
-        if ((tab.textContent || '').trim() === 'Familia') {
-          (tab as HTMLElement).click()
-          return true
-        }
+      
+      // Método 2: Buscar tabs por posición (Familia es el 7mo)
+      const tabItems = document.querySelectorAll('ul.nav li, .nav-tabs li, .tabs li, ul li')
+      if (tabItems.length >= 7) {
+        const familiaTab = tabItems[6] // Index 6 = 7mo tab
+        const link = familiaTab.querySelector('a') || familiaTab
+        ;(link as HTMLElement).click()
+        return 'clicked-by-position-7'
       }
-      return false
+      
+      // Método 3: Buscar específicamente el href
+      const hrefLinks = document.querySelectorAll('a[href*="familia"], a[href*="Familia"], a[href*="FAM"]')
+      if (hrefLinks.length > 0) {
+        (hrefLinks[0] as HTMLElement).click()
+        return 'clicked-by-href'
+      }
+      
+      return null
     })
     
-    await sleep(4000) // Esperar más porque puede recargar
+    log('info', `  Tab Familia: ${familiaClicked || 'NO encontrado'}`)
+    await sleep(4000)
     log('success', '  En Mis Causas > Familia')
     return true
     
