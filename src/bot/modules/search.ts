@@ -38,34 +38,55 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(4000)
     
-    // Click en tab "Familia"
+    // Click en tab "Familia" — buscar en TODOS los tipos de elementos
     log('info', '  Seleccionando tab Familia...')
     
     const familiaClicked = await page.evaluate(() => {
-      // Los tabs están en una fila horizontal con textos:
-      // Corte Suprema | Corte Apelaciones | Civil | Laboral | Penal | Cobranza | Familia | Disciplinario
+      // Buscar en ABSOLUTAMENTE todos los elementos clickeables
+      const allElements = document.querySelectorAll('a, button, li, span, div, td, th, label, input')
       
-      // Buscar TODOS los links con texto "Familia"
-      const allLinks = Array.from(document.querySelectorAll('a'))
-      const familiaLinks = allLinks.filter(a => (a.textContent || '').trim() === 'Familia')
-      
-      if (familiaLinks.length === 0) return null
-      
-      // Si hay varios, necesitamos el que está en la barra de tabs (no el del menú lateral)
-      // El del tab generalmente está cerca de los otros tabs (Corte Suprema, Civil, etc.)
-      for (const link of familiaLinks) {
-        const parent = link.parentElement?.parentElement || link.parentElement
-        const siblings = parent?.textContent || ''
-        // Si el contenedor tiene otros nombres de tabs, es la barra correcta
-        if (siblings.includes('Corte Suprema') || siblings.includes('Civil') || siblings.includes('Laboral')) {
-          link.click()
-          return 'clicked-tab-bar'
+      // Primero: buscar elementos cuyo texto sea EXACTAMENTE "Familia"
+      for (const el of allElements) {
+        // Solo mirar el texto directo del elemento (no de sus hijos)
+        const directText = Array.from(el.childNodes)
+          .filter(n => n.nodeType === 3) // Solo nodos de texto
+          .map(n => n.textContent?.trim())
+          .join('')
+        
+        if (directText === 'Familia') {
+          (el as HTMLElement).click()
+          return `clicked-direct: ${el.tagName}`
         }
       }
       
-      // Si no encontramos por contexto, clickear el ÚLTIMO (generalmente el de la barra, no el menú)
-      familiaLinks[familiaLinks.length - 1].click()
-      return 'clicked-last-familia'
+      // Segundo: buscar por textContent (incluye hijos)
+      for (const el of allElements) {
+        const text = (el.textContent || '').trim()
+        if (text === 'Familia') {
+          (el as HTMLElement).click()
+          return `clicked-textContent: ${el.tagName}`
+        }
+      }
+      
+      // Tercero: buscar tabs por posición (Familia = 7mo tab)
+      // Los tabs suelen estar en un contenedor con los otros nombres
+      const containers = document.querySelectorAll('ul, nav, div, ol')
+      for (const container of containers) {
+        const text = container.textContent || ''
+        if (text.includes('Corte Suprema') && text.includes('Civil') && text.includes('Familia')) {
+          // Este es el contenedor de tabs
+          const children = container.querySelectorAll('a, li, button, span, div')
+          for (const child of children) {
+            const childText = (child.textContent || '').trim()
+            if (childText === 'Familia') {
+              (child as HTMLElement).click()
+              return `clicked-in-container: ${child.tagName}`
+            }
+          }
+        }
+      }
+      
+      return null
     })
     
     log('info', `  Tab Familia: ${familiaClicked || 'NO encontrado'}`)
