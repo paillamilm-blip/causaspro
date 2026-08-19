@@ -69,75 +69,79 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
   log('info', `  Buscando causas del año ${year}...`)
   
   try {
-    // Limpiar campo Rol y Rit (dejar vacíos)
-    await page.evaluate(() => {
-      const inputs = document.querySelectorAll('input[type="text"], input[type="number"]')
-      inputs.forEach(input => {
-        const name = input.getAttribute('name') || ''
-        const id = input.getAttribute('id') || ''
-        // Limpiar Rol y Rit pero NO el Rut
-        if (name.toLowerCase().includes('rol') || id.toLowerCase().includes('rol') ||
-            name.toLowerCase().includes('rit') || id.toLowerCase().includes('rit')) {
-          // No limpiar si es el campo de número de RIT tipo "9"
+    // Llenar campo Año con JavaScript (evita problemas de visibilidad)
+    await page.evaluate((y) => {
+      // Buscar todos los inputs
+      const inputs = document.querySelectorAll('input')
+      for (const input of inputs) {
+        const name = (input.getAttribute('name') || '').toLowerCase()
+        const id = (input.getAttribute('id') || '').toLowerCase()
+        const placeholder = (input.getAttribute('placeholder') || '').toLowerCase()
+        
+        // Encontrar el campo de año
+        if (name.includes('ano') || name.includes('año') || id.includes('ano') || 
+            id.includes('año') || placeholder.includes('año') || placeholder.includes('ano')) {
+          input.value = y
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+          return 'found-by-name'
         }
-      })
-    })
-    
-    // Poner el año
-    const yearInput = await page.$('input[name*="ano"], input[name*="año"], input[id*="ano"], input[placeholder*="Año"]')
-    if (yearInput) {
-      await yearInput.fill('')
-      await sleep(300)
-      await yearInput.fill(year)
-    } else {
-      // Buscar por posición (el campo Año está después de Rol)
-      await page.evaluate((y) => {
-        const inputs = document.querySelectorAll('input[type="text"], input[type="number"]')
-        // El campo Año generalmente es el 4to o 5to input
-        for (const input of inputs) {
-          const placeholder = input.getAttribute('placeholder') || ''
-          const name = input.getAttribute('name') || ''
-          if (placeholder.includes('Año') || placeholder.includes('año') || name.includes('ano')) {
-            (input as HTMLInputElement).value = y
-            input.dispatchEvent(new Event('input', { bubbles: true }))
-            input.dispatchEvent(new Event('change', { bubbles: true }))
-            return
+      }
+      
+      // Fallback: buscar por posición (Año está después de Rol)
+      // Estructura: Rut | Rit | ... | Rol | Año
+      const textInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'))
+        .filter(i => (i as HTMLInputElement).offsetParent !== null) // Solo visibles
+      
+      // El campo Año generalmente es el que está vacío y acepta 4 dígitos
+      for (const input of textInputs) {
+        const inp = input as HTMLInputElement
+        const maxLength = inp.getAttribute('maxlength')
+        const size = inp.getAttribute('size')
+        // Campo de 4 caracteres que está vacío = probablemente es Año
+        if ((maxLength === '4' || size === '4') && !inp.value) {
+          inp.value = y
+          inp.dispatchEvent(new Event('input', { bubbles: true }))
+          inp.dispatchEvent(new Event('change', { bubbles: true }))
+          return 'found-by-size'
+        }
+      }
+      
+      // Último fallback: buscar label "Año" y el input cercano
+      const allText = document.querySelectorAll('td, th, label, span')
+      for (const el of allText) {
+        if ((el.textContent || '').trim() === 'Año') {
+          const nearInput = el.parentElement?.querySelector('input') ||
+                           el.nextElementSibling as HTMLInputElement
+          if (nearInput && nearInput.tagName === 'INPUT') {
+            (nearInput as HTMLInputElement).value = y
+            nearInput.dispatchEvent(new Event('input', { bubbles: true }))
+            nearInput.dispatchEvent(new Event('change', { bubbles: true }))
+            return 'found-by-label'
           }
         }
-        // Fallback: buscar input cerca de texto "Año"
-        const labels = document.querySelectorAll('label, span, td, th')
-        for (const label of labels) {
-          if ((label.textContent || '').includes('Año')) {
-            const input = label.parentElement?.querySelector('input') || 
-                          label.nextElementSibling as HTMLInputElement
-            if (input && input.tagName === 'INPUT') {
-              (input as HTMLInputElement).value = y
-              input.dispatchEvent(new Event('input', { bubbles: true }))
-              input.dispatchEvent(new Event('change', { bubbles: true }))
-              return
-            }
-          }
-        }
-      }, year)
-    }
+      }
+      
+      return null
+    }, year)
     
     await sleep(1000)
     
-    // Click en Buscar
+    // Click en Buscar con JavaScript
     log('info', '  Click en Buscar...')
     await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, input[type="submit"], a')
+      const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn')
       for (const btn of buttons) {
         const text = (btn.textContent || '').trim()
-        const value = btn.getAttribute('value') || ''
-        if (text === 'Buscar' || value === 'Buscar') {
+        const value = (btn as HTMLInputElement).value || ''
+        if (text === 'Buscar' || value === 'Buscar' || text.includes('Buscar')) {
           (btn as HTMLElement).click()
           return true
         }
       }
-      // Fallback: submit del form
+      // Fallback: submit form
       const form = document.querySelector('form')
-      if (form) form.submit()
+      if (form) { form.submit(); return true }
       return false
     })
     
