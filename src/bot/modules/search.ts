@@ -70,60 +70,66 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
   
   try {
     // Llenar campo Año con JavaScript (evita problemas de visibilidad)
-    await page.evaluate((y) => {
+    const fillResult = await page.evaluate((y) => {
       // Buscar todos los inputs
       const inputs = document.querySelectorAll('input')
+      const results: string[] = []
+      
       for (const input of inputs) {
         const name = (input.getAttribute('name') || '').toLowerCase()
         const id = (input.getAttribute('id') || '').toLowerCase()
         const placeholder = (input.getAttribute('placeholder') || '').toLowerCase()
+        const value = (input as HTMLInputElement).value
         
-        // Encontrar el campo de año
+        results.push(`input: name=${name} id=${id} ph=${placeholder} val=${value}`)
+        
         if (name.includes('ano') || name.includes('año') || id.includes('ano') || 
             id.includes('año') || placeholder.includes('año') || placeholder.includes('ano')) {
-          input.value = y
+          (input as HTMLInputElement).value = y
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new Event('change', { bubbles: true }))
-          return 'found-by-name'
+          return { found: true, method: 'by-name', inputs: results }
         }
       }
       
-      // Fallback: buscar por posición (Año está después de Rol)
-      // Estructura: Rut | Rit | ... | Rol | Año
-      const textInputs = Array.from(document.querySelectorAll('input[type="text"], input[type="number"], input:not([type])'))
-        .filter(i => (i as HTMLInputElement).offsetParent !== null) // Solo visibles
-      
-      // El campo Año generalmente es el que está vacío y acepta 4 dígitos
-      for (const input of textInputs) {
-        const inp = input as HTMLInputElement
-        const maxLength = inp.getAttribute('maxlength')
-        const size = inp.getAttribute('size')
-        // Campo de 4 caracteres que está vacío = probablemente es Año
-        if ((maxLength === '4' || size === '4') && !inp.value) {
-          inp.value = y
-          inp.dispatchEvent(new Event('input', { bubbles: true }))
-          inp.dispatchEvent(new Event('change', { bubbles: true }))
-          return 'found-by-size'
+      // Fallback: buscar input con maxlength=4 o size=4
+      for (const input of inputs) {
+        const maxLength = input.getAttribute('maxlength')
+        const size = input.getAttribute('size')
+        if ((maxLength === '4' || size === '4') && !(input as HTMLInputElement).value) {
+          (input as HTMLInputElement).value = y
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+          return { found: true, method: 'by-size', inputs: results }
         }
       }
       
-      // Último fallback: buscar label "Año" y el input cercano
-      const allText = document.querySelectorAll('td, th, label, span')
-      for (const el of allText) {
-        if ((el.textContent || '').trim() === 'Año') {
-          const nearInput = el.parentElement?.querySelector('input') ||
-                           el.nextElementSibling as HTMLInputElement
-          if (nearInput && nearInput.tagName === 'INPUT') {
-            (nearInput as HTMLInputElement).value = y
-            nearInput.dispatchEvent(new Event('input', { bubbles: true }))
-            nearInput.dispatchEvent(new Event('change', { bubbles: true }))
-            return 'found-by-label'
-          }
-        }
+      // Último fallback: el 5to input visible (Rut, Rit-prefix, Rit-dropdown, Rol, AÑO)
+      const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null && i.type !== 'hidden')
+      if (visibleInputs.length >= 5) {
+        const yearInput = visibleInputs[4] as HTMLInputElement // 5to campo = Año
+        yearInput.value = y
+        yearInput.dispatchEvent(new Event('input', { bubbles: true }))
+        yearInput.dispatchEvent(new Event('change', { bubbles: true }))
+        return { found: true, method: 'by-position-5', inputs: results }
       }
       
-      return null
+      // Si hay al menos 4 campos
+      if (visibleInputs.length >= 4) {
+        const yearInput = visibleInputs[3] as HTMLInputElement
+        yearInput.value = y
+        yearInput.dispatchEvent(new Event('input', { bubbles: true }))
+        yearInput.dispatchEvent(new Event('change', { bubbles: true }))
+        return { found: true, method: 'by-position-4', inputs: results }
+      }
+      
+      return { found: false, method: 'not-found', inputs: results }
     }, year)
+    
+    log('info', `  Campo Año: ${fillResult?.method || 'unknown'}`)
+    if (!fillResult?.found) {
+      log('warn', `  Inputs encontrados: ${JSON.stringify(fillResult?.inputs?.slice(0, 5))}`)
+    }
     
     await sleep(1000)
     
@@ -251,8 +257,14 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
   
   // Verificar si hay paginación
   const hasNextPage = await page.evaluate(() => {
-    const paginators = document.querySelectorAll('a:has-text("Siguiente"), a:has-text(">"), .pagination .next a, a[aria-label="Next"]')
-    return paginators.length > 0
+    const links = document.querySelectorAll('a')
+    for (const link of links) {
+      const text = (link.textContent || '').trim()
+      if (text === 'Siguiente' || text === '>' || text === '»' || text === 'Next') {
+        return true
+      }
+    }
+    return false
   })
   
   if (hasNextPage) {
@@ -261,8 +273,14 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
     let pageNum = 2
     while (pageNum <= 20) { // Máximo 20 páginas
       const clickedNext = await page.evaluate(() => {
-        const next = document.querySelector('a:has-text("Siguiente"), a:has-text(">"), .pagination .next a') as HTMLElement
-        if (next) { next.click(); return true }
+        const links = document.querySelectorAll('a')
+        for (const link of links) {
+          const text = (link.textContent || '').trim()
+          if (text === 'Siguiente' || text === '>' || text === '»') {
+            (link as HTMLElement).click()
+            return true
+          }
+        }
         return false
       })
       
