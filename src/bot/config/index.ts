@@ -7,8 +7,8 @@ import type { BotConfig } from '../types'
 
 /** Configuración por defecto del bot */
 export const DEFAULT_CONFIG: BotConfig = {
-  // MODO EVIDENCIA: 3 causas, visible, para demostrar que funciona
-  maxCausasPorSesion: 3,
+  // MODO EVIDENCIA: 5 causas para verificar datos reales
+  maxCausasPorSesion: 5,
   
   // Delays cortos para demo
   delayMin: 5000,        // 5 segundos
