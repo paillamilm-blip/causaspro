@@ -42,37 +42,60 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     log('info', '  Seleccionando tab Familia...')
     
     const familiaClicked = await page.evaluate(() => {
-      // Método 1: Buscar por texto exacto en links dentro de tabs/nav
-      const allLinks = document.querySelectorAll('a, li a, ul li a, .nav a, [role="tab"]')
+      // Los tabs son links dentro de una barra de navegación
+      // Orden: Corte Suprema | Corte Apelaciones | Civil | Laboral | Penal | Cobranza | Familia | Disciplinario
+      
+      // Método 1: Buscar link con texto exacto "Familia"
+      const allLinks = document.querySelectorAll('a')
       for (const link of allLinks) {
         const text = (link.textContent || '').trim()
         if (text === 'Familia') {
-          (link as HTMLElement).click()
-          return 'clicked-by-text'
+          link.click()
+          return 'clicked-by-text-exact'
         }
       }
       
-      // Método 2: Buscar tabs por posición (Familia es el 7mo)
-      const tabItems = document.querySelectorAll('ul.nav li, .nav-tabs li, .tabs li, ul li')
-      if (tabItems.length >= 7) {
-        const familiaTab = tabItems[6] // Index 6 = 7mo tab
-        const link = familiaTab.querySelector('a') || familiaTab
-        ;(link as HTMLElement).click()
-        return 'clicked-by-position-7'
-      }
-      
-      // Método 3: Buscar específicamente el href
-      const hrefLinks = document.querySelectorAll('a[href*="familia"], a[href*="Familia"], a[href*="FAM"]')
-      if (hrefLinks.length > 0) {
-        (hrefLinks[0] as HTMLElement).click()
-        return 'clicked-by-href'
+      // Método 2: Buscar en la barra de tabs (los que parecen tabs)
+      const tabBar = document.querySelector('ul.nav, .nav-tabs, .tabs')
+      if (tabBar) {
+        const tabs = tabBar.querySelectorAll('li a, a')
+        for (const tab of tabs) {
+          if ((tab.textContent || '').trim() === 'Familia') {
+            (tab as HTMLElement).click()
+            return 'clicked-in-navbar'
+          }
+        }
       }
       
       return null
     })
     
     log('info', `  Tab Familia: ${familiaClicked || 'NO encontrado'}`)
-    await sleep(4000)
+    
+    // Esperar a que cargue la pestaña Familia
+    await sleep(5000)
+    
+    // Verificar que estamos en Familia (buscar texto "Juzgado de Familia" en la página)
+    const inFamilia = await page.evaluate(() => {
+      const body = document.body.textContent || ''
+      return body.includes('Familia') && (body.includes('Juzgado') || body.includes('Rit'))
+    })
+    
+    if (!inFamilia) {
+      log('warn', '  No se confirmó tab Familia, intentando de nuevo...')
+      // Segundo intento: click por posición en la barra de tabs
+      await page.evaluate(() => {
+        const links = document.querySelectorAll('a')
+        const familiaLinks = Array.from(links).filter(l => (l.textContent || '').trim() === 'Familia')
+        if (familiaLinks.length > 0) {
+          // El último match suele ser el correcto (el de la barra principal, no del menú lateral)
+          familiaLinks[familiaLinks.length - 1].click()
+        }
+      })
+      await sleep(4000)
+    }
+    
+    log('success', '  En Mis Causas > Familia')
     log('success', '  En Mis Causas > Familia')
     return true
     
@@ -83,73 +106,98 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 /**
- * Busca causas por año en Mis Causas y retorna la lista de RITs encontrados
+ * Busca causas - primero intenta leer sin filtros, si no hay datos activa filtros por año
  */
 export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
   log('info', `  Buscando causas del año ${year}...`)
   
   try {
-    // Llenar campo Año con JavaScript (evita problemas de visibilidad)
+    // Verificar si ya hay datos en la tabla (filtros OFF = muestra todo)
+    const directData = await readResultsTable(page)
+    if (directData.length > 0 && year === '2026') {
+      // Ya hay datos visibles sin filtrar — usarlos directamente
+      log('info', `  → ${directData.length} causas ya visibles (sin filtro)`)
+      return directData
+    }
+    
+    // Si no hay datos o es otro año, activar filtros
+    // Activar toggle de filtros si está apagado
+    await page.evaluate(() => {
+      const toggle = document.querySelector('input[type="checkbox"], .toggle, [role="switch"]') as HTMLInputElement
+      if (toggle && !toggle.checked) {
+        toggle.click()
+      }
+      // También buscar por clase de toggle
+      const toggleDiv = document.querySelector('.custom-control-input, .form-check-input')
+      if (toggleDiv) (toggleDiv as HTMLElement).click()
+    })
+    
+    await sleep(2000)
+    
+    // Llenar campo Año con JavaScript
     const fillResult = await page.evaluate((y) => {
-      // Buscar todos los inputs
       const inputs = document.querySelectorAll('input')
-      const results: string[] = []
       
       for (const input of inputs) {
         const name = (input.getAttribute('name') || '').toLowerCase()
         const id = (input.getAttribute('id') || '').toLowerCase()
         const placeholder = (input.getAttribute('placeholder') || '').toLowerCase()
-        const value = (input as HTMLInputElement).value
-        
-        results.push(`input: name=${name} id=${id} ph=${placeholder} val=${value}`)
         
         if (name.includes('ano') || name.includes('año') || id.includes('ano') || 
             id.includes('año') || placeholder.includes('año') || placeholder.includes('ano')) {
           (input as HTMLInputElement).value = y
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new Event('change', { bubbles: true }))
-          return { found: true, method: 'by-name', inputs: results }
+          return { found: true, method: 'by-name' }
         }
       }
       
-      // Fallback: buscar input con maxlength=4 o size=4
-      for (const input of inputs) {
-        const maxLength = input.getAttribute('maxlength')
-        const size = input.getAttribute('size')
-        if ((maxLength === '4' || size === '4') && !(input as HTMLInputElement).value) {
-          (input as HTMLInputElement).value = y
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
-          return { found: true, method: 'by-size', inputs: results }
-        }
-      }
-      
-      // Último fallback: el 5to input visible (Rut, Rit-prefix, Rit-dropdown, Rol, AÑO)
+      // Fallback por posición
       const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null && i.type !== 'hidden')
       if (visibleInputs.length >= 5) {
-        const yearInput = visibleInputs[4] as HTMLInputElement // 5to campo = Año
+        const yearInput = visibleInputs[4] as HTMLInputElement
         yearInput.value = y
         yearInput.dispatchEvent(new Event('input', { bubbles: true }))
         yearInput.dispatchEvent(new Event('change', { bubbles: true }))
-        return { found: true, method: 'by-position-5', inputs: results }
+        return { found: true, method: 'by-position' }
       }
       
-      // Si hay al menos 4 campos
-      if (visibleInputs.length >= 4) {
-        const yearInput = visibleInputs[3] as HTMLInputElement
-        yearInput.value = y
-        yearInput.dispatchEvent(new Event('input', { bubbles: true }))
-        yearInput.dispatchEvent(new Event('change', { bubbles: true }))
-        return { found: true, method: 'by-position-4', inputs: results }
-      }
-      
-      return { found: false, method: 'not-found', inputs: results }
+      return { found: false, method: 'not-found' }
     }, year)
     
     log('info', `  Campo Año: ${fillResult?.method || 'unknown'}`)
-    if (!fillResult?.found) {
-      log('warn', `  Inputs encontrados: ${JSON.stringify(fillResult?.inputs?.slice(0, 5))}`)
-    }
+    await sleep(1000)
+    
+    // Click en Buscar
+    log('info', '  Click en Buscar...')
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn')
+      for (const btn of buttons) {
+        const text = (btn.textContent || '').trim()
+        const value = (btn as HTMLInputElement).value || ''
+        if (text === 'Buscar' || value === 'Buscar' || text.includes('Buscar')) {
+          (btn as HTMLElement).click()
+          return true
+        }
+      }
+      const form = document.querySelector('form')
+      if (form) { form.submit(); return true }
+      return false
+    })
+    
+    await sleep(5000)
+    
+    // Leer resultados
+    const causas = await readResultsTable(page)
+    log('info', `  → ${causas.length} causas encontradas para ${year}`)
+    
+    return causas
+    
+  } catch (error: any) {
+    log('error', `Error buscando año ${year}: ${error.message}`)
+    return []
+  }
+}
     
     await sleep(1000)
     
@@ -172,40 +220,6 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     })
     
     await sleep(5000)
-    
-    // DEBUG: ver qué hay en la página
-    const pageDebug = await page.evaluate(() => {
-      const tables = document.querySelectorAll('table')
-      const info: string[] = []
-      info.push(`Tables found: ${tables.length}`)
-      
-      for (let t = 0; t < tables.length; t++) {
-        const table = tables[t]
-        const rows = table.querySelectorAll('tr')
-        const headers = table.querySelectorAll('th')
-        const headerTexts = Array.from(headers).map(h => (h.textContent || '').trim()).join(' | ')
-        info.push(`Table ${t}: ${rows.length} rows, headers: ${headerTexts}`)
-        
-        // Primera fila de datos
-        if (rows.length > 1) {
-          const firstRow = rows[1]
-          const cells = firstRow.querySelectorAll('td')
-          const cellTexts = Array.from(cells).map(c => (c.textContent || '').trim().substring(0, 30)).join(' | ')
-          info.push(`  First row: ${cellTexts}`)
-        }
-      }
-      
-      // También buscar si hay mensaje de "no existen causas"
-      const body = document.body.textContent || ''
-      if (body.includes('No existen')) info.push('PAGE SAYS: No existen causas')
-      if (body.includes('no se encontr')) info.push('PAGE SAYS: No se encontraron')
-      
-      return info
-    })
-    
-    for (const line of pageDebug) {
-      log('info', `  DEBUG: ${line}`)
-    }
     
     // Leer la tabla de resultados
     const causas = await readResultsTable(page)
