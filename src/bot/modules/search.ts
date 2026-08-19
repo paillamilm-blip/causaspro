@@ -38,64 +38,48 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(4000)
     
-    // Click en tab "Familia" — es el 7mo tab de la lista
+    // Click en tab "Familia"
     log('info', '  Seleccionando tab Familia...')
     
     const familiaClicked = await page.evaluate(() => {
-      // Los tabs son links dentro de una barra de navegación
-      // Orden: Corte Suprema | Corte Apelaciones | Civil | Laboral | Penal | Cobranza | Familia | Disciplinario
+      // Los tabs están en una fila horizontal con textos:
+      // Corte Suprema | Corte Apelaciones | Civil | Laboral | Penal | Cobranza | Familia | Disciplinario
       
-      // Método 1: Buscar link con texto exacto "Familia"
-      const allLinks = document.querySelectorAll('a')
-      for (const link of allLinks) {
-        const text = (link.textContent || '').trim()
-        if (text === 'Familia') {
+      // Buscar TODOS los links con texto "Familia"
+      const allLinks = Array.from(document.querySelectorAll('a'))
+      const familiaLinks = allLinks.filter(a => (a.textContent || '').trim() === 'Familia')
+      
+      if (familiaLinks.length === 0) return null
+      
+      // Si hay varios, necesitamos el que está en la barra de tabs (no el del menú lateral)
+      // El del tab generalmente está cerca de los otros tabs (Corte Suprema, Civil, etc.)
+      for (const link of familiaLinks) {
+        const parent = link.parentElement?.parentElement || link.parentElement
+        const siblings = parent?.textContent || ''
+        // Si el contenedor tiene otros nombres de tabs, es la barra correcta
+        if (siblings.includes('Corte Suprema') || siblings.includes('Civil') || siblings.includes('Laboral')) {
           link.click()
-          return 'clicked-by-text-exact'
+          return 'clicked-tab-bar'
         }
       }
       
-      // Método 2: Buscar en la barra de tabs (los que parecen tabs)
-      const tabBar = document.querySelector('ul.nav, .nav-tabs, .tabs')
-      if (tabBar) {
-        const tabs = tabBar.querySelectorAll('li a, a')
-        for (const tab of tabs) {
-          if ((tab.textContent || '').trim() === 'Familia') {
-            (tab as HTMLElement).click()
-            return 'clicked-in-navbar'
-          }
-        }
-      }
-      
-      return null
+      // Si no encontramos por contexto, clickear el ÚLTIMO (generalmente el de la barra, no el menú)
+      familiaLinks[familiaLinks.length - 1].click()
+      return 'clicked-last-familia'
     })
     
     log('info', `  Tab Familia: ${familiaClicked || 'NO encontrado'}`)
-    
-    // Esperar a que cargue la pestaña Familia
     await sleep(5000)
     
-    // Verificar que estamos en Familia (buscar texto "Juzgado de Familia" en la página)
-    const inFamilia = await page.evaluate(() => {
+    // Verificar resultado
+    const pageContent = await page.evaluate(() => {
       const body = document.body.textContent || ''
-      return body.includes('Familia') && (body.includes('Juzgado') || body.includes('Rit'))
+      if (body.includes('Juzgado de Familia')) return 'OK-familia'
+      if (body.includes('Corte Suprema') && !body.includes('Juzgado de Familia')) return 'STILL-corte-suprema'
+      return 'unknown'
     })
+    log('info', `  Resultado tab: ${pageContent}`)
     
-    if (!inFamilia) {
-      log('warn', '  No se confirmó tab Familia, intentando de nuevo...')
-      // Segundo intento: click por posición en la barra de tabs
-      await page.evaluate(() => {
-        const links = document.querySelectorAll('a')
-        const familiaLinks = Array.from(links).filter(l => (l.textContent || '').trim() === 'Familia')
-        if (familiaLinks.length > 0) {
-          // El último match suele ser el correcto (el de la barra principal, no del menú lateral)
-          familiaLinks[familiaLinks.length - 1].click()
-        }
-      })
-      await sleep(4000)
-    }
-    
-    log('success', '  En Mis Causas > Familia')
     log('success', '  En Mis Causas > Familia')
     return true
     
