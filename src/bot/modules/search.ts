@@ -227,11 +227,53 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
     await sleep(5000)
     
+    // PASO 6: RE-SELECCIONAR TAB FAMILIA después de buscar
+    // (El portal resetea el tab al enviar la búsqueda)
+    log('info', '  Re-seleccionando Familia post-búsqueda...')
+    await page.evaluate(() => {
+      const allLinks = Array.from(document.querySelectorAll('a'))
+      const familiaLinks = allLinks.filter(a => (a.textContent || '').trim() === 'Familia')
+      for (const link of familiaLinks) {
+        const parent = link.parentElement?.parentElement || link.parentElement
+        const siblings = parent?.textContent || ''
+        if (siblings.includes('Corte Suprema') || siblings.includes('Civil') || siblings.includes('Laboral')) {
+          link.click()
+          return
+        }
+      }
+      if (familiaLinks.length > 0) familiaLinks[familiaLinks.length - 1].click()
+    })
+    
+    // Esperar a que Familia cargue
+    await sleep(3000)
+    for (let i = 0; i < 5; i++) {
+      const hasFam = await page.evaluate(() => {
+        const tables = document.querySelectorAll('table')
+        for (const t of tables) {
+          if (t.textContent?.includes('Juzgado de Familia') || t.textContent?.includes('Familia San')) return true
+        }
+        return false
+      })
+      if (hasFam) break
+      await sleep(2000)
+    }
+    
     // Leer resultados
     const causas = await readResultsTable(page)
-    log('info', `  → ${causas.length} causas encontradas para ${year}`)
     
-    return causas
+    // PASO 7: FILTRAR — solo causas de Familia
+    const causasFamilia = causas.filter(c => 
+      c.tribunal.toLowerCase().includes('familia') ||
+      /^[PCFX]-\d+-\d{4}$/.test(c.rit)
+    )
+    
+    if (causasFamilia.length < causas.length) {
+      log('info', `  Filtrado: ${causas.length} total → ${causasFamilia.length} de Familia`)
+    }
+    
+    log('info', `  → ${causasFamilia.length} causas de FAMILIA para ${year}`)
+    
+    return causasFamilia
     
   } catch (error: any) {
     log('error', `Error buscando año ${year}: ${error.message}`)
