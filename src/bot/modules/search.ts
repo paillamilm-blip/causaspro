@@ -277,10 +277,34 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     log('info', '  Re-seleccionando Familia post-búsqueda...')
     try {
       await page.click('#familiaTab', { timeout: 5000 })
+      log('info', '  ✓ Re-click #familiaTab OK')
     } catch {
-      await clickFamiliaTab(page)
+      log('warn', '  #familiaTab no encontrado post-búsqueda, intentando JS...')
+      await page.evaluate(() => {
+        const el = document.querySelector('#familiaTab, a[id="familiaTab"]') as HTMLElement
+        if (el) el.click()
+      })
     }
     await sleep(5000)
+    
+    // Verificar con datos de la TABLA (no body text)
+    const postSearchData = await page.evaluate(() => {
+      const tables = document.querySelectorAll('table')
+      for (const table of tables) {
+        const text = table.textContent || ''
+        if (text.includes('Juzgado de Familia')) return 'familia'
+        if (text.includes('Corte Suprema') && !text.includes('Juzgado de Familia')) return 'corte-suprema'
+      }
+      return 'unknown'
+    })
+    log('info', `  Tabla post-búsqueda: ${postSearchData}`)
+    
+    if (postSearchData !== 'familia') {
+      // Intentar click una vez más
+      log('warn', '  Intentando #familiaTab de nuevo...')
+      try { await page.click('#familiaTab', { timeout: 5000 }) } catch {}
+      await sleep(5000)
+    }
     
     // Verificar que Familia cargó
     const verified = await verifyFamiliaTab(page, 16000)
