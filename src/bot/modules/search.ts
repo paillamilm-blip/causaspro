@@ -106,38 +106,92 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 /**
- * Busca causas - primero intenta leer sin filtros, si no hay datos activa filtros por año
+ * Busca causas - activa filtros, selecciona todos los tipos y estados, busca por año
  */
 export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
   log('info', `  Buscando causas del año ${year}...`)
   
   try {
-    // Verificar si ya hay datos en la tabla (filtros OFF = muestra todo)
-    const directData = await readResultsTable(page)
-    if (directData.length > 0 && year === '2026') {
-      // Ya hay datos visibles sin filtrar — usarlos directamente
-      log('info', `  → ${directData.length} causas ya visibles (sin filtro)`)
-      return directData
-    }
-    
-    // Si no hay datos o es otro año, activar filtros
-    // Activar toggle de filtros si está apagado
+    // PASO 1: Activar toggle de Filtros (si está apagado)
+    log('info', '  Activando filtros...')
     await page.evaluate(() => {
-      const toggle = document.querySelector('input[type="checkbox"], .toggle, [role="switch"]') as HTMLInputElement
-      if (toggle && !toggle.checked) {
-        toggle.click()
+      // Buscar toggle/switch de filtros
+      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, .toggle-switch input, [role="switch"]')
+      for (const toggle of toggles) {
+        const parent = toggle.closest('.custom-switch, .form-check, label, div')
+        const parentText = parent ? (parent.textContent || '') : ''
+        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
+          if (!(toggle as HTMLInputElement).checked) {
+            (toggle as HTMLElement).click()
+          }
+          return 'toggled-by-text'
+        }
       }
-      // También buscar por clase de toggle
-      const toggleDiv = document.querySelector('.custom-control-input, .form-check-input')
-      if (toggleDiv) (toggleDiv as HTMLElement).click()
+      // Fallback: click en el primer toggle/switch visible
+      const firstToggle = document.querySelector('.custom-control-input, input[type="checkbox"][role="switch"], .form-switch input') as HTMLElement
+      if (firstToggle) {
+        firstToggle.click()
+        return 'toggled-first'
+      }
+      return null
     })
     
     await sleep(2000)
     
-    // Llenar campo Año con JavaScript
-    const fillResult = await page.evaluate((y) => {
+    // PASO 2: Seleccionar TODOS los Tipos de Causa (5 de 5)
+    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
+    await page.evaluate(() => {
+      // Buscar el select/multiselect de Tipo Causa
+      const selects = document.querySelectorAll('select')
+      for (const select of selects) {
+        const label = select.closest('div, td')?.textContent || ''
+        const name = (select.getAttribute('name') || '').toLowerCase()
+        if (label.includes('Tipo') || name.includes('tipo')) {
+          // Seleccionar TODAS las opciones
+          const options = select.querySelectorAll('option')
+          options.forEach(opt => (opt as HTMLOptionElement).selected = true)
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          return 'selected-all-tipo'
+        }
+      }
+      // Fallback: buscar checkboxes de tipo
+      const checkboxes = document.querySelectorAll('input[type="checkbox"]')
+      checkboxes.forEach(cb => {
+        const parent = cb.closest('label, div, li')
+        const text = parent ? (parent.textContent || '') : ''
+        if (text.includes('Protección') || text.includes('Voluntario') || text.includes('Contencioso')) {
+          (cb as HTMLInputElement).checked = true
+          cb.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      })
+      return null
+    })
+    
+    await sleep(1000)
+    
+    // PASO 3: Seleccionar TODOS los Estados (12 de 12)
+    log('info', '  Seleccionando Estado (12 de 12)...')
+    await page.evaluate(() => {
+      const selects = document.querySelectorAll('select')
+      for (const select of selects) {
+        const label = select.closest('div, td')?.textContent || ''
+        const name = (select.getAttribute('name') || '').toLowerCase()
+        if (label.includes('Estado') || name.includes('estado')) {
+          const options = select.querySelectorAll('option')
+          options.forEach(opt => (opt as HTMLOptionElement).selected = true)
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          return 'selected-all-estado'
+        }
+      }
+      return null
+    })
+    
+    await sleep(1000)
+    
+    // PASO 4: Llenar campo Año
+    log('info', `  Año: ${year}...`)
+    await page.evaluate((y) => {
       const inputs = document.querySelectorAll('input')
-      
       for (const input of inputs) {
         const name = (input.getAttribute('name') || '').toLowerCase()
         const id = (input.getAttribute('id') || '').toLowerCase()
@@ -148,27 +202,22 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
           (input as HTMLInputElement).value = y
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new Event('change', { bubbles: true }))
-          return { found: true, method: 'by-name' }
+          return true
         }
       }
-      
       // Fallback por posición
       const visibleInputs = Array.from(inputs).filter(i => i.offsetParent !== null && i.type !== 'hidden')
       if (visibleInputs.length >= 5) {
-        const yearInput = visibleInputs[4] as HTMLInputElement
-        yearInput.value = y
-        yearInput.dispatchEvent(new Event('input', { bubbles: true }))
-        yearInput.dispatchEvent(new Event('change', { bubbles: true }))
-        return { found: true, method: 'by-position' }
+        (visibleInputs[4] as HTMLInputElement).value = y
+        visibleInputs[4].dispatchEvent(new Event('input', { bubbles: true }))
+        visibleInputs[4].dispatchEvent(new Event('change', { bubbles: true }))
       }
-      
-      return { found: false, method: 'not-found' }
+      return false
     }, year)
     
-    log('info', `  Campo Año: ${fillResult?.method || 'unknown'}`)
     await sleep(1000)
     
-    // Click en Buscar
+    // PASO 5: Click en Buscar
     log('info', '  Click en Buscar...')
     await page.evaluate(() => {
       const buttons = document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn')
