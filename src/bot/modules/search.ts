@@ -121,29 +121,22 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(5000)
     
-    // Click en tab Familia — NAVEGAR DIRECTAMENTE a #tab7
-    log('info', '  Seleccionando tab Familia (navegando a #tab7)...')
-    await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    })
-    await sleep(5000)
+    // Click en tab Familia — usar ID directo: #familiaTab
+    log('info', '  Seleccionando tab Familia (#familiaTab)...')
     
-    // DEBUG: Imprimir estructura de tabs
-    const tabsDebug = await page.evaluate(() => {
-      // Buscar elementos que contengan "Familia" y "Corte Suprema"
-      const allEls = document.querySelectorAll('*')
-      const tabInfo: string[] = []
-      for (const el of allEls) {
-        const text = (el.textContent || '').trim()
-        // Solo elementos con texto corto (tabs, no contenedores)
-        if (text === 'Familia' || text === 'Corte Suprema' || text === 'Civil') {
-          tabInfo.push(`<${el.tagName} class="${el.className}" id="${el.id}" onclick="${el.getAttribute('onclick') || ''}" href="${(el as any).href || ''}">${text}</${el.tagName}>`)
-        }
-      }
-      return tabInfo.slice(0, 10)
-    })
-    log('info', `  TABS HTML: ${JSON.stringify(tabsDebug)}`)
+    try {
+      // Usar Playwright click real (no JS) — el portal necesita el evento nativo
+      await page.click('#familiaTab', { timeout: 10000, force: true })
+      log('info', '  ✓ Click en #familiaTab realizado')
+    } catch {
+      // Fallback: navegar a la URL
+      log('warn', '  #familiaTab no clickeable, navegando a URL...')
+      await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
+        waitUntil: 'domcontentloaded', timeout: 60000,
+      })
+    }
+    
+    await sleep(5000)
     
     // Verificar que Familia cargó en la TABLA
     const verified = await verifyFamiliaTab(page, 15000)
@@ -270,10 +263,13 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
     // PASO 6: RE-SELECCIONAR FAMILIA (el portal resetea el tab)
     log('info', '  Re-seleccionando Familia post-búsqueda...')
-    await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
-      waitUntil: 'domcontentloaded',
-      timeout: 60000,
-    })
+    try {
+      await page.click('#familiaTab', { timeout: 10000, force: true })
+    } catch {
+      await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
+        waitUntil: 'domcontentloaded', timeout: 60000,
+      })
+    }
     await sleep(3000)
     
     // Verificar que Familia cargó
