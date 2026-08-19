@@ -121,24 +121,21 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
     
     await sleep(5000)
     
-    // Click en tab Familia
-    log('info', '  Seleccionando tab Familia...')
-    const tabClicked = await clickFamiliaTab(page)
-    
-    if (!tabClicked) {
-      log('error', '  No se pudo seleccionar tab Familia')
-      return false
-    }
+    // Click en tab Familia — NAVEGAR DIRECTAMENTE a #tab7
+    log('info', '  Seleccionando tab Familia (navegando a #tab7)...')
+    await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    })
+    await sleep(5000)
     
     // Verificar que Familia cargó en la TABLA
-    await sleep(3000)
     const verified = await verifyFamiliaTab(page, 15000)
     
     if (verified) {
       log('success', '  ✓ En Mis Causas > Familia (verificado en tabla)')
     } else {
-      log('warn', '  ⚠️ Tab Familia clickeado pero no confirmado en tabla')
-      // Intentar segundo click
+      log('warn', '  ⚠️ Familia no confirmado en tabla, intentando click...')
       await clickFamiliaTab(page)
       await sleep(5000)
     }
@@ -254,7 +251,11 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
     // PASO 6: RE-SELECCIONAR FAMILIA (el portal resetea el tab)
     log('info', '  Re-seleccionando Familia post-búsqueda...')
-    await clickFamiliaTab(page)
+    await page.goto('https://oficinajudicialvirtual.pjud.cl/indexN.php#tab7', {
+      waitUntil: 'domcontentloaded',
+      timeout: 60000,
+    })
+    await sleep(3000)
     
     // Verificar que Familia cargó
     const verified = await verifyFamiliaTab(page, 16000)
