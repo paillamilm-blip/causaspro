@@ -153,6 +153,40 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
     await sleep(5000)
     
+    // DEBUG: ver qué hay en la página
+    const pageDebug = await page.evaluate(() => {
+      const tables = document.querySelectorAll('table')
+      const info: string[] = []
+      info.push(`Tables found: ${tables.length}`)
+      
+      for (let t = 0; t < tables.length; t++) {
+        const table = tables[t]
+        const rows = table.querySelectorAll('tr')
+        const headers = table.querySelectorAll('th')
+        const headerTexts = Array.from(headers).map(h => (h.textContent || '').trim()).join(' | ')
+        info.push(`Table ${t}: ${rows.length} rows, headers: ${headerTexts}`)
+        
+        // Primera fila de datos
+        if (rows.length > 1) {
+          const firstRow = rows[1]
+          const cells = firstRow.querySelectorAll('td')
+          const cellTexts = Array.from(cells).map(c => (c.textContent || '').trim().substring(0, 30)).join(' | ')
+          info.push(`  First row: ${cellTexts}`)
+        }
+      }
+      
+      // También buscar si hay mensaje de "no existen causas"
+      const body = document.body.textContent || ''
+      if (body.includes('No existen')) info.push('PAGE SAYS: No existen causas')
+      if (body.includes('no se encontr')) info.push('PAGE SAYS: No se encontraron')
+      
+      return info
+    })
+    
+    for (const line of pageDebug) {
+      log('info', `  DEBUG: ${line}`)
+    }
+    
     // Leer la tabla de resultados
     const causas = await readResultsTable(page)
     log('info', `  → ${causas.length} causas encontradas para ${year}`)
