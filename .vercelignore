@@ -1,0 +1,10 @@
+src/bot/
+src/email/
+ejecutar-bot.bat
+ejecutar-todo-el-dia.bat
+BOT-PJUD.md
+schema-bot.sql
+schema-email.sql
+schema-config.sql
+schema-flex.sql
+schema-v2.sql
