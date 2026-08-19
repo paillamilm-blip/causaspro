@@ -244,28 +244,40 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       if (familiaLinks.length > 0) familiaLinks[familiaLinks.length - 1].click()
     })
     
-    // Esperar a que Familia cargue
-    await sleep(3000)
-    for (let i = 0; i < 5; i++) {
+    // Esperar a que Familia cargue — verificar en la TABLA específicamente
+    for (let i = 0; i < 8; i++) {
+      await sleep(2000)
       const hasFam = await page.evaluate(() => {
         const tables = document.querySelectorAll('table')
         for (const t of tables) {
-          if (t.textContent?.includes('Juzgado de Familia') || t.textContent?.includes('Familia San')) return true
+          const text = t.textContent || ''
+          if (text.includes('Juzgado de Familia') || text.includes('Familia San') || 
+              text.includes('Familia Santiago') || text.includes('Medidas Cautelares')) return true
         }
         return false
       })
-      if (hasFam) break
-      await sleep(2000)
+      if (hasFam) {
+        log('info', '  ✓ Tabla Familia confirmada post-búsqueda')
+        break
+      }
     }
     
     // Leer resultados
     const causas = await readResultsTable(page)
     
     // PASO 7: FILTRAR — solo causas de Familia
-    const causasFamilia = causas.filter(c => 
-      c.tribunal.toLowerCase().includes('familia') ||
-      /^[PCFX]-\d+-\d{4}$/.test(c.rit)
-    )
+    // Log para debug: mostrar qué tribunal tienen
+    if (causas.length > 0) {
+      log('info', `  Datos leídos: ${causas.map(c => `${c.rit} [${c.tribunal}]`).join(', ')}`)
+    }
+    
+    const causasFamilia = causas.filter(c => {
+      const trib = c.tribunal.toLowerCase()
+      const isFamilia = trib.includes('familia') || 
+                        trib.includes('medida') || // Centro de Medidas Cautelares (familia)
+                        /^[PCFX]-\d+-\d{4}$/.test(c.rit) // RIT con letra = Familia
+      return isFamilia
+    })
     
     if (causasFamilia.length < causas.length) {
       log('info', `  Filtrado: ${causas.length} total → ${causasFamilia.length} de Familia`)
