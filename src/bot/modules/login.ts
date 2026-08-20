@@ -255,20 +255,27 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // PASO 8: Esperar que vuelva al portal OJV
     log('info', '  Esperando autenticación...')
     
-    try {
-      await page.waitForURL('**pjud.cl**', { timeout: 30000 })
-    } catch {
-      // Verificar si hay error de login
+    // Esperar más tiempo para que Clave Única complete la redirección
+    let redirected = false
+    for (let i = 0; i < 20; i++) {
+      await sleep(2000)
+      const currentUrl = page.url()
+      if (currentUrl.includes('pjud.cl') && !currentUrl.includes('claveunica')) {
+        redirected = true
+        break
+      }
+    }
+    
+    if (!redirected) {
       const errorMsg = await getLoginError(page)
       if (errorMsg) {
         log('error', `Login fallido: ${errorMsg}`)
         return { success: false, error: errorMsg }
       }
-      // Puede ser que ya esté logueado
     }
     
-    await page.waitForLoadState('domcontentloaded')
-    await sleep(3000)
+    await page.waitForLoadState('domcontentloaded').catch(() => {})
+    await sleep(5000) // Esperar 5 segundos extra para que cargue completamente
     
     // PASO 9: Verificar login exitoso
     const isLogged = await verifyLoginSuccess(page)
@@ -278,15 +285,22 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
       return { success: true }
     }
     
+    // Esperar un poco más y verificar de nuevo
+    await sleep(5000)
+    const isLogged2 = await verifyLoginSuccess(page)
+    if (isLogged2) {
+      log('success', '✅ Login exitoso en OJV via Clave Única')
+      return { success: true }
+    }
+    
     // Último intento: verificar URL
     const finalUrl = page.url()
-    if (finalUrl.includes('pjud.cl') && !finalUrl.includes('index.php')) {
-      log('success', '✅ Login aparentemente exitoso (redirigido)')
+    if (finalUrl.includes('pjud.cl') && !finalUrl.includes('home/index.php')) {
+      log('success', '✅ Login exitoso (por URL)')
       return { success: true }
     }
     
     log('error', `Login no confirmado. URL: ${finalUrl}`)
-    await page.screenshot({ path: '/tmp/bot_error_login_unconfirmed.png' }).catch(() => {})
     return { success: false, error: 'No se pudo confirmar el login' }
     
   } catch (error: any) {
