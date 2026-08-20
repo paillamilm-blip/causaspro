@@ -173,162 +173,33 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 // ============================================================
-// BUSCAR POR AÑO
+// BUSCAR: Lee las causas que YA están visibles en tab Familia
+// NO usa Buscar (resetea a Corte Suprema)
 // ============================================================
 export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
-  log('info', `  Buscando causas del año ${year}...`)
+  // En el primer llamado (2026), leemos lo que ya está visible
+  // Para otros años, no necesitamos buscar — la tabla ya tiene todo
+  
+  if (year !== '2026') {
+    // Solo leer en la primera llamada — los datos ya están todos en la tabla
+    return []
+  }
+  
+  log('info', '  Leyendo tabla de Familia directamente (sin Buscar)...')
   
   try {
-    // PASO 1: Activar Filtros
-    log('info', '  Activando filtros...')
-    await page.evaluate(() => {
-      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
-      for (const toggle of toggles) {
-        const parent = toggle.closest('.custom-switch, .form-check, label, div')
-        const parentText = parent ? (parent.textContent || '') : ''
-        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
-          if (!(toggle as HTMLInputElement).checked) {
-            (toggle as HTMLElement).click()
-          }
-          return
-        }
-      }
-      // Fallback
-      const first = document.querySelector('.custom-control-input, input[role="switch"]') as HTMLElement
-      if (first) first.click()
-    })
-    await sleep(2000)
-    
-    // PASO 2: Tipo Causa = todos (5/5)
-    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
-    await page.evaluate(() => {
-      const selects = document.querySelectorAll('select')
-      for (const select of selects) {
-        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
-        const name = (select.getAttribute('name') || '').toLowerCase()
-        if (nearText.includes('tipo') || name.includes('tipo')) {
-          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
-          select.dispatchEvent(new Event('change', { bubbles: true }))
-          // Trigger jQuery si existe
-          try { (window as any).$(select).trigger('change') } catch {}
-          return
-        }
-      }
-    })
-    await sleep(1000)
-    
-    // PASO 3: Estado = todos (12/12)
-    log('info', '  Seleccionando Estado (12 de 12)...')
-    await page.evaluate(() => {
-      const selects = document.querySelectorAll('select')
-      for (const select of selects) {
-        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
-        const name = (select.getAttribute('name') || '').toLowerCase()
-        if (nearText.includes('estado') || name.includes('estado')) {
-          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
-          select.dispatchEvent(new Event('change', { bubbles: true }))
-          try { (window as any).$(select).trigger('change') } catch {}
-          return
-        }
-      }
-    })
-    await sleep(1000)
-    
-    // PASO 4: Año
-    log('info', `  Año: ${year}...`)
-    await page.evaluate((y) => {
-      const inputs = document.querySelectorAll('input')
-      for (const input of inputs) {
-        const name = (input.getAttribute('name') || '').toLowerCase()
-        const id = (input.getAttribute('id') || '').toLowerCase()
-        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
-        if (name.includes('ano') || name.includes('año') || id.includes('ano') || ph.includes('año')) {
-          (input as HTMLInputElement).value = y
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
-          return
-        }
-      }
-      // Fallback posición
-      const visible = Array.from(inputs).filter(i => i.offsetParent !== null && i.type !== 'hidden')
-      if (visible.length >= 5) {
-        (visible[4] as HTMLInputElement).value = y
-        visible[4].dispatchEvent(new Event('input', { bubbles: true }))
-      }
-    }, year)
-    await sleep(1000)
-    
-    // PASO 5: Click Buscar
-    log('info', '  Click en Buscar...')
-    await page.evaluate(() => {
-      const btns = document.querySelectorAll('button, input[type="submit"], input[type="button"], a.btn')
-      for (const btn of btns) {
-        const text = (btn.textContent || '').trim()
-        const val = (btn as HTMLInputElement).value || ''
-        if (text === 'Buscar' || val === 'Buscar') {
-          (btn as HTMLElement).click()
-          return
-        }
-      }
-    })
-    await sleep(5000)
-    
-    // PASO 6: RE-SELECCIONAR FAMILIA (el portal resetea el tab)
-    log('info', '  Re-seleccionando Familia post-búsqueda...')
-    try {
-      await page.click('#familiaTab', { timeout: 5000 })
-      log('info', '  ✓ Re-click #familiaTab OK')
-    } catch {
-      log('warn', '  #familiaTab no encontrado post-búsqueda, intentando JS...')
-      await page.evaluate(() => {
-        const el = document.querySelector('#familiaTab, a[id="familiaTab"]') as HTMLElement
-        if (el) el.click()
-      })
-    }
-    await sleep(5000)
-    
-    // Verificar con datos de la TABLA (no body text)
-    const postSearchData = await page.evaluate(() => {
-      const tables = document.querySelectorAll('table')
-      for (const table of tables) {
-        const text = table.textContent || ''
-        if (text.includes('Juzgado de Familia')) return 'familia'
-        if (text.includes('Corte Suprema') && !text.includes('Juzgado de Familia')) return 'corte-suprema'
-      }
-      return 'unknown'
-    })
-    log('info', `  Tabla post-búsqueda: ${postSearchData}`)
-    
-    if (postSearchData !== 'familia') {
-      // Intentar click una vez más
-      log('warn', '  Intentando #familiaTab de nuevo...')
-      try { await page.click('#familiaTab', { timeout: 5000 }) } catch {}
-      await sleep(5000)
-    }
-    
-    // Verificar que Familia cargó
-    const verified = await verifyFamiliaTab(page, 16000)
-    if (verified) {
-      log('info', '  ✓ Tabla Familia confirmada post-búsqueda')
-    } else {
-      log('warn', '  ⚠️ No se confirmó Familia post-búsqueda — leyendo de todos modos')
-    }
-    
-    // PASO 7: Leer tabla
+    // Leer la tabla que ya está visible
     const causas = await readResultsTable(page)
     
-    // PASO 8: FILTRO ESTRICTO — solo Familia
     if (causas.length > 0) {
       log('info', `  Datos: ${causas.slice(0, 3).map(c => `${c.rit}[${c.tribunal.substring(0,20)}]`).join(', ')}`)
     }
     
+    // Filtrar solo Familia
     const causasFamilia = causas.filter(c => {
-      // Aceptar si tribunal menciona "Familia" o "Medidas Cautelares"
       const trib = c.tribunal.toLowerCase()
       if (trib.includes('familia') || trib.includes('medida')) return true
-      // Aceptar si RIT tiene letra prefix (C-xxxx, P-xxxx, F-xxxx, X-xxxx)
       if (/^[A-Z]-\d+-\d{4}$/.test(c.rit)) return true
-      // Rechazar todo lo demás (Corte Suprema, etc)
       return false
     })
     
@@ -336,11 +207,11 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       log('info', `  Filtrado: ${causas.length} → ${causasFamilia.length} de Familia`)
     }
     
-    log('info', `  → ${causasFamilia.length} causas de FAMILIA para ${year}`)
+    log('info', `  → ${causasFamilia.length} causas de FAMILIA`)
     return causasFamilia
     
   } catch (error: any) {
-    log('error', `Error buscando año ${year}: ${error.message}`)
+    log('error', `Error leyendo tabla: ${error.message}`)
     return []
   }
 }
