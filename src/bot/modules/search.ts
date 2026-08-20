@@ -187,10 +187,8 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     // PASO 2: Activar Filtros (toggle dentro del tab Familia)
     log('info', '  Activando filtros...')
     await page.evaluate(() => {
-      // El toggle de filtros está DENTRO del panel activo
       const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
       for (const toggle of toggles) {
-        // Solo interactuar con toggles visibles
         if ((toggle as HTMLElement).offsetParent === null) continue
         const parent = toggle.closest('.custom-switch, .form-check, label, div')
         const parentText = parent ? (parent.textContent || '') : ''
@@ -204,41 +202,89 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     })
     await sleep(2000)
     
-    // PASO 3: Tipo Causa = todos (5/5) — solo selects VISIBLES
-    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
+    // PASO 3: Estado → Click dropdown → "Seleccionar Todos"
+    log('info', '  Seleccionando Estado (12 de 12)...')
+    // Abrir dropdown de Estado (click en el select/div visible que dice "No hay selección" o "Estado")
     await page.evaluate(() => {
-      const selects = document.querySelectorAll('select')
-      for (const select of selects) {
-        if ((select as HTMLElement).offsetParent === null) continue // Solo visibles
-        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
-        const name = (select.getAttribute('name') || '').toLowerCase()
-        if (nearText.includes('tipo') || name.includes('tipo')) {
-          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
-          select.dispatchEvent(new Event('change', { bubbles: true }))
-          try { (window as any).$(select).trigger('change') } catch {}
+      const dropdowns = document.querySelectorAll('select, .multiselect, [class*="select"], button[data-toggle], .dropdown-toggle')
+      for (const dd of dropdowns) {
+        if ((dd as HTMLElement).offsetParent === null) continue
+        const nearText = (dd.closest('div, td')?.textContent || '').toLowerCase()
+        const text = (dd.textContent || '').toLowerCase()
+        if (nearText.includes('estado') || text.includes('seleccionado')) {
+          // Solo si está cerca del label "Estado"
+          const label = dd.closest('div')?.previousElementSibling?.textContent || ''
+          if (label.includes('Estado') || nearText.includes('estado')) {
+            (dd as HTMLElement).click()
+            return
+          }
+        }
+      }
+      // Fallback: buscar el segundo dropdown visible (primero es Tipo Causa)
+      const allDropdowns = document.querySelectorAll('.multiSelect, [class*="multiselect"], select')
+      const visible = Array.from(allDropdowns).filter(d => (d as HTMLElement).offsetParent !== null)
+      if (visible.length >= 2) (visible[1] as HTMLElement).click()
+    })
+    await sleep(1000)
+    
+    // Click "Seleccionar Todos"
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, a, span, div')
+      for (const btn of buttons) {
+        if ((btn as HTMLElement).offsetParent === null) continue
+        const text = (btn.textContent || '').trim()
+        if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
+          (btn as HTMLElement).click()
           return
         }
       }
     })
     await sleep(1000)
     
-    // PASO 4: Estado = todos (12/12) — solo selects VISIBLES
-    log('info', '  Seleccionando Estado (12 de 12)...')
+    // Cerrar dropdown (click fuera o en el mismo)
+    await page.evaluate(() => { document.body.click() })
+    await sleep(500)
+    
+    // PASO 4: Tipo Causa → Click dropdown → "Seleccionar Todos"
+    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
     await page.evaluate(() => {
-      const selects = document.querySelectorAll('select')
-      for (const select of selects) {
-        if ((select as HTMLElement).offsetParent === null) continue
-        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
-        const name = (select.getAttribute('name') || '').toLowerCase()
-        if (nearText.includes('estado') || name.includes('estado')) {
-          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
-          select.dispatchEvent(new Event('change', { bubbles: true }))
-          try { (window as any).$(select).trigger('change') } catch {}
+      const dropdowns = document.querySelectorAll('select, .multiselect, [class*="select"], button[data-toggle], .dropdown-toggle')
+      for (const dd of dropdowns) {
+        if ((dd as HTMLElement).offsetParent === null) continue
+        const nearText = (dd.closest('div, td')?.textContent || '').toLowerCase()
+        const text = (dd.textContent || '').toLowerCase()
+        if (nearText.includes('tipo') || text.includes('no hay selecc')) {
+          const label = dd.closest('div')?.previousElementSibling?.textContent || ''
+          if (label.includes('Tipo') || nearText.includes('tipo')) {
+            (dd as HTMLElement).click()
+            return
+          }
+        }
+      }
+      // Fallback: primer dropdown visible
+      const allDropdowns = document.querySelectorAll('.multiSelect, [class*="multiselect"], select')
+      const visible = Array.from(allDropdowns).filter(d => (d as HTMLElement).offsetParent !== null)
+      if (visible.length >= 1) (visible[0] as HTMLElement).click()
+    })
+    await sleep(1000)
+    
+    // Click "Seleccionar Todos"
+    await page.evaluate(() => {
+      const buttons = document.querySelectorAll('button, a, span, div')
+      for (const btn of buttons) {
+        if ((btn as HTMLElement).offsetParent === null) continue
+        const text = (btn.textContent || '').trim()
+        if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
+          (btn as HTMLElement).click()
           return
         }
       }
     })
     await sleep(1000)
+    
+    // Cerrar dropdown
+    await page.evaluate(() => { document.body.click() })
+    await sleep(500)
     
     // PASO 5: Año — solo inputs VISIBLES
     log('info', `  Año: ${year}...`)
