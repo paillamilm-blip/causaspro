@@ -256,17 +256,17 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     log('info', '  Esperando autenticación...')
     
     // Esperar más tiempo para que Clave Única complete la redirección
-    let redirected = false
+    let loginRedirected = false
     for (let i = 0; i < 20; i++) {
       await sleep(2000)
       const currentUrl = page.url()
       if (currentUrl.includes('pjud.cl') && !currentUrl.includes('claveunica')) {
-        redirected = true
+        loginRedirected = true
         break
       }
     }
     
-    if (!redirected) {
+    if (!loginRedirected) {
       const errorMsg = await getLoginError(page)
       if (errorMsg) {
         log('error', `Login fallido: ${errorMsg}`)
