@@ -173,32 +173,121 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 // ============================================================
-// BUSCAR: Lee las causas que YA están visibles en tab Familia
-// NO usa Buscar (resetea a Corte Suprema)
+// BUSCAR: Activa filtros del tab Familia y busca
+// IMPORTANTE: Esperar a que el formulario de Familia cargue antes de interactuar
 // ============================================================
 export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
-  // En el primer llamado (2026), leemos lo que ya está visible
-  // Para otros años, no necesitamos buscar — la tabla ya tiene todo
-  
-  if (year !== '2026') {
-    // Solo leer en la primera llamada — los datos ya están todos en la tabla
-    return []
-  }
-  
-  log('info', '  Leyendo tabla de Familia directamente (sin Buscar)...')
+  log('info', `  Buscando causas del año ${year}...`)
   
   try {
-    // Leer la tabla que ya está visible
+    // PASO 1: Esperar a que el formulario de Familia esté completamente cargado
+    // (después del click en #familiaTab, el form tarda en cargar)
+    await sleep(3000)
+    
+    // PASO 2: Activar Filtros (toggle dentro del tab Familia)
+    log('info', '  Activando filtros...')
+    await page.evaluate(() => {
+      // El toggle de filtros está DENTRO del panel activo
+      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
+      for (const toggle of toggles) {
+        // Solo interactuar con toggles visibles
+        if ((toggle as HTMLElement).offsetParent === null) continue
+        const parent = toggle.closest('.custom-switch, .form-check, label, div')
+        const parentText = parent ? (parent.textContent || '') : ''
+        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
+          if (!(toggle as HTMLInputElement).checked) {
+            (toggle as HTMLElement).click()
+          }
+          return
+        }
+      }
+    })
+    await sleep(2000)
+    
+    // PASO 3: Tipo Causa = todos (5/5) — solo selects VISIBLES
+    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
+    await page.evaluate(() => {
+      const selects = document.querySelectorAll('select')
+      for (const select of selects) {
+        if ((select as HTMLElement).offsetParent === null) continue // Solo visibles
+        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
+        const name = (select.getAttribute('name') || '').toLowerCase()
+        if (nearText.includes('tipo') || name.includes('tipo')) {
+          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          try { (window as any).$(select).trigger('change') } catch {}
+          return
+        }
+      }
+    })
+    await sleep(1000)
+    
+    // PASO 4: Estado = todos (12/12) — solo selects VISIBLES
+    log('info', '  Seleccionando Estado (12 de 12)...')
+    await page.evaluate(() => {
+      const selects = document.querySelectorAll('select')
+      for (const select of selects) {
+        if ((select as HTMLElement).offsetParent === null) continue
+        const nearText = (select.closest('div, td')?.textContent || '').toLowerCase()
+        const name = (select.getAttribute('name') || '').toLowerCase()
+        if (nearText.includes('estado') || name.includes('estado')) {
+          select.querySelectorAll('option').forEach(opt => (opt as HTMLOptionElement).selected = true)
+          select.dispatchEvent(new Event('change', { bubbles: true }))
+          try { (window as any).$(select).trigger('change') } catch {}
+          return
+        }
+      }
+    })
+    await sleep(1000)
+    
+    // PASO 5: Año — solo inputs VISIBLES
+    log('info', `  Año: ${year}...`)
+    await page.evaluate((y) => {
+      const inputs = document.querySelectorAll('input')
+      for (const input of inputs) {
+        if ((input as HTMLElement).offsetParent === null) continue // Solo visibles
+        const name = (input.getAttribute('name') || '').toLowerCase()
+        const id = (input.getAttribute('id') || '').toLowerCase()
+        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
+        if (name.includes('ano') || name.includes('año') || id.includes('ano') || ph.includes('año')) {
+          (input as HTMLInputElement).value = y
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+          return
+        }
+      }
+    }, year)
+    await sleep(1000)
+    
+    // PASO 6: Click Buscar — SOLO el botón VISIBLE (del tab Familia)
+    log('info', '  Click en Buscar (tab Familia)...')
+    await page.evaluate(() => {
+      const btns = document.querySelectorAll('button, input[type="submit"], input[type="button"]')
+      for (const btn of btns) {
+        if ((btn as HTMLElement).offsetParent === null) continue // Solo visibles
+        const text = (btn.textContent || '').trim()
+        const val = (btn as HTMLInputElement).value || ''
+        if (text === 'Buscar' || val === 'Buscar') {
+          (btn as HTMLElement).click()
+          return
+        }
+      }
+    })
+    
+    // Esperar resultados (16000+ registros tarda)
+    await sleep(8000)
+    
+    // PASO 7: Leer tabla de resultados
     const causas = await readResultsTable(page)
     
     if (causas.length > 0) {
-      log('info', `  Datos: ${causas.slice(0, 3).map(c => `${c.rit}[${c.tribunal.substring(0,20)}]`).join(', ')}`)
+      log('info', `  Datos: ${causas.slice(0, 3).map(c => `${c.rit}[${c.tribunal.substring(0,25)}]`).join(', ')}`)
     }
     
-    // Filtrar solo Familia
+    // Filtrar solo Familia (por si acaso)
     const causasFamilia = causas.filter(c => {
       const trib = c.tribunal.toLowerCase()
-      if (trib.includes('familia') || trib.includes('medida')) return true
+      if (trib.includes('familia') || trib.includes('medida') || trib.includes('cautelar')) return true
       if (/^[A-Z]-\d+-\d{4}$/.test(c.rit)) return true
       return false
     })
@@ -207,11 +296,11 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       log('info', `  Filtrado: ${causas.length} → ${causasFamilia.length} de Familia`)
     }
     
-    log('info', `  → ${causasFamilia.length} causas de FAMILIA`)
+    log('info', `  → ${causasFamilia.length} causas de FAMILIA para ${year}`)
     return causasFamilia
     
   } catch (error: any) {
-    log('error', `Error leyendo tabla: ${error.message}`)
+    log('error', `Error buscando año ${year}: ${error.message}`)
     return []
   }
 }
