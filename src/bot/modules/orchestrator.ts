@@ -161,51 +161,86 @@ export async function runBotSession(
     }
     
     // 6. Entrar a detalles de las primeras N causas (para movimientos/audiencias)
-    const envMaxDetails = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
-    if (envMaxDetails && envMaxDetails < cfg.maxDetailsPorSesion) {
+    // BOT_MAX_DETAILS controls detail-scrape limit (separate from BOT_MAX_CAUSAS for discovery)
+    const envMaxDetails = process.env.BOT_MAX_DETAILS ? parseInt(process.env.BOT_MAX_DETAILS) : undefined
+    if (envMaxDetails && envMaxDetails > 0) {
       cfg.maxDetailsPorSesion = envMaxDetails
     }
     const maxDetails = cfg.maxDetailsPorSesion
     log('info', `\nExtrayendo detalles de las primeras ${maxDetails} causas...`)
     
-    for (let i = 0; i < Math.min(allPortalCausas.length, maxDetails); i++) {
-      const pc = allPortalCausas[i]
-      log('info', `  [${i+1}/${maxDetails}] Detalle de ${pc.rit}...`)
+    // Group causas by year so we can re-search the correct year after navigating back
+    const causasByYear = new Map<string, CausaFoundInPortal[]>()
+    for (const pc of allPortalCausas) {
+      // Extract year from RIT (last 4 digits, e.g. C-4875-2025 -> 2025)
+      const yearMatch = pc.rit.match(/(\d{4})$/)
+      const causaYear = yearMatch ? yearMatch[1] : years[0]
+      if (!causasByYear.has(causaYear)) causasByYear.set(causaYear, [])
+      causasByYear.get(causaYear)!.push(pc)
+    }
+    
+    let detailCount = 0
+    for (const [causaYear, causasInYear] of causasByYear) {
+      if (detailCount >= maxDetails) break
       
-      try {
-        const opened = await navigateToCausaDetail(page, pc.rit)
+      // Before scraping details for this year, re-run the search so the results table is populated
+      log('info', `  Re-buscando year ${causaYear} para navegar detalles...`)
+      await searchByYear(page, causaYear)
+      await sleep(2000)
+      
+      for (const pc of causasInYear) {
+        if (detailCount >= maxDetails) break
+        detailCount++
         
-        if (opened) {
-          // Extraer datos del detalle
-          const { data: causaDb } = await supabase
-            .from('causas')
-            .select('id')
-            .eq('rit', pc.rit)
-            .single()
+        log('info', `  [${detailCount}/${maxDetails}] Detalle de ${pc.rit}...`)
+        
+        try {
+          const opened = await navigateToCausaDetail(page, pc.rit)
           
-          if (causaDb) {
-            const scrapedData = await scrapeCausaCompleta(page, { id: causaDb.id, rit: pc.rit })
-            const analysis = analyzeCausaUrgency(scrapedData)
-            await saveCausaData(scrapedData, analysis)
-            results.push(scrapedData)
-            await markCausaScraped(causaDb.id)
+          if (opened) {
+            // Extraer datos del detalle
+            const { data: causaDb } = await supabase
+              .from('causas')
+              .select('id')
+              .eq('rit', pc.rit)
+              .single()
             
-            if (analysis.requiere_accion_inmediata) {
-              log('warn', `  ${generateAlertSummary(analysis)}`)
+            if (causaDb) {
+              const scrapedData = await scrapeCausaCompleta(page, { id: causaDb.id, rit: pc.rit })
+              const analysis = analyzeCausaUrgency(scrapedData)
+              await saveCausaData(scrapedData, analysis)
+              results.push(scrapedData)
+              await markCausaScraped(causaDb.id)
+              
+              if (analysis.requiere_accion_inmediata) {
+                log('warn', `  ${generateAlertSummary(analysis)}`)
+              }
             }
+          }
+          
+          // Safe navigation back to list (page.goBack() loses session)
+          // Then re-search the current year so the next detail can be found in the table
+          await navigateToConsulta(page)
+          await sleep(2000)
+          await searchByYear(page, causaYear)
+          await sleep(2000)
+          
+        } catch (err: any) {
+          log('warn', `  Error en detalle ${pc.rit}: ${err.message}`)
+          // Try to recover navigation state for next iteration
+          try {
+            await navigateToConsulta(page)
+            await sleep(2000)
+            await searchByYear(page, causaYear)
+            await sleep(2000)
+          } catch {
+            log('warn', '  No se pudo recuperar la navegacion, continuando...')
           }
         }
         
-        // Safe navigation back to list (page.goBack() loses session)
-        await navigateToConsulta(page)
-        await sleep(3000)
-        
-      } catch (err: any) {
-        log('warn', `  Error en detalle ${pc.rit}: ${err.message}`)
+        // Delay entre detalles
+        await humanDelay(cfg.delayMin, cfg.delayMax)
       }
-      
-      // Delay entre detalles
-      await humanDelay(cfg.delayMin, cfg.delayMax)
     }
     
     // 7. Logout

@@ -262,6 +262,7 @@ async function selectAllInDropdown(page: Page, dropdownLabel: string): Promise<v
   }, dropdownLabel)
 
   if (stillOpen) {
+    log('info', `  Dropdown "${dropdownLabel}" aun abierto tras Escape, re-click para cerrar`)
     // Re-click the trigger to close it
     await page.evaluate((label: string) => {
       const lowerLabel = label.toLowerCase()
@@ -279,6 +280,10 @@ async function selectAllInDropdown(page: Page, dropdownLabel: string): Promise<v
       }
     }, dropdownLabel)
     await sleep(300)
+  } else {
+    // The close-verification selectors may not match the portal's actual DOM structure.
+    // If the portal uses different state indicators, this check is inconclusive.
+    log('info', `  Dropdown "${dropdownLabel}" cerrado (o estado no determinable por selectores CSS)`)
   }
 }
 
@@ -359,12 +364,12 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       }
     })
     
-    // PASO 7: Esperar resultados con polling (hasta 30s, check cada 2s)
-    // 16000+ registros puede tardar bastante
-    log('info', '  Esperando resultados (polling hasta 30s)...')
+    // PASO 7: Esperar resultados con polling (hasta 60s por defecto, check cada 2s)
+    // 16000+ registros puede tardar bastante - configurable via BOT_POLL_TIMEOUT
+    const pollTimeout = process.env.BOT_POLL_TIMEOUT ? parseInt(process.env.BOT_POLL_TIMEOUT) * 1000 : 60000
+    log('info', `  Esperando resultados (polling hasta ${pollTimeout / 1000}s)...`)
     let resultsFound = false
     const pollStart = Date.now()
-    const pollTimeout = 30000
     const pollInterval = 2000
 
     while (Date.now() - pollStart < pollTimeout) {
@@ -377,8 +382,8 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
             if (tds.length < 4) continue
             const cells = Array.from(tds).map(td => (td.textContent || '').trim())
             for (const cell of cells) {
-              // Match RIT pattern: C-4875-2025, P-7940-2026, F-3069-2026, 44977-2026
-              if (cell.match(/^[A-Z]?-?\d+-\d{4}$/)) return true
+              // Match RIT pattern: C-4875-2025, P-7940-2026, F-3069-2026, FA-123-2024, 44977-2026
+              if (cell.match(/^[A-Z]{0,3}-?\d+-\d{4}$/)) return true
             }
           }
         }
@@ -394,7 +399,7 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     }
 
     if (!resultsFound) {
-      log('warn', `  No se encontraron resultados tras 30s de polling para año ${year}`)
+      log('warn', `  No se encontraron resultados tras ${pollTimeout / 1000}s de polling para año ${year}`)
       await page.screenshot({ path: `/tmp/bot_error_buscar_${year}.png` }).catch(() => {})
       log('info', `  Screenshot guardado: /tmp/bot_error_buscar_${year}.png`)
     }
@@ -410,7 +415,7 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     const causasFamilia = causas.filter(c => {
       const trib = c.tribunal.toLowerCase()
       if (trib.includes('familia') || trib.includes('medida') || trib.includes('cautelar')) return true
-      if (/^[A-Z]-\d+-\d{4}$/.test(c.rit)) return true
+      if (/^[A-Z]{1,3}-\d+-\d{4}$/.test(c.rit)) return true
       return false
     })
     
@@ -483,8 +488,8 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
         let startIdx = 0
         
         for (let i = 0; i < cells.length; i++) {
-          // Match: C-4875-2025, P-7940-2026, F-3069-2026, X-4187-2026, 44977-2026
-          if (cells[i].match(/^[A-Z]?-?\d+-\d{4}$/)) {
+          // Match: C-4875-2025, P-7940-2026, F-3069-2026, FA-123-2024, X-4187-2026, 44977-2026
+          if (cells[i].match(/^[A-Z]{0,3}-?\d+-\d{4}$/)) {
             rit = cells[i].trim()
             startIdx = i
             break
@@ -557,7 +562,7 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
             const href = tr.querySelector('a[href]')?.getAttribute('href') || null
             let rit = '', startIdx = 0
             for (let i = 0; i < cells.length; i++) {
-              if (cells[i].match(/^[A-Z]?-?\d+-\d{4}$/)) { rit = cells[i]; startIdx = i; break }
+              if (cells[i].match(/^[A-Z]{0,3}-?\d+-\d{4}$/)) { rit = cells[i]; startIdx = i; break }
             }
             if (!rit) continue
             rows.push({ rit, tribunal: cells[startIdx+1]||'', caratulado: cells[startIdx+2]||'', fecha_ingreso: cells[startIdx+3]||'', estado_procesal: cells[startIdx+4]||'', institucion: cells[startIdx+5]||'', href })
