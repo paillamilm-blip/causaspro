@@ -10,6 +10,9 @@ export const DEFAULT_CONFIG: BotConfig = {
   // MODO PRODUCCIÓN: 100 causas, invisible
   maxCausasPorSesion: 100,
   
+  // Max detalles por sesión (antes estaba hardcodeado a 10)
+  maxDetailsPorSesion: 50,
+  
   // Delays producción
   delayMin: 10000,
   delayMax: 25000,
@@ -29,6 +32,9 @@ export const DEFAULT_CONFIG: BotConfig = {
   
   // Priorización
   priorizarUrgentes: true,
+  
+  // Años a buscar en el portal
+  years: ['2026', '2025', '2024'],
 }
 
 /** URLs del portal OJV */

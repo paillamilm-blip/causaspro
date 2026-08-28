@@ -84,11 +84,12 @@ export async function runBotSession(
       return { status, data: results }
     }
     
-    // 4. Listar causas por año (2024, 2025, 2026)
+    // 4. Listar causas por año (configurable via BOT_YEARS env var o cfg.years)
     log('info', 'Listando causas del portal por año...')
     const allPortalCausas: CausaFoundInPortal[] = []
     
-    for (const year of ['2026', '2025', '2024']) {
+    const years = process.env.BOT_YEARS ? process.env.BOT_YEARS.split(',').map((y: string) => y.trim()) : cfg.years
+    for (const year of years) {
       const causasYear = await searchByYear(page, year)
       allPortalCausas.push(...causasYear)
       
@@ -142,7 +143,7 @@ export async function runBotSession(
               rit: pc.rit,
               caratulado: pc.caratulado || null,
               estado: pc.estado_procesal || null,
-              tipo: pc.rit.startsWith('P') ? 'P' : pc.rit.startsWith('C') ? 'C' : pc.rit.startsWith('X') ? 'X' : null,
+              tipo: pc.rit.startsWith('P') ? 'P' : pc.rit.startsWith('X') ? 'X' : null,
               fecha_apertura: parseDateCL(pc.fecha_ingreso),
               notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
             })
@@ -160,7 +161,11 @@ export async function runBotSession(
     }
     
     // 6. Entrar a detalles de las primeras N causas (para movimientos/audiencias)
-    const maxDetails = Math.min(cfg.maxCausasPorSesion, 10) // Max 10 detalles por sesión
+    const envMaxDetails = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
+    if (envMaxDetails && envMaxDetails < cfg.maxDetailsPorSesion) {
+      cfg.maxDetailsPorSesion = envMaxDetails
+    }
+    const maxDetails = cfg.maxDetailsPorSesion
     log('info', `\nExtrayendo detalles de las primeras ${maxDetails} causas...`)
     
     for (let i = 0; i < Math.min(allPortalCausas.length, maxDetails); i++) {
@@ -183,6 +188,7 @@ export async function runBotSession(
             const analysis = analyzeCausaUrgency(scrapedData)
             await saveCausaData(scrapedData, analysis)
             results.push(scrapedData)
+            await markCausaScraped(causaDb.id)
             
             if (analysis.requiere_accion_inmediata) {
               log('warn', `  ${generateAlertSummary(analysis)}`)
@@ -190,8 +196,8 @@ export async function runBotSession(
           }
         }
         
-        // Volver a la lista
-        await page.goBack()
+        // Safe navigation back to list (page.goBack() loses session)
+        await navigateToConsulta(page)
         await sleep(3000)
         
       } catch (err: any) {
