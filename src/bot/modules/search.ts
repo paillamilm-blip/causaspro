@@ -160,8 +160,8 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
       await clickFamiliaTab(page)
       await sleep(5000)
       // Tomar screenshot para debug
-      await page.screenshot({ path: 'screenshot-familia-fail.png' }).catch(() => {})
-      log('info', '  Screenshot guardado: screenshot-familia-fail.png')
+      await page.screenshot({ path: '/tmp/bot_error_familia_fail.png' }).catch(() => {})
+      log('info', '  Screenshot guardado: /tmp/bot_error_familia_fail.png')
     }
     
     return true
@@ -173,8 +173,119 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 // ============================================================
+// HELPER: Open a custom dropdown, click "Seleccionar Todos", and close it properly
+// Uses the trigger element to open/close (toggle) instead of document.body.click()
+// ============================================================
+async function selectAllInDropdown(page: Page, dropdownLabel: string): Promise<void> {
+  // Step 1: Find and click the dropdown trigger to OPEN it
+  const triggerFound = await page.evaluate((label: string) => {
+    const lowerLabel = label.toLowerCase()
+    const dropdowns = document.querySelectorAll(
+      'select, .multiselect, [class*="select"], [class*="multiSelect"], button[data-toggle], .dropdown-toggle, [class*="dropdown"]'
+    )
+    for (const dd of dropdowns) {
+      if ((dd as HTMLElement).offsetParent === null) continue
+      const nearText = (dd.closest('div, td, .form-group')?.textContent || '').toLowerCase()
+      const prevLabel = dd.closest('div')?.previousElementSibling?.textContent?.toLowerCase() || ''
+      if (nearText.includes(lowerLabel) || prevLabel.includes(lowerLabel)) {
+        (dd as HTMLElement).click()
+        return 'found'
+      }
+    }
+    // Fallback by index: Tipo Causa is the first visible, Estado is the second
+    const allDropdowns = document.querySelectorAll('.multiSelect, [class*="multiselect"], [class*="select"]')
+    const visible = Array.from(allDropdowns).filter(d => (d as HTMLElement).offsetParent !== null)
+    if (lowerLabel.includes('tipo') && visible.length >= 1) {
+      (visible[0] as HTMLElement).click()
+      return 'fallback-0'
+    }
+    if (lowerLabel.includes('estado') && visible.length >= 2) {
+      (visible[1] as HTMLElement).click()
+      return 'fallback-1'
+    }
+    return null
+  }, dropdownLabel)
+
+  if (!triggerFound) {
+    log('warn', `  Dropdown "${dropdownLabel}" trigger not found`)
+    return
+  }
+
+  // Step 2: Wait for dropdown panel to appear
+  await sleep(500)
+
+  // Step 3: Click "Seleccionar Todos" within the open dropdown panel
+  await page.evaluate(() => {
+    // First try to find within an open dropdown panel/menu
+    const panels = document.querySelectorAll(
+      '.dropdown-menu, [class*="dropdown-content"], [class*="multiselect-content"], [class*="options"], [class*="panel"], [role="listbox"], [class*="menu"]'
+    )
+    for (const panel of panels) {
+      if ((panel as HTMLElement).offsetParent === null) continue
+      const items = panel.querySelectorAll('button, a, span, div, label, li')
+      for (const item of items) {
+        const text = (item.textContent || '').trim()
+        if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
+          (item as HTMLElement).click()
+          return
+        }
+      }
+    }
+    // Fallback: any visible "Seleccionar Todos" on page
+    const allButtons = document.querySelectorAll('button, a, span, div, label, li')
+    for (const btn of allButtons) {
+      if ((btn as HTMLElement).offsetParent === null) continue
+      const text = (btn.textContent || '').trim()
+      if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
+        (btn as HTMLElement).click()
+        return
+      }
+    }
+  })
+
+  // Step 4: Wait for selection to register
+  await sleep(500)
+
+  // Step 5: Close dropdown by pressing Escape (does NOT deselect like body.click might)
+  await page.keyboard.press('Escape')
+  await sleep(300)
+
+  // Verify closure: if dropdown panel is still open, click the trigger again to toggle it closed
+  const stillOpen = await page.evaluate((label: string) => {
+    const panels = document.querySelectorAll(
+      '.dropdown-menu.show, [class*="multiselect-content"]:not([style*="display: none"]), [class*="open"], [class*="active"]'
+    )
+    for (const panel of panels) {
+      if ((panel as HTMLElement).offsetParent !== null) return true
+    }
+    return false
+  }, dropdownLabel)
+
+  if (stillOpen) {
+    // Re-click the trigger to close it
+    await page.evaluate((label: string) => {
+      const lowerLabel = label.toLowerCase()
+      const dropdowns = document.querySelectorAll(
+        'select, .multiselect, [class*="select"], [class*="multiSelect"], button[data-toggle], .dropdown-toggle, [class*="dropdown"]'
+      )
+      for (const dd of dropdowns) {
+        if ((dd as HTMLElement).offsetParent === null) continue
+        const nearText = (dd.closest('div, td, .form-group')?.textContent || '').toLowerCase()
+        const prevLabel = dd.closest('div')?.previousElementSibling?.textContent?.toLowerCase() || ''
+        if (nearText.includes(lowerLabel) || prevLabel.includes(lowerLabel)) {
+          (dd as HTMLElement).click()
+          return
+        }
+      }
+    }, dropdownLabel)
+    await sleep(300)
+  }
+}
+
+// ============================================================
 // BUSCAR: Activa filtros del tab Familia y busca
 // IMPORTANTE: Esperar a que el formulario de Familia cargue antes de interactuar
+// ORDEN CORRECTO: 1) Familia tab, 2) Filtros, 3) Tipo Causa (5/5), 4) Estado (12/12), 5) Año, 6) Buscar
 // ============================================================
 export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
   log('info', `  Buscando causas del año ${year}...`)
@@ -202,93 +313,21 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     })
     await sleep(2000)
     
-    // PASO 3: Estado → Click dropdown → "Seleccionar Todos"
-    log('info', '  Seleccionando Estado (12 de 12)...')
-    // Abrir dropdown de Estado (click en el select/div visible que dice "No hay selección" o "Estado")
-    await page.evaluate(() => {
-      const dropdowns = document.querySelectorAll('select, .multiselect, [class*="select"], button[data-toggle], .dropdown-toggle')
-      for (const dd of dropdowns) {
-        if ((dd as HTMLElement).offsetParent === null) continue
-        const nearText = (dd.closest('div, td')?.textContent || '').toLowerCase()
-        const text = (dd.textContent || '').toLowerCase()
-        if (nearText.includes('estado') || text.includes('seleccionado')) {
-          // Solo si está cerca del label "Estado"
-          const label = dd.closest('div')?.previousElementSibling?.textContent || ''
-          if (label.includes('Estado') || nearText.includes('estado')) {
-            (dd as HTMLElement).click()
-            return
-          }
-        }
-      }
-      // Fallback: buscar el segundo dropdown visible (primero es Tipo Causa)
-      const allDropdowns = document.querySelectorAll('.multiSelect, [class*="multiselect"], select')
-      const visible = Array.from(allDropdowns).filter(d => (d as HTMLElement).offsetParent !== null)
-      if (visible.length >= 2) (visible[1] as HTMLElement).click()
-    })
-    await sleep(1000)
-    
-    // Click "Seleccionar Todos"
-    await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, a, span, div')
-      for (const btn of buttons) {
-        if ((btn as HTMLElement).offsetParent === null) continue
-        const text = (btn.textContent || '').trim()
-        if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
-          (btn as HTMLElement).click()
-          return
-        }
-      }
-    })
-    await sleep(1000)
-    
-    // Cerrar dropdown (click fuera o en el mismo)
-    await page.evaluate(() => { document.body.click() })
+    // PASO 3: Tipo Causa → Click dropdown → "Seleccionar Todos" (5 de 5)
+    // MUST come FIRST before Estado
+    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
+    await selectAllInDropdown(page, 'tipo')
     await sleep(500)
     
-    // PASO 4: Tipo Causa → Click dropdown → "Seleccionar Todos"
-    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
-    await page.evaluate(() => {
-      const dropdowns = document.querySelectorAll('select, .multiselect, [class*="select"], button[data-toggle], .dropdown-toggle')
-      for (const dd of dropdowns) {
-        if ((dd as HTMLElement).offsetParent === null) continue
-        const nearText = (dd.closest('div, td')?.textContent || '').toLowerCase()
-        const text = (dd.textContent || '').toLowerCase()
-        if (nearText.includes('tipo') || text.includes('no hay selecc')) {
-          const label = dd.closest('div')?.previousElementSibling?.textContent || ''
-          if (label.includes('Tipo') || nearText.includes('tipo')) {
-            (dd as HTMLElement).click()
-            return
-          }
-        }
-      }
-      // Fallback: primer dropdown visible
-      const allDropdowns = document.querySelectorAll('.multiSelect, [class*="multiselect"], select')
-      const visible = Array.from(allDropdowns).filter(d => (d as HTMLElement).offsetParent !== null)
-      if (visible.length >= 1) (visible[0] as HTMLElement).click()
-    })
-    await sleep(1000)
-    
-    // Click "Seleccionar Todos"
-    await page.evaluate(() => {
-      const buttons = document.querySelectorAll('button, a, span, div')
-      for (const btn of buttons) {
-        if ((btn as HTMLElement).offsetParent === null) continue
-        const text = (btn.textContent || '').trim()
-        if (text === 'Seleccionar Todos' || text === 'Seleccionar todos') {
-          (btn as HTMLElement).click()
-          return
-        }
-      }
-    })
-    await sleep(1000)
-    
-    // Cerrar dropdown
-    await page.evaluate(() => { document.body.click() })
+    // PASO 4: Estado → Click dropdown → "Seleccionar Todos" (12 de 12)
+    // MUST come SECOND after Tipo Causa
+    log('info', '  Seleccionando Estado (12 de 12)...')
+    await selectAllInDropdown(page, 'estado')
     await sleep(500)
     
     // PASO 5: Año — solo inputs VISIBLES
     log('info', `  Año: ${year}...`)
-    await page.evaluate((y) => {
+    await page.evaluate((y: string) => {
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
         if ((input as HTMLElement).offsetParent === null) continue // Solo visibles
@@ -320,10 +359,47 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       }
     })
     
-    // Esperar resultados (16000+ registros tarda)
-    await sleep(8000)
+    // PASO 7: Esperar resultados con polling (hasta 30s, check cada 2s)
+    // 16000+ registros puede tardar bastante
+    log('info', '  Esperando resultados (polling hasta 30s)...')
+    let resultsFound = false
+    const pollStart = Date.now()
+    const pollTimeout = 30000
+    const pollInterval = 2000
+
+    while (Date.now() - pollStart < pollTimeout) {
+      const hasRows = await page.evaluate(() => {
+        const tables = document.querySelectorAll('table')
+        for (const table of tables) {
+          const trs = table.querySelectorAll('tbody tr, tr')
+          for (const tr of trs) {
+            const tds = tr.querySelectorAll('td')
+            if (tds.length < 4) continue
+            const cells = Array.from(tds).map(td => (td.textContent || '').trim())
+            for (const cell of cells) {
+              // Match RIT pattern: C-4875-2025, P-7940-2026, F-3069-2026, 44977-2026
+              if (cell.match(/^[A-Z]?-?\d+-\d{4}$/)) return true
+            }
+          }
+        }
+        return false
+      })
+
+      if (hasRows) {
+        resultsFound = true
+        log('info', `  Resultados detectados en ${Math.round((Date.now() - pollStart) / 1000)}s`)
+        break
+      }
+      await sleep(pollInterval)
+    }
+
+    if (!resultsFound) {
+      log('warn', `  No se encontraron resultados tras 30s de polling para año ${year}`)
+      await page.screenshot({ path: `/tmp/bot_error_buscar_${year}.png` }).catch(() => {})
+      log('info', `  Screenshot guardado: /tmp/bot_error_buscar_${year}.png`)
+    }
     
-    // PASO 7: Leer tabla de resultados
+    // PASO 8: Leer tabla de resultados
     const causas = await readResultsTable(page)
     
     if (causas.length > 0) {
@@ -343,10 +419,17 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     }
     
     log('info', `  → ${causasFamilia.length} causas de FAMILIA para ${year}`)
+
+    // PASO 9: Re-click Familia tab para resetear estado para la siguiente busqueda
+    log('info', '  Re-click Familia tab (reset para siguiente año)...')
+    await clickFamiliaTab(page)
+    await sleep(2000)
+
     return causasFamilia
     
   } catch (error: any) {
     log('error', `Error buscando año ${year}: ${error.message}`)
+    await page.screenshot({ path: `/tmp/bot_error_search_${year}.png` }).catch(() => {})
     return []
   }
 }
@@ -500,7 +583,7 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
 // ============================================================
 export async function navigateToCausaDetail(page: Page, rit: string): Promise<boolean> {
   try {
-    const clicked = await page.evaluate((targetRit) => {
+    const clicked = await page.evaluate((targetRit: string) => {
       const rows = document.querySelectorAll('table tr')
       for (const row of rows) {
         if ((row.textContent || '').includes(targetRit)) {

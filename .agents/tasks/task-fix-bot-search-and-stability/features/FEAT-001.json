@@ -1,0 +1,25 @@
+{
+  "id": "FEAT-001",
+  "type": "fix",
+  "description": "Fix the search flow in search.ts: correct dropdown order (Tipo Causa 5/5 FIRST, then Estado 12/12), improve dropdown interaction to properly select all options in custom multiselect components, fix screenshot paths to /tmp/bot_error_*.png, and ensure the Buscar button click triggers a proper form submission that returns 16k+ results instead of resetting.",
+  "status": "in_progress",
+  "steps": [
+    "In src/bot/modules/search.ts, function searchByYear: REORDER steps so that PASO 3 becomes 'Tipo Causa' (5 de 5) and PASO 4 becomes 'Estado' (12 de 12). The user confirms the correct order is: 1) Click Familia tab, 2) Activate filters, 3) Select 'Tipo Causa' dropdown -> 'Seleccionar Todos' (shows '5 de 5'), 4) Select 'Estado' dropdown -> 'Seleccionar Todos' (shows '12 de 12'), 5) Set year, 6) Click Buscar.",
+    "Improve the dropdown interaction logic: Instead of just clicking 'Seleccionar Todos' text once, the code should: (a) Find and click the dropdown trigger/button to OPEN it (look for elements with class containing 'multiselect', 'multi-select', 'dropdown', or the input/button that shows 'No hay seleccion'), (b) Wait 500ms for the dropdown panel to appear, (c) Find and click 'Seleccionar Todos' or 'Seleccionar todos' link/checkbox WITHIN the open dropdown panel (not just any matching text on page), (d) Wait 500ms, (e) Close the dropdown by clicking the trigger again or pressing Escape (not document.body.click which may deselect). The key insight is that clicking body.click() might be deselecting the dropdown choices.",
+    "After clicking Buscar, add proper wait logic: Wait up to 30 seconds checking every 2 seconds if the results table has rows with RIT patterns. If after 30s no results appear, take a screenshot to /tmp/bot_error_buscar_${year}.png and log the error.",
+    "Fix all screenshot paths in search.ts: change from CWD paths like 'screenshot-familia-fail.png' to '/tmp/bot_error_familia_fail.png' so the GitHub Actions upload step can find them.",
+    "Add a re-click of the Familia tab after each searchByYear call returns (as documented in commit 0bbfa4f): After reading results, before returning, click the Familia tab again to ensure the next year's search starts from the right state."
+  ],
+  "acceptance_criteria": [
+    "The dropdown order in searchByYear is: Tipo Causa first, Estado second",
+    "Dropdown interaction opens the dropdown, clicks 'Seleccionar Todos' within it, and closes it without using document.body.click()",
+    "After clicking Buscar, the code waits up to 30 seconds for results with proper polling",
+    "All screenshot paths use /tmp/bot_error_*.png pattern",
+    "TypeScript compiles without errors (npx tsc --noEmit)"
+  ],
+  "verification": [
+    "Run npx tsc --noEmit and confirm no TypeScript errors"
+  ],
+  "blocked_reason": null,
+  "findings": ""
+}
