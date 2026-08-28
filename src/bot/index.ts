@@ -9,16 +9,23 @@ export { initSupabase, getCausasToScrape } from './modules/supabaseSync'
 export { getPJUDCredentials, getIMAPCredentials } from './modules/credentials'
 export type { BotConfig, CausaScrapedData, BotRunStatus, ScrapeSessionResult } from './types'
 
+import type { BotConfig, ScrapeSessionResult } from './types'
+
 // CLI runner
 async function main() {
-  const { runBotSession } = await import('./modules/orchestrator')
+  const { runBotSession, runUrgentOnly, runTestSingle } = await import('./modules/orchestrator')
   const { getPJUDCredentials } = await import('./modules/credentials')
+  
+  const botMode = process.env.BOT_MODE || 'normal'
+  const maxCausas = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
   
   console.log('🚀 Iniciando CausasPro Bot...')
   console.log(`   Hora Chile: ${new Date().toLocaleString('es-CL', { timeZone: 'America/Santiago' })}`)
+  console.log(`   Modo: ${botMode}`)
+  if (maxCausas) console.log(`   Max causas: ${maxCausas}`)
   console.log('')
   
-  // Obtener credenciales (env vars → Supabase DB)
+  // Obtener credenciales (env vars -> Supabase DB)
   const credentials = await getPJUDCredentials()
   
   if (!credentials) {
@@ -29,12 +36,24 @@ async function main() {
     console.error('  2. Configurar en la app: /config')
     console.error('')
     process.exit(1)
+    return // unreachable, helps TypeScript narrow credentials type
   }
   
   console.log(`   RUT: ${credentials.rut.slice(0, 4)}****`)
   console.log('')
   
-  const result = await runBotSession(credentials)
+  let result: ScrapeSessionResult
+  
+  if (botMode === 'urgent_only') {
+    result = await runUrgentOnly(credentials)
+  } else if (botMode === 'test_single') {
+    result = await runTestSingle(credentials)
+  } else {
+    // normal mode
+    const config: Partial<BotConfig> = {}
+    if (maxCausas) config.maxCausasPorSesion = maxCausas
+    result = await runBotSession(credentials, config)
+  }
   
   // Output result
   console.log('\n📋 Resultado:')

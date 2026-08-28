@@ -80,6 +80,8 @@ export interface BotRunStatus {
 export interface BotConfig {
   /** Máximo de causas por sesión (anti-detección) */
   maxCausasPorSesion: number
+  /** Máximo de detalles a scrapear por sesión */
+  maxDetailsPorSesion: number
   /** Delay mínimo entre consultas (ms) */
   delayMin: number
   /** Delay máximo entre consultas (ms) */
@@ -100,6 +102,8 @@ export interface BotConfig {
   viewport: { width: number; height: number }
   /** Priorizar causas por nivel_urgencia */
   priorizarUrgentes: boolean
+  /** Años a buscar en el portal */
+  years: string[]
 }
 
 /** Resultado de una sesión de scraping */

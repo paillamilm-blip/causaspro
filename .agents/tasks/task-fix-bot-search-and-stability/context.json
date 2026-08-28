@@ -1,0 +1,25 @@
+{
+  "project_type": "Next.js 14 + Supabase + Playwright bot for scraping Chilean judicial portal (PJUD)",
+  "language": "TypeScript",
+  "build_system": "npm with next build for web app, tsx for bot CLI",
+  "test_framework": "No test framework configured - validation via TypeScript compilation",
+  "build_command": "npx tsc --noEmit",
+  "test_command": "npx tsc --noEmit",
+  "verification_instructions": "Run npx tsc --noEmit to verify TypeScript compiles without errors. Cannot run the bot live due to INTEGRATIONS_ONLY network (needs PJUD portal).",
+  "snapshot_or_generated_files": null,
+  "setup_instructions": "npm install",
+  "environment_constraints": "INTEGRATIONS_ONLY network - cannot access npm registry, PJUD portal, or any external services. Must use pre-installed Node.js. Validation limited to TypeScript type checking via npx tsc --noEmit. Cannot run the bot against the live portal.",
+  "contribution_requirements": "NEVER use page.goto() after login (loses session). Only interact with VISIBLE elements. Tab Familia must be found via multiple strategies. Custom dropdowns require click to open then click 'Seleccionar Todos'. After clicking Buscar, need to re-click Familia tab. Wait for table to load.",
+  "key_patterns": "Bot modules in src/bot/modules/. Config in src/bot/config/index.ts. Types in src/bot/types/index.ts. Entry point in src/bot/index.ts. The bot uses Playwright page.evaluate() extensively for DOM manipulation. Screenshots for debugging. Anti-detection delays between actions.",
+  "relevant_files": [
+    "src/bot/modules/search.ts",
+    "src/bot/modules/orchestrator.ts",
+    "src/bot/index.ts",
+    "src/bot/config/index.ts",
+    "src/bot/types/index.ts",
+    "src/bot/utils/index.ts",
+    ".github/workflows/bot-pjud.yml",
+    "schema.sql"
+  ],
+  "directory_structure": "src/bot/ - Bot code (index.ts entry, modules/ for logic, config/ for settings, types/ for interfaces, utils/ for helpers). src/app/ - Next.js pages. src/lib/ - shared libraries. .github/workflows/ - CI/CD."
+}
