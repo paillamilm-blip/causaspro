@@ -1,0 +1,7 @@
+{
+  "task_id": "task-fix-bot-search-and-stability",
+  "task_description": "Fix the PJUD bot search flow that fails when clicking Buscar (returns 0 results and resets). The root cause is incorrect dropdown selection order and interaction pattern. Also fix 8 additional stability issues: BOT_MODE/BOT_MAX_CAUSAS env vars not read, hardcoded 10-detail limit, page.goBack() losing session, hardcoded years, screenshot paths, markCausaScraped never called, CHECK constraint violation on tipo field, and dead code.",
+  "status": "in_progress",
+  "feature_order": ["FEAT-001", "FEAT-002"],
+  "blocked_reason": null
+}
