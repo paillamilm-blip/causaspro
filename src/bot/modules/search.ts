@@ -317,6 +317,29 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
       }
     })
     await sleep(2000)
+
+    // PASO 2.5: Limpiar campo RUT (auto-rellenado con RUT del curador tras login)
+    // Las causas NO estan asociadas al RUT sino al RIT asignado por la jefa.
+    // Si el RUT queda con valor, la busqueda filtra por ese RUT y retorna 0 resultados.
+    // El formulario tiene 2 inputs de RUT: el numero principal y el digito verificador.
+    log('info', '  Limpiando campo Rut (no filtrar por RUT del curador)...')
+    await page.evaluate(() => {
+      const inputs = document.querySelectorAll('input')
+      for (const input of inputs) {
+        if ((input as HTMLElement).offsetParent === null) continue // Solo visibles
+        const name = (input.getAttribute('name') || '').toLowerCase()
+        const id = (input.getAttribute('id') || '').toLowerCase()
+        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
+        // Match inputs related to RUT: main number field and verification digit
+        if (name.includes('rut') || id.includes('rut') || ph.includes('rut') ||
+            name.includes('dv') || id.includes('dv')) {
+          (input as HTMLInputElement).value = ''
+          input.dispatchEvent(new Event('input', { bubbles: true }))
+          input.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      }
+    })
+    await sleep(500)
     
     // PASO 3: Tipo Causa → Click dropdown → "Seleccionar Todos" (5 de 5)
     // MUST come FIRST before Estado
