@@ -128,3 +128,79 @@ export interface CuotaPorCobrar {
   cliente_telefono: string | null
   cliente_email: string | null
 }
+
+
+// ============================================================
+// Multi-abogado (Fase 4 - Paso 1)
+// ============================================================
+
+export type RolAbogado = 'socio' | 'abogado'
+
+/** Estudio jurídico. Agrupa a varios abogados. */
+export interface Estudio {
+  id: string
+  nombre: string
+  rut: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** Abogado miembro de un estudio. */
+export interface Abogado {
+  id: string
+  estudio_id: string | null
+  nombre: string
+  rut: string | null
+  email: string | null
+  rol: RolAbogado
+  activo: boolean
+  auth_user_id: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface AbogadoInput {
+  nombre: string
+  estudio_id?: string | null
+  rut?: string | null
+  email?: string | null
+  rol?: RolAbogado
+}
+
+/** Reparto de un honorario entre abogados (debe sumar 100%). */
+export interface RepartoHonorario {
+  id: string
+  honorario_id: string
+  abogado_id: string
+  porcentaje: number
+  created_at: string
+}
+
+/** Item de reparto para enviar a la API. */
+export interface RepartoItemInput {
+  abogado_id: string
+  porcentaje: number
+}
+
+/** Fila de la vista v_cartera_abogado. */
+export interface CarteraAbogado {
+  abogado_id: string
+  nombre: string
+  rol: RolAbogado
+  estudio_id: string | null
+  total_causas: number
+  total_clientes: number
+  por_cobrar: number
+  vencido: number
+}
+
+/** Fila de la vista v_cartera_estudio. */
+export interface CarteraEstudio {
+  estudio_id: string
+  nombre: string
+  total_abogados: number
+  total_causas: number
+  total_clientes: number
+  por_cobrar: number
+  vencido: number
+}

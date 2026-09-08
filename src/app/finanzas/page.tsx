@@ -3,8 +3,9 @@ import { useState } from 'react'
 import Link from 'next/link'
 import PanelFinanciero from '@/components/PanelFinanciero'
 import Clientes from '@/components/Clientes'
+import CarteraEstudio from '@/components/CarteraEstudio'
 
-type Tab = 'panel' | 'clientes'
+type Tab = 'panel' | 'clientes' | 'estudio'
 
 /**
  * Pagina de la capa de negocio: salud financiera del estudio + clientes.
@@ -38,9 +39,14 @@ export default function FinanzasPage() {
           <TabButton active={tab === 'clientes'} onClick={() => setTab('clientes')}>
             👥 Clientes
           </TabButton>
+          <TabButton active={tab === 'estudio'} onClick={() => setTab('estudio')}>
+            🏛️ Estudio
+          </TabButton>
         </div>
 
-        {tab === 'panel' ? <PanelFinanciero /> : <Clientes />}
+        {tab === 'panel' && <PanelFinanciero />}
+        {tab === 'clientes' && <Clientes />}
+        {tab === 'estudio' && <CarteraEstudio />}
       </main>
     </div>
   )
