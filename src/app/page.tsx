@@ -95,6 +95,13 @@ export default function Home() {
               </>
             )}
             <Link
+              href="/finanzas"
+              className="text-sm bg-emerald-50 text-emerald-700 px-3 py-2 rounded-lg hover:bg-emerald-100 transition"
+              title="Finanzas del estudio"
+            >
+              💰 Finanzas
+            </Link>
+            <Link
               href="/config"
               className="text-sm bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition"
               title="Configuración"
