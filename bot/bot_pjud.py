@@ -141,18 +141,16 @@ def log(msg):
 
 
 # ============================================================
-# Wrappers de Nova Act que IGNORAN la validacion de tamano de pantalla.
-# En modo VISIBLE, la ventana de Chrome puede abrirse en un tamano distinto al
-# pedido (ej. 1283x643 en vez de 1600x813) y Nova Act aborta. Con
-# ignore_screen_dims_check=True seguimos igual (solo puede degradar precision).
-# Usar SIEMPRE act(nova, ...) y act_get(nova, ...) en vez de nova.act / nova.act_get.
+# Wrappers de Nova Act. Se dejan como punto unico por si mas adelante hay que
+# agregar reintentos o parametros comunes. Usar SIEMPRE act(nova, ...) y
+# act_get(nova, ...) en vez de nova.act / nova.act_get.
 # ============================================================
 def act(nova, prompt):
-    return nova.act(prompt, ignore_screen_dims_check=True)
+    return nova.act(prompt)
 
 
 def act_get(nova, prompt, schema):
-    return nova.act_get(prompt, schema=schema, ignore_screen_dims_check=True)
+    return nova.act_get(prompt, schema=schema)
 
 
 def http(url, method="GET", body=None):
@@ -514,8 +512,13 @@ def main():
     urgentes = []
 
     log(f"   Modo navegador: {'VISIBLE' if not HEADLESS else 'invisible (headless)'}")
+    # Nova Act esta optimizado para resoluciones entre 864x1296 y 1536x2304.
+    # Usamos 1280x1024 (dentro de rango y compatible con pantallas comunes).
+    # Se puede sobreescribir con BOT_ANCHO / BOT_ALTO si hace falta.
+    ancho = int(os.environ.get("BOT_ANCHO", "1280"))
+    alto = int(os.environ.get("BOT_ALTO", "1024"))
     with NovaAct(starting_page=PORTAL_URL, headless=HEADLESS,
-                 screen_width=1600, screen_height=813) as nova:
+                 screen_width=ancho, screen_height=alto) as nova:
         log("Cerrando aviso del portal...")
         cerrar_aviso(nova)
 
