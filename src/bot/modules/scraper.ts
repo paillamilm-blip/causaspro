@@ -300,58 +300,62 @@ async function extractResoluciones(page: Page): Promise<ResolucionPJUD[]> {
 
 function parseMovimientoRow(textos: string[]): MovimientoPJUD | null {
   if (textos.length < 2) return null
-  
-  // Buscar la celda que parece fecha
+
+  // Normalizar celdas (sin vacíos) para razonar sobre las columnas reales
+  const celdas = textos.map(t => (t || '').trim())
+
+  // 1. Ubicar la celda que contiene la fecha (puede no ser la primera columna)
+  let fechaIdx = -1
   let fecha: string | null = null
-  let etapa: string | undefined
-  let tramite = ''
-  let descripcion: string | undefined
-  
-  for (let i = 0; i < textos.length; i++) {
-    const parsed = parsePJUDDate(textos[i])
-    if (parsed && !fecha) {
+  for (let i = 0; i < celdas.length; i++) {
+    const parsed = parsePJUDDate(celdas[i])
+    if (parsed) {
       fecha = parsed
-    } else if (!fecha) {
-      // Antes de la fecha, ignorar
-      continue
-    } else if (!tramite) {
-      // Primer texto después de la fecha
-      if (textos[i].length <= 30 && i === 1) {
-        etapa = textos[i] || undefined
-      } else {
-        tramite = textos[i]
-      }
-    } else if (!etapa && !descripcion) {
-      // Si tramite ya está seteado pero es corto, puede ser etapa
-      if (tramite.length <= 30 && textos[i].length > tramite.length) {
-        etapa = tramite
-        tramite = textos[i]
-      } else {
-        descripcion = textos[i] || undefined
-      }
-    } else {
-      descripcion = textos[i] || undefined
+      fechaIdx = i
+      break
     }
   }
-  
-  // Si no encontramos fecha, intentar con el primer campo
-  if (!fecha && textos.length >= 3) {
-    fecha = parsePJUDDate(textos[0])
-    if (fecha) {
-      etapa = textos[1] || undefined
-      tramite = textos[2] || ''
-      descripcion = textos[3] || undefined
-    }
+
+  if (!fecha) return null
+
+  // 2. Las celdas posteriores a la fecha son el contenido del movimiento.
+  //    Estructura típica del OJV: Fecha | Etapa | Trámite | Descripción,
+  //    pero el número y orden de columnas puede variar entre tribunales.
+  const contenido = celdas.slice(fechaIdx + 1).filter(c => c.length > 0)
+
+  if (contenido.length === 0) return null
+
+  // 3. Asignar campos de forma predecible:
+  //    - 1 celda  → es el trámite
+  //    - 2 celdas → etapa + trámite
+  //    - 3+ celdas → etapa + trámite + descripción (resto concatenado)
+  let etapa: string | undefined
+  let tramite: string
+  let descripcion: string | undefined
+
+  if (contenido.length === 1) {
+    tramite = contenido[0]
+  } else if (contenido.length === 2) {
+    etapa = contenido[0]
+    tramite = contenido[1]
+  } else {
+    etapa = contenido[0]
+    tramite = contenido[1]
+    descripcion = contenido.slice(2).join(' — ')
   }
-  
-  if (!fecha || !tramite) return null
-  
+
+  // 4. CRÍTICO: la detección de urgencia (TRASLADO AL CURADOR) se hace sobre
+  //    TODAS las celdas de la fila (no solo trámite+descripción, ni solo lo que
+  //    sigue a la fecha). Así el patrón nunca se pierde por haber quedado en una
+  //    columna inesperada (etapa, columna extra, o incluso antes de la fecha).
+  const textoCompleto = celdas.join(' ')
+
   return {
     fecha,
     etapa,
     tramite,
     descripcion,
-    es_traslado_curador: detectTrasladoCurador(tramite + ' ' + (descripcion || '')),
+    es_traslado_curador: detectTrasladoCurador(textoCompleto),
   }
 }
 

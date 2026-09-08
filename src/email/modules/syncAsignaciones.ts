@@ -5,6 +5,9 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { AsignacionEmail, EmailProcessResult } from '../types'
+// Utilidad pura compartida: deriva `tipo` desde el RIT validando contra la
+// lista blanca del CHECK de la BD (misma lógica que usa el bot en orchestrator).
+import { inferirTipoRIT } from '../../bot/utils'
 
 let supabase: SupabaseClient | null = null
 
@@ -76,7 +79,7 @@ export async function syncAsignaciones(
           .from('causas')
           .insert({
             rit: asig.rit,
-            tipo: asig.rit.startsWith('P') ? 'P' : asig.rit.startsWith('X') ? 'X' : null,
+            tipo: inferirTipoRIT(asig.rit),
             estado: 'Asignada por email',
             fecha_notificacion: asig.fecha_ingreso || new Date().toISOString().split('T')[0],
             notas: `Asignada por ${emailMeta.remitente} el ${emailMeta.fecha}. Curador: ${asig.curador}`,
