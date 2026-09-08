@@ -138,10 +138,11 @@ export function detectTrasladoCurador(text: string): boolean {
 }
 
 /**
- * Parsea RIT del formato "P-123-2024" o "C-456-2024"
+ * Parsea RIT del portal PJUD. Soporta prefijos de 1 a 3 letras:
+ * "P-123-2024", "C-456-2024", "FA-78-2025".
  */
 export function parseRIT(rit: string): { tipo: string; numero: string; año: string } | null {
-  const match = rit.trim().match(/^([A-Z])-(\d+)-(\d{4})$/i)
+  const match = rit.trim().match(/^([A-Z]{1,3})-(\d+)-(\d{4})$/i)
   if (!match) return null
   return { tipo: match[1].toUpperCase(), numero: match[2], año: match[3] }
 }
