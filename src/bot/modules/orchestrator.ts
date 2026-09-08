@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, navigateToCausaDetail, CausaFoundInPo
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log } from '../utils'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT } from '../utils'
 import { createClient } from '@supabase/supabase-js'
 
 /**
@@ -136,14 +136,17 @@ export async function runBotSession(
           
           status.exitosas++
         } else {
-          // Causa nueva (está en el portal pero no en la BD) → crearla
+          // Causa nueva (está en el portal pero no en la BD) → crearla.
+          // Derivar el tipo desde el prefijo del RIT (P, C, F, V, X, FA, ...)
+          // validando contra la lista blanca del CHECK (inferirTipoRIT devuelve
+          // null si el prefijo no está permitido, evitando violar el constraint).
           await supabase
             .from('causas')
             .insert({
               rit: pc.rit,
               caratulado: pc.caratulado || null,
               estado: pc.estado_procesal || null,
-              tipo: pc.rit.startsWith('P') ? 'P' : pc.rit.startsWith('X') ? 'X' : null,
+              tipo: inferirTipoRIT(pc.rit),
               fecha_apertura: parseDateCL(pc.fecha_ingreso),
               notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
             })
