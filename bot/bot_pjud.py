@@ -140,6 +140,21 @@ def log(msg):
     print(f"[{hora}] {msg}", flush=True)
 
 
+# ============================================================
+# Wrappers de Nova Act que IGNORAN la validacion de tamano de pantalla.
+# En modo VISIBLE, la ventana de Chrome puede abrirse en un tamano distinto al
+# pedido (ej. 1283x643 en vez de 1600x813) y Nova Act aborta. Con
+# ignore_screen_dims_check=True seguimos igual (solo puede degradar precision).
+# Usar SIEMPRE act(nova, ...) y act_get(nova, ...) en vez de nova.act / nova.act_get.
+# ============================================================
+def act(nova, prompt):
+    return nova.act(prompt, ignore_screen_dims_check=True)
+
+
+def act_get(nova, prompt, schema):
+    return nova.act_get(prompt, schema=schema, ignore_screen_dims_check=True)
+
+
 def http(url, method="GET", body=None):
     headers = {
         "apikey": SUPABASE_KEY,
@@ -342,7 +357,7 @@ def registrar_bot_log(causa_id, rit, n_mov, n_aud, tiene_traslado, error=None):
 
 def cerrar_aviso(nova):
     try:
-        nova.act(
+        act(nova, 
             "Si hay una ventana emergente, aviso o popup abierto, cierralo con "
             "su boton de cerrar o la X. Si no hay ninguno, no hagas nada."
         )
@@ -369,25 +384,25 @@ def buscar_causa(nova, rit):
 
     for intento in range(2):
         if letra:
-            nova.act(
+            act(nova, 
                 f"Hay un pequenio menu desplegable llamado 'Rit' (esta entre el campo "
                 f"'9' del rut y el campo 'Rol'). Abrelo y selecciona la letra '{letra}'."
             )
-        nova.act(
+        act(nova, 
             f"En el campo de texto llamado 'Rol', haz click, borra lo que haya y "
             f"escribe el numero '{rol}'."
         )
-        nova.act(
+        act(nova, 
             f"En el campo de texto llamado 'Ano' (o 'Anio'), haz click, borra lo "
             f"que haya y escribe '{anio}'."
         )
-        nova.act(
+        act(nova, 
             "Haz click en el boton azul que dice 'Buscar' (esta al centro, junto "
             "al boton verde 'Limpiar')."
         )
         time.sleep(2 + intento)
 
-        result = nova.act_get(
+        result = act_get(nova, 
             f"Estas viendo la tabla de resultados de buscar el RIT '{rit}'. "
             "Si aparece una fila con esa causa, pon encontrada=true y extrae de la "
             "fila: rit, tribunal, caratulado, fecha_ingreso (columna Fecha Ingreso), "
@@ -408,7 +423,7 @@ def buscar_causa(nova, rit):
 def abrir_y_leer_detalle(nova, rit):
     """Entra al detalle de la causa (clic en la lupa) y lee movimientos + audiencias."""
     # 1. Abrir el detalle: click en la lupa/icono de la fila del RIT
-    nova.act(
+    act(nova, 
         f"En la tabla de resultados, en la fila de la causa RIT '{rit}', haz click "
         "en el icono de lupa (o boton para ver el detalle) que esta al inicio de la fila."
     )
@@ -416,7 +431,7 @@ def abrir_y_leer_detalle(nova, rit):
 
     # 2. Leer el HISTORIAL de movimientos/tramitacion
     #    (en el detalle suele haber una pestana 'Historia', 'Tramitacion' o similar)
-    nova.act(
+    act(nova, 
         "Si ves pestanas dentro del detalle, haz click en la que muestre el historial "
         "de tramitacion (puede llamarse 'Historia Causa', 'Historial', 'Tramitacion' "
         "o 'Movimientos'). Si no hay pestanas, no hagas nada."
@@ -425,7 +440,7 @@ def abrir_y_leer_detalle(nova, rit):
 
     detalle = DetalleCausa()
     try:
-        res_mov = nova.act_get(
+        res_mov = act_get(nova, 
             "Estas viendo el historial de tramitacion de la causa. Extrae TODOS los "
             "movimientos/tramites visibles de la tabla. Para cada uno: fecha, etapa, "
             "tramite (nombre del tramite/actuacion) y descripcion. Devuelve la lista "
@@ -439,13 +454,13 @@ def abrir_y_leer_detalle(nova, rit):
         log(f"   (no se pudieron leer movimientos) {str(e)[:100]}")
 
     # 3. Leer las AUDIENCIAS (otra pestana normalmente)
-    nova.act(
+    act(nova, 
         "Ahora, si hay una pestana de 'Audiencias' dentro del detalle, haz click en "
         "ella. Si no existe, no hagas nada."
     )
     time.sleep(2)
     try:
-        res_aud = nova.act_get(
+        res_aud = act_get(nova, 
             "Estas viendo las audiencias de la causa. Extrae TODAS las audiencias "
             "visibles: fecha, tipo (tipo de audiencia), sala y estado. Devuelve la "
             "lista completa en el campo 'audiencias'. Si no hay, devuelve lista vacia.",
@@ -458,7 +473,7 @@ def abrir_y_leer_detalle(nova, rit):
         log(f"   (no se pudieron leer audiencias) {str(e)[:100]}")
 
     # 4. Volver al listado para la siguiente causa (NO usar navegacion directa)
-    nova.act(
+    act(nova, 
         "Cierra el detalle de la causa y vuelve a la lista de resultados / buscador "
         "(usa el boton 'Volver', 'Cerrar' o la X del detalle, no el boton del navegador)."
     )
@@ -505,10 +520,10 @@ def main():
         cerrar_aviso(nova)
 
         log("Haciendo login con Clave Unica...")
-        nova.act("Haz click en 'Todos los servicios' y luego en 'Clave Unica'")
+        act(nova, "Haz click en 'Todos los servicios' y luego en 'Clave Unica'")
         log("Ingresando RUN y contrasena...")
-        nova.act(f"Ingresa el RUN '{PJUD_RUT}' en el campo de RUN")
-        nova.act(
+        act(nova, f"Ingresa el RUN '{PJUD_RUT}' en el campo de RUN")
+        act(nova, 
             f"Ingresa la contrasena '{PJUD_PASSWORD}' en el campo de contrasena "
             "y presiona el boton para continuar/autenticar"
         )
@@ -516,7 +531,7 @@ def main():
         cerrar_aviso(nova)
 
         try:
-            check = nova.act_get(
+            check = act_get(nova, 
                 "Responde si ya iniciaste sesion y ves el portal privado con el "
                 "menu del usuario (por ejemplo 'Mis Causas').",
                 schema={"type": "object", "properties": {"logueado": {"type": "boolean"}}}
@@ -532,7 +547,7 @@ def main():
         # OJO: en el menu lateral hay varias opciones que empiezan con "Mis..."
         # (Mis Causas, Mis Notificaciones, Mis Audiencias, Mi Estado Diario...).
         # Hay que ser MUY especifico para NO clickear "Mis Audiencias" por error.
-        nova.act(
+        act(nova, 
             "En el menu lateral izquierdo, busca la opcion cuyo texto sea EXACTAMENTE "
             "'Mis Causas'. NO hagas click en 'Mis Audiencias', ni 'Mis Notificaciones', "
             "ni 'Mi Estado Diario' — solo en 'Mis Causas'. Haz click ahi."
@@ -541,7 +556,7 @@ def main():
 
         # Verificar que realmente estamos en 'Mis Causas' (y no en Audiencias u otra)
         try:
-            check_pag = nova.act_get(
+            check_pag = act_get(nova, 
                 "Mira el titulo o encabezado de la pagina actual. Responde si estas en "
                 "la seccion 'Mis Causas' (que muestra pestanas de competencias como "
                 "Corte Suprema, Civil, Laboral, Familia, etc.).",
@@ -549,7 +564,7 @@ def main():
             )
             if check_pag.parsed_response and not check_pag.parsed_response.get("en_mis_causas", True):
                 log("   No se llego a 'Mis Causas', reintentando el click...")
-                nova.act(
+                act(nova, 
                     "Vuelve al menu lateral y haz click SOLO en el enlace 'Mis Causas' "
                     "(el primero de la lista, NO 'Mis Audiencias')."
                 )
@@ -558,7 +573,7 @@ def main():
             pass
 
         log("Seleccionando pestana Familia...")
-        nova.act(
+        act(nova, 
             "Dentro de 'Mis Causas', en la fila de pestanas de competencia (Corte "
             "Suprema, Corte Apelaciones, Civil, Laboral, Penal, Cobranza, Familia, "
             "Disciplinario), haz click en la pestana que dice 'Familia'."
@@ -566,7 +581,7 @@ def main():
         time.sleep(2)
 
         log("Activando filtros de busqueda...")
-        nova.act(
+        act(nova, 
             "Si hay un interruptor o boton que diga 'Filtros' y esta "
             "desactivado, haz click para activar los filtros de busqueda. "
             "Si ya esta activado, no hagas nada."
@@ -574,12 +589,12 @@ def main():
         time.sleep(1)
 
         log("Configurando filtros Tipo Causa y Estado en 'Todos'...")
-        nova.act(
+        act(nova, 
             "Abre el menu desplegable 'Tipo Causa' y haz click en el boton "
             "'Seleccionar Todos'. Luego CIERRA ese menu haciendo click fuera de el, "
             "en una zona vacia de la pagina."
         )
-        nova.act(
+        act(nova, 
             "Abre el menu desplegable 'Estado' y haz click en el boton "
             "'Seleccionar Todos'. Luego CIERRA ese menu haciendo click fuera de el, "
             "en una zona vacia de la pagina, de modo que la lista desplegable "
