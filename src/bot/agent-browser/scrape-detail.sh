@@ -310,7 +310,26 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 echo "$OUTPUT"
 
 # --- PASO 7: Volver a la lista (para permitir scrape de otra causa) ---
-log "  ↩️  Volviendo a la lista..."
-agent-browser --session "$SESSION" eval "window.history.back()" 2>/dev/null || true
+# IMPORTANTE: NO usar window.history.back() ni navigate directo — el portal OJV
+# pierde la sesion al navegar por historial/URL. En su lugar, click en el menu
+# interno "Mis Causas" (mismo patron que list-causas.sh y el bot Playwright).
+log "  ↩️  Volviendo a la lista (click en menu, no history.back)..."
+agent-browser --session "$SESSION" eval "
+  const links = document.querySelectorAll('a');
+  let clicked = false;
+  for (const link of links) {
+    const text = (link.textContent || '').trim();
+    if (text === 'Mis Causas' || text === 'Mis causas') {
+      link.click();
+      clicked = true;
+      break;
+    }
+  }
+  if (!clicked) {
+    const altLinks = document.querySelectorAll('a[href*=\"indexN\"], a[href*=\"mis_causas\"]');
+    if (altLinks.length > 0) { altLinks[0].click(); clicked = true; }
+  }
+  clicked;
+" 2>/dev/null || true
 agent-browser --session "$SESSION" wait --load networkidle 2>/dev/null || true
 sleep 3

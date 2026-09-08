@@ -138,13 +138,37 @@ export function detectTrasladoCurador(text: string): boolean {
 }
 
 /**
- * Parsea RIT del portal PJUD. Soporta prefijos de 1 a 3 letras:
- * "P-123-2024", "C-456-2024", "FA-78-2025".
+ * Prefijos de RIT válidos para la columna `causas.tipo`.
+ * FUENTE ÚNICA DE VERDAD: debe coincidir con el CHECK constraint de
+ * schema.sql / schema-tipo-fix.sql. Si se agrega un prefijo aquí, hay que
+ * ampliar también el CHECK en la BD (y viceversa).
+ *   P=Protección, C=Cumplimiento, F=Ordinario/Familia, V=Violencia intrafamiliar,
+ *   X=Exhortos/varios, Z=Otros, T=Tutela, FA=multi-letra, RIT genérico.
+ */
+export const TIPOS_RIT_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'Z', 'T', 'FA', 'RIT'] as const
+
+/**
+ * Parsea RIT del portal PJUD.
+ * Soporta prefijos de 1 a 3 letras: "P-123-2024", "C-456-2024", "FA-78-2025".
+ * (El regex de búsqueda de search.ts es más laxo — ^[A-Z]{0,3}-?\d+-\d{4}$ —
+ *  acepta RITs sin prefijo; aquí exigimos al menos una letra para poder derivar tipo.)
  */
 export function parseRIT(rit: string): { tipo: string; numero: string; año: string } | null {
   const match = rit.trim().match(/^([A-Z]{1,3})-(\d+)-(\d{4})$/i)
   if (!match) return null
   return { tipo: match[1].toUpperCase(), numero: match[2], año: match[3] }
+}
+
+/**
+ * Deriva el `tipo` de causa desde el RIT, VALIDANDO contra la lista blanca
+ * permitida por el CHECK de la BD. Retorna null si el RIT no parsea o si el
+ * prefijo no está permitido (evita violar el constraint causas_tipo_check).
+ * Usar siempre esto antes de escribir `tipo` en la tabla `causas`.
+ */
+export function inferirTipoRIT(rit: string): string | null {
+  const parsed = parseRIT(rit)
+  if (!parsed) return null
+  return (TIPOS_RIT_VALIDOS as readonly string[]).includes(parsed.tipo) ? parsed.tipo : null
 }
 
 /**

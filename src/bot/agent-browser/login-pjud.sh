@@ -209,7 +209,8 @@ login_attempt() {
   " 2>/dev/null || true
   sleep 1
 
-  # Usar type para simular escritura humana
+  # Marcar el input de RUN con un atributo estable (SIN inyectar el valor en el JS)
+  # para luego usar `type`, que simula escritura humana real y no expone datos en el eval.
   agent-browser --session "$SESSION" eval "
     const selectors = ['input[name=\"run\"]', 'input[id=\"run\"]', 'input[name=\"rut\"]', 'input[id=\"rut\"]', 'input[type=\"text\"]'];
     let input = null;
@@ -217,13 +218,14 @@ login_attempt() {
       input = document.querySelector(sel);
       if (input) break;
     }
-    if (input) {
-      input.value = '${PJUD_RUT}';
-      input.dispatchEvent(new Event('input', {bubbles: true}));
-      input.dispatchEvent(new Event('change', {bubbles: true}));
-    }
+    if (input) { input.setAttribute('data-ab-run', '1'); input.focus(); input.value = ''; }
     !!input;
   " 2>/dev/null || true
+  sleep 1
+
+  # El valor del RUT se pasa como ARGUMENTO a `type` (no se interpola en el eval).
+  # `type` dispara eventos reales de teclado, más confiable con formularios de framework.
+  agent-browser --session "$SESSION" type "[data-ab-run]" "$PJUD_RUT" 2>/dev/null || true
   sleep 2
 
   # PASO 7: Click en Continuar (si hay paso intermedio)
@@ -242,6 +244,10 @@ login_attempt() {
   sleep 3
 
   # PASO 8: Ingresar contrasena
+  # SEGURIDAD: la contraseña NUNCA se interpola dentro del string de JS del `eval`
+  # (rompería con caracteres como ' \" $ \\ y quedaría expuesta en logs de proceso).
+  # En su lugar marcamos el input con un atributo y pasamos el secreto como
+  # ARGUMENTO a `type`, que lo maneja de forma segura y simula tecleo humano.
   log "  8️⃣  Ingresando contrasena..."
   agent-browser --session "$SESSION" eval "
     const selectors = ['input[type=\"password\"]', 'input[name=\"password\"]', 'input[name=\"clave\"]', 'input[id=\"password\"]'];
@@ -251,15 +257,25 @@ login_attempt() {
       if (input && input.offsetParent !== null) break;
       input = null;
     }
-    if (input) {
-      input.focus();
-      input.value = '${PJUD_PASSWORD}';
-      input.dispatchEvent(new Event('input', {bubbles: true}));
-      input.dispatchEvent(new Event('change', {bubbles: true}));
-    }
+    if (input) { input.setAttribute('data-ab-pass', '1'); input.focus(); input.value = ''; }
     !!input;
   " 2>/dev/null || true
+  sleep 1
+
+  agent-browser --session "$SESSION" type "[data-ab-pass]" "$PJUD_PASSWORD" 2>/dev/null || true
   sleep 2
+
+  # Verificar que el campo NO quedó vacío (el `type` puede fallar en silencio por
+  # un re-render). Solo chequeamos longitud > 0, sin exponer el valor.
+  PASS_OK=$(agent-browser --session "$SESSION" eval "
+    const input = document.querySelector('[data-ab-pass]');
+    (input && input.value && input.value.length > 0) ? 'ok' : 'empty';
+  " 2>/dev/null || echo "empty")
+  if [ "$PASS_OK" != "ok" ]; then
+    log "  ⚠️  Campo de contrasena quedó vacío tras type (posible re-render). Reintentando..."
+    agent-browser --session "$SESSION" type "[data-ab-pass]" "$PJUD_PASSWORD" 2>/dev/null || true
+    sleep 2
+  fi
 
   # PASO 9: Submit
   log "  9️⃣  Enviando formulario..."

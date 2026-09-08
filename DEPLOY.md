@@ -30,7 +30,10 @@ O manualmente:
 |----------|-------|
 | `NEXT_PUBLIC_SUPABASE_URL` | `https://cuwuyqpxaibbqjrvamjb.supabase.co` |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (la anon key del paso 2) |
-| `SUPABASE_SERVICE_ROLE_KEY` | `eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImN1d3V5cXB4YWliYnFqcnZhbWpiIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MTQ0MDU5MSwiZXhwIjoyMDk3MDE2NTkxfQ.ph3_VmsRrCANVnPPwHXYFbSxf2Hwyrz1yfp9cGj7pts` |
+| `SUPABASE_SERVICE_ROLE_KEY` | (tu service role key — Settings → API → `service_role`) |
+
+> ⚠️ **NUNCA** pegues la `service_role` key en este archivo ni en ningún archivo versionado.
+> Es la llave maestra de tu base de datos. Va solo en las Environment Variables de Vercel.
 
 5. Click **Deploy**
 6. ¡Listo! Tu app estará en una URL tipo: `causaspro-xxxxx.vercel.app`
@@ -41,3 +44,43 @@ O manualmente:
 2. Arrastra tu Excel de causas
 3. Espera a que procese
 4. ¡Verás tu dashboard con todas las causas rankeadas por urgencia!
+
+
+---
+
+## 🤖 Ejecutar el Bot PJUD en Windows
+
+Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key), por eso
+**NO se versionan** (están en `.gitignore`). Se usan plantillas `.bat.example`:
+
+1. Copia la plantilla y quítale el `.example`:
+   ```cmd
+   copy ejecutar-bot.bat.example ejecutar-bot.bat
+   copy ejecutar-todo-el-dia.bat.example ejecutar-todo-el-dia.bat
+   ```
+2. Abre el `.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
+   - `PJUD_RUT` → tu RUT (ej: `17692174-9`)
+   - `PJUD_PASSWORD` → tu contraseña de Clave Única
+   - `SUPABASE_SERVICE_ROLE_KEY` → tu service role key (Supabase → Settings → API)
+3. Preparar el proyecto (una vez):
+   ```cmd
+   npm install
+   npx playwright install chromium
+   ```
+4. Ejecutar:
+   - **Una corrida:** doble clic en `ejecutar-bot.bat`
+   - **Todo el día (cada 1 h):** doble clic en `ejecutar-todo-el-dia.bat`
+   - **Prueba visible (1 causa):** `npm run bot:test`
+
+### 🔴 IMPORTANTE — Rotar las keys expuestas
+
+Versiones anteriores de estos `.bat` (y del `DEPLOY.md`) tenían la **service role key**
+escrita en texto plano y quedaron en el historial de git. Por seguridad, **rota la key**:
+
+1. Supabase → Settings → API → **Reset** de la `service_role` key (genera una nueva).
+2. Actualiza el nuevo valor en: tus `.bat` locales, las env vars de Vercel y los
+   Secrets de GitHub Actions.
+3. La key vieja queda invalidada — aunque siga en el historial, ya no sirve.
+
+> La contraseña de Clave Única no estaba en el repo (era un placeholder `CAMBIAR_*`),
+> pero igual conviene no reutilizarla en archivos versionados.

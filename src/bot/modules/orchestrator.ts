@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log } from '../utils'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT } from '../utils'
 import { createClient } from '@supabase/supabase-js'
 
 /**
@@ -275,7 +275,7 @@ async function runListadoMasivo(
             rit: pc.rit,
             caratulado: pc.caratulado || null,
             estado: pc.estado_procesal || null,
-            tipo: pc.rit.startsWith('P') ? 'P' : pc.rit.startsWith('X') ? 'X' : null,
+            tipo: inferirTipoRIT(pc.rit),
             fecha_apertura: parseDateCL(pc.fecha_ingreso),
             notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
           })
