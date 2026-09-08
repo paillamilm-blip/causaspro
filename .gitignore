@@ -2,3 +2,8 @@ node_modules
 .next
 .env.local
 .env
+
+# Scripts .bat con secretos (RUT, contraseña PJUD, service role key).
+# NO versionar: contienen credenciales. Usar los .bat.example como plantilla.
+*.bat
+!*.bat.example
