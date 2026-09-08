@@ -1,75 +1,53 @@
 # ============================================================
-# CausasPro Bot PJUD - Ejecución automática
-# Se ejecuta 2 veces al día (10AM y 4PM hora Chile)
+# CausasPro Bot PJUD (Nova Act) - Ejecución automática
 # ============================================================
 
 name: 🤖 Bot PJUD - Scraping automático
 
 on:
-  # PRIMERA CARGA: cada 2 horas en la noche, descansa 7AM-1:30PM, luego normal
   schedule:
-    - cron: '0 0 * * *'    # 8:00 PM Chile
-    - cron: '0 2 * * *'    # 10:00 PM Chile
-    - cron: '0 4 * * *'    # 12:00 AM Chile
-    - cron: '0 6 * * *'    # 2:00 AM Chile
-    - cron: '0 8 * * *'    # 4:00 AM Chile
-    - cron: '0 10 * * *'   # 6:00 AM Chile (última - después descansa)
-    - cron: '30 17 * * *'  # 1:30 PM Chile (retoma horario normal)
-    - cron: '30 19 * * *'  # 3:30 PM Chile
-    - cron: '30 21 * * *'  # 5:30 PM Chile
-  
+    - cron: '30 13 * * 1-5'  # ~10:00 AM Chile (L-V)
+    - cron: '30 19 * * 1-5'  # ~4:00 PM Chile (L-V)
+
   # También se puede ejecutar manualmente
   workflow_dispatch:
     inputs:
-      max_causas:
-        description: 'Máximo de causas a procesar'
+      limite_causas:
+        description: 'Máximo de causas a revisar (0 = todas)'
         required: false
-        default: '25'
-      mode:
-        description: 'Modo de ejecución'
-        required: false
-        default: 'normal'
-        type: choice
-        options:
-          - normal
-          - urgent_only
-          - test_single
+        default: '0'
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 60  # Max 1 hora por ejecución
-    
+    timeout-minutes: 120
+
     steps:
       - name: 📥 Checkout
         uses: actions/checkout@v4
-      
-      - name: 🟢 Setup Node.js
-        uses: actions/setup-node@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
         with:
-          node-version: '22'
-      
+          python-version: '3.11'
+
       - name: 📦 Install dependencies
-        run: npm install
-      
-      - name: 🎭 Install Playwright
-        run: npx playwright install chromium --with-deps
-      
+        run: pip install nova-act pydantic
+
       - name: 🤖 Run Bot
         env:
           PJUD_RUT: ${{ secrets.PJUD_RUT }}
           PJUD_PASSWORD: ${{ secrets.PJUD_PASSWORD }}
           NEXT_PUBLIC_SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          BOT_MAX_CAUSAS: ${{ github.event.inputs.max_causas || '25' }}
-          BOT_MODE: ${{ github.event.inputs.mode || 'normal' }}
-          SKIP_HOUR_CHECK: '1'
-        run: npx tsx src/bot/index.ts
-      
+          NOVA_ACT_API_KEY: ${{ secrets.NOVA_ACT_API_KEY }}
+          LIMITE_CAUSAS: ${{ github.event.inputs.limite_causas || '0' }}
+        run: python bot/bot_pjud.py
+
       - name: 📸 Upload screenshots on failure
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: bot-error-screenshots
-          path: /tmp/bot_error_*.png
+          path: error_*.png
           retention-days: 7

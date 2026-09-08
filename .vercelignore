@@ -1,4 +1,4 @@
-src/bot/
+bot/
 src/email/
 ejecutar-bot.bat
 ejecutar-todo-el-dia.bat

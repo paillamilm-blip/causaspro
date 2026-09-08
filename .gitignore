@@ -7,3 +7,10 @@ node_modules
 # NO versionar: contienen credenciales. Usar los .bat.example como plantilla.
 *.bat
 !*.bat.example
+
+
+# Python (bot Nova Act)
+__pycache__/
+*.pyc
+# Capturas de error del bot (se generan al correr)
+error_*.png

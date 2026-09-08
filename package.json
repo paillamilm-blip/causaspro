@@ -6,9 +6,6 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "bot": "tsx src/bot/index.ts",
-    "bot:test": "BOT_MODE=test tsx src/bot/index.ts",
-    "bot:urgent": "BOT_MODE=urgent tsx src/bot/index.ts",
     "email": "tsx src/email/index.ts"
   },
   "dependencies": {
@@ -17,7 +14,6 @@
     "react-dom": "^18.3.0",
     "@supabase/supabase-js": "^2.45.0",
     "xlsx": "^0.18.5",
-    "playwright": "^1.44.0",
     "imapflow": "^1.0.160"
   },
   "devDependencies": {
