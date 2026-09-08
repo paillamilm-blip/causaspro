@@ -97,6 +97,9 @@ PJUD_PASSWORD = os.environ.get("PJUD_PASSWORD", "")
 SUPABASE_URL = os.environ.get("NEXT_PUBLIC_SUPABASE_URL", "").rstrip("/")
 SUPABASE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 LIMITE = int(os.environ.get("LIMITE_CAUSAS", "0"))
+# BOT_HEADLESS=0 → navegador VISIBLE (para depurar y ver qué hace el bot)
+# BOT_HEADLESS=1 → navegador invisible (para produccion / correr en segundo plano)
+HEADLESS = os.environ.get("BOT_HEADLESS", "1") != "0"
 PORTAL_URL = "https://oficinajudicialvirtual.pjud.cl/home/index.php"
 
 
@@ -495,7 +498,8 @@ def main():
     con_error = 0
     urgentes = []
 
-    with NovaAct(starting_page=PORTAL_URL, headless=True,
+    log(f"   Modo navegador: {'VISIBLE' if not HEADLESS else 'invisible (headless)'}")
+    with NovaAct(starting_page=PORTAL_URL, headless=HEADLESS,
                  screen_width=1600, screen_height=813) as nova:
         log("Cerrando aviso del portal...")
         cerrar_aviso(nova)
@@ -525,10 +529,40 @@ def main():
             pass
 
         log("Navegando a Mis Causas...")
-        nova.act("Haz click en 'Mis Causas' en el menu")
+        # OJO: en el menu lateral hay varias opciones que empiezan con "Mis..."
+        # (Mis Causas, Mis Notificaciones, Mis Audiencias, Mi Estado Diario...).
+        # Hay que ser MUY especifico para NO clickear "Mis Audiencias" por error.
+        nova.act(
+            "En el menu lateral izquierdo, busca la opcion cuyo texto sea EXACTAMENTE "
+            "'Mis Causas'. NO hagas click en 'Mis Audiencias', ni 'Mis Notificaciones', "
+            "ni 'Mi Estado Diario' — solo en 'Mis Causas'. Haz click ahi."
+        )
+        time.sleep(2)
+
+        # Verificar que realmente estamos en 'Mis Causas' (y no en Audiencias u otra)
+        try:
+            check_pag = nova.act_get(
+                "Mira el titulo o encabezado de la pagina actual. Responde si estas en "
+                "la seccion 'Mis Causas' (que muestra pestanas de competencias como "
+                "Corte Suprema, Civil, Laboral, Familia, etc.).",
+                schema={"type": "object", "properties": {"en_mis_causas": {"type": "boolean"}}}
+            )
+            if check_pag.parsed_response and not check_pag.parsed_response.get("en_mis_causas", True):
+                log("   No se llego a 'Mis Causas', reintentando el click...")
+                nova.act(
+                    "Vuelve al menu lateral y haz click SOLO en el enlace 'Mis Causas' "
+                    "(el primero de la lista, NO 'Mis Audiencias')."
+                )
+                time.sleep(2)
+        except Exception:
+            pass
 
         log("Seleccionando pestana Familia...")
-        nova.act("Haz click en la pestana que dice 'Familia'")
+        nova.act(
+            "Dentro de 'Mis Causas', en la fila de pestanas de competencia (Corte "
+            "Suprema, Corte Apelaciones, Civil, Laboral, Penal, Cobranza, Familia, "
+            "Disciplinario), haz click en la pestana que dice 'Familia'."
+        )
         time.sleep(2)
 
         log("Activando filtros de busqueda...")
