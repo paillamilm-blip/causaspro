@@ -7,10 +7,10 @@ import { chromium, Browser, BrowserContext, Page } from 'playwright'
 import type { BotConfig, BotRunStatus, CausaScrapedData, ScrapeSessionResult } from '../types'
 import { DEFAULT_CONFIG } from '../config'
 import { createStealthContext, loginOJV, logoutOJV, isSessionActive } from './login'
-import { navigateToConsulta, searchByYear, navigateToCausaDetail, CausaFoundInPortal } from './search'
+import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDetail, CausaFoundInPortal } from './search'
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT } from '../utils'
 import { createClient } from '@supabase/supabase-js'
 
@@ -84,171 +84,22 @@ export async function runBotSession(
       return { status, data: results }
     }
     
-    // 4. Listar causas por año (configurable via BOT_YEARS env var o cfg.years)
-    log('info', 'Listando causas del portal por año...')
-    const allPortalCausas: CausaFoundInPortal[] = []
-    
-    const years = process.env.BOT_YEARS ? process.env.BOT_YEARS.split(',').map((y: string) => y.trim()) : cfg.years
-    for (const year of years) {
-      const causasYear = await searchByYear(page, year)
-      allPortalCausas.push(...causasYear)
-      
-      if (allPortalCausas.length >= cfg.maxCausasPorSesion) {
-        log('info', `  Alcanzado límite de ${cfg.maxCausasPorSesion} causas`)
-        break
-      }
-      
-      await sleep(3000)
+    // 4-6. Buscar y scrapear según el MODO configurado.
+    //   BOT_SEARCH_MODE=rit    (DEFAULT) → busca por RIT individual sobre las causas
+    //                                       ya cargadas en la BD. Evita el CAPTCHA que
+    //                                       dispara el listado masivo (~17.500 registros).
+    //   BOT_SEARCH_MODE=listado          → flujo antiguo: lista todo el portal por año.
+    const searchMode = (process.env.BOT_SEARCH_MODE || 'rit').toLowerCase()
+
+    if (searchMode === 'listado') {
+      await runListadoMasivo(page, cfg, status, results)
+    } else {
+      await runBusquedaPorRit(page, cfg, status, results)
     }
-    
-    log('info', `📋 ${allPortalCausas.length} causas encontradas en el portal`)
-    status.total_causas = allPortalCausas.length
-    
-    if (allPortalCausas.length === 0) {
-      log('warn', 'No se encontraron causas en el portal')
-      status.detenido_por = 'completado'
-      return { status, data: results }
-    }
-    
-    // 5. Sincronizar con Supabase (actualizar datos básicos de la tabla)
-    log('info', 'Actualizando datos básicos en Supabase...')
-    const supabase = initSupabase()
-    
-    for (const pc of allPortalCausas) {
-      try {
-        // Buscar si existe en la base de datos
-        const { data: existing } = await supabase
-          .from('causas')
-          .select('id')
-          .eq('rit', pc.rit)
-          .limit(1)
-        
-        if (existing && existing.length > 0) {
-          // Actualizar datos del portal
-          await supabase
-            .from('causas')
-            .update({
-              caratulado: pc.caratulado || undefined,
-              estado: pc.estado_procesal || undefined,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('rit', pc.rit)
-          
-          status.exitosas++
-        } else {
-          // Causa nueva (está en el portal pero no en la BD) → crearla.
-          // Derivar el tipo desde el prefijo del RIT (P, C, F, V, X, FA, ...)
-          // validando contra la lista blanca del CHECK (inferirTipoRIT devuelve
-          // null si el prefijo no está permitido, evitando violar el constraint).
-          await supabase
-            .from('causas')
-            .insert({
-              rit: pc.rit,
-              caratulado: pc.caratulado || null,
-              estado: pc.estado_procesal || null,
-              tipo: inferirTipoRIT(pc.rit),
-              fecha_apertura: parseDateCL(pc.fecha_ingreso),
-              notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
-            })
-          
-          status.exitosas++
-          log('info', `  + Nueva causa: ${pc.rit}`)
-        }
-        
-        status.procesadas++
-      } catch (err: any) {
-        status.fallidas++
-        status.procesadas++
-        status.errores.push(`${pc.rit}: ${err.message}`)
-      }
-    }
-    
-    // 6. Entrar a detalles de las primeras N causas (para movimientos/audiencias)
-    // BOT_MAX_DETAILS controls detail-scrape limit (separate from BOT_MAX_CAUSAS for discovery)
-    const envMaxDetails = process.env.BOT_MAX_DETAILS ? parseInt(process.env.BOT_MAX_DETAILS) : undefined
-    if (envMaxDetails && envMaxDetails > 0) {
-      cfg.maxDetailsPorSesion = envMaxDetails
-    }
-    const maxDetails = cfg.maxDetailsPorSesion
-    log('info', `\nExtrayendo detalles de las primeras ${maxDetails} causas...`)
-    
-    // Group causas by year so we can re-search the correct year after navigating back
-    const causasByYear = new Map<string, CausaFoundInPortal[]>()
-    for (const pc of allPortalCausas) {
-      // Extract year from RIT (last 4 digits, e.g. C-4875-2025 -> 2025)
-      const yearMatch = pc.rit.match(/(\d{4})$/)
-      const causaYear = yearMatch ? yearMatch[1] : years[0]
-      if (!causasByYear.has(causaYear)) causasByYear.set(causaYear, [])
-      causasByYear.get(causaYear)!.push(pc)
-    }
-    
-    let detailCount = 0
-    for (const [causaYear, causasInYear] of causasByYear) {
-      if (detailCount >= maxDetails) break
-      
-      // Before scraping details for this year, re-run the search so the results table is populated
-      log('info', `  Re-buscando year ${causaYear} para navegar detalles...`)
-      await searchByYear(page, causaYear)
-      await sleep(2000)
-      
-      for (const pc of causasInYear) {
-        if (detailCount >= maxDetails) break
-        detailCount++
-        
-        log('info', `  [${detailCount}/${maxDetails}] Detalle de ${pc.rit}...`)
-        
-        try {
-          const opened = await navigateToCausaDetail(page, pc.rit)
-          
-          if (opened) {
-            // Extraer datos del detalle
-            const { data: causaDb } = await supabase
-              .from('causas')
-              .select('id')
-              .eq('rit', pc.rit)
-              .single()
-            
-            if (causaDb) {
-              const scrapedData = await scrapeCausaCompleta(page, { id: causaDb.id, rit: pc.rit })
-              const analysis = analyzeCausaUrgency(scrapedData)
-              await saveCausaData(scrapedData, analysis)
-              results.push(scrapedData)
-              await markCausaScraped(causaDb.id)
-              
-              if (analysis.requiere_accion_inmediata) {
-                log('warn', `  ${generateAlertSummary(analysis)}`)
-              }
-            }
-          }
-          
-          // Safe navigation back to list (page.goBack() loses session)
-          // Then re-search the current year so the next detail can be found in the table
-          await navigateToConsulta(page)
-          await sleep(2000)
-          await searchByYear(page, causaYear)
-          await sleep(2000)
-          
-        } catch (err: any) {
-          log('warn', `  Error en detalle ${pc.rit}: ${err.message}`)
-          // Try to recover navigation state for next iteration
-          try {
-            await navigateToConsulta(page)
-            await sleep(2000)
-            await searchByYear(page, causaYear)
-            await sleep(2000)
-          } catch {
-            log('warn', '  No se pudo recuperar la navegacion, continuando...')
-          }
-        }
-        
-        // Delay entre detalles
-        await humanDelay(cfg.delayMin, cfg.delayMax)
-      }
-    }
-    
+
     // 7. Logout
     if (page) await logoutOJV(page)
-    status.detenido_por = 'completado'
+    if (!status.detenido_por) status.detenido_por = 'completado'
     
   } catch (error: any) {
     log('error', `Error crítico: ${error.message}`)
@@ -272,6 +123,248 @@ export async function runBotSession(
   }
   
   return { status, data: results }
+}
+
+// ============================================================
+// FLUJO POR RIT (DEFAULT) — anti-CAPTCHA
+// Lee las causas YA CARGADAS en la BD y busca cada una por su RIT exacto
+// (Rit tipo + Rol número + Año), en vez de listar todo el portal.
+// ============================================================
+async function runBusquedaPorRit(
+  page: Page,
+  cfg: BotConfig,
+  status: BotRunStatus,
+  results: CausaScrapedData[]
+): Promise<void> {
+  // Límite de causas por sesión (anti-detección). BOT_MAX_CAUSAS lo puede ajustar.
+  const envMax = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
+  const maxCausas = envMax && envMax > 0 ? envMax : cfg.maxCausasPorSesion
+
+  // Leer las causas cargadas en la BD, priorizando las menos actualizadas.
+  const causas = await getCausasToScrape(maxCausas, cfg.priorizarUrgentes)
+  status.total_causas = causas.length
+  log('info', `📋 ${causas.length} causas cargadas a revisar (modo RIT, máx ${maxCausas})`)
+
+  if (causas.length === 0) {
+    log('warn', 'No hay causas cargadas en la BD para revisar. Cargá causas por Excel primero.')
+    status.detenido_por = 'completado'
+    return
+  }
+
+  for (const causa of causas) {
+    status.procesadas++
+    log('info', `  [${status.procesadas}/${causas.length}] ${causa.rit}...`)
+
+    try {
+      // Buscar la causa por su RIT exacto (1 resultado, sin listado masivo)
+      const encontradas = await searchByRitExacto(page, causa.rit)
+
+      if (encontradas.length === 0) {
+        status.fallidas++
+        status.errores.push(`${causa.rit}: no encontrada en el portal`)
+        // Volver al formulario limpio para la siguiente búsqueda
+        await navigateToConsulta(page)
+        await sleep(1500)
+        continue
+      }
+
+      // Abrir el detalle y scrapear
+      const opened = await navigateToCausaDetail(page, causa.rit)
+      if (opened) {
+        const scrapedData = await scrapeCausaCompleta(page, { id: causa.id, rit: causa.rit })
+        const analysis = analyzeCausaUrgency(scrapedData)
+        await saveCausaData(scrapedData, analysis)
+        results.push(scrapedData)
+        await markCausaScraped(causa.id)
+        status.exitosas++
+
+        if (analysis.requiere_accion_inmediata) {
+          log('warn', `  ${generateAlertSummary(analysis)}`)
+        }
+      } else {
+        status.fallidas++
+        status.errores.push(`${causa.rit}: no se pudo abrir el detalle`)
+      }
+
+      // Volver al formulario para la siguiente causa (no history.back — pierde sesión)
+      await navigateToConsulta(page)
+      await sleep(1500)
+
+    } catch (err: any) {
+      status.fallidas++
+      status.errores.push(`${causa.rit}: ${err.message}`)
+      log('warn', `  Error en ${causa.rit}: ${err.message}`)
+      // Intentar recuperar la navegación para la siguiente causa
+      try {
+        await navigateToConsulta(page)
+        await sleep(1500)
+      } catch {
+        log('warn', '  No se pudo recuperar la navegación, continuando...')
+      }
+    }
+
+    // Delay humanizado entre causas (anti-detección)
+    await humanDelay(cfg.delayMin, cfg.delayMax)
+  }
+
+  status.detenido_por = 'completado'
+}
+
+// ============================================================
+// FLUJO LISTADO MASIVO (legacy, BOT_SEARCH_MODE=listado)
+// Lista TODO el portal por año y crea causas nuevas. ⚠️ Puede disparar CAPTCHA
+// por el volumen (~17.500 registros). Se mantiene como opción/fallback.
+// ============================================================
+async function runListadoMasivo(
+  page: Page,
+  cfg: BotConfig,
+  status: BotRunStatus,
+  results: CausaScrapedData[]
+): Promise<void> {
+  log('info', 'Listando causas del portal por año (modo listado masivo)...')
+  const allPortalCausas: CausaFoundInPortal[] = []
+
+  const years = process.env.BOT_YEARS ? process.env.BOT_YEARS.split(',').map((y: string) => y.trim()) : cfg.years
+  for (const year of years) {
+    const causasYear = await searchByYear(page, year)
+    allPortalCausas.push(...causasYear)
+
+    if (allPortalCausas.length >= cfg.maxCausasPorSesion) {
+      log('info', `  Alcanzado límite de ${cfg.maxCausasPorSesion} causas`)
+      break
+    }
+
+    await sleep(3000)
+  }
+
+  log('info', `📋 ${allPortalCausas.length} causas encontradas en el portal`)
+  status.total_causas = allPortalCausas.length
+
+  if (allPortalCausas.length === 0) {
+    log('warn', 'No se encontraron causas en el portal')
+    status.detenido_por = 'completado'
+    return
+  }
+
+  // Sincronizar datos básicos con Supabase
+  log('info', 'Actualizando datos básicos en Supabase...')
+  const supabase = initSupabase()
+
+  for (const pc of allPortalCausas) {
+    try {
+      const { data: existing } = await supabase
+        .from('causas')
+        .select('id')
+        .eq('rit', pc.rit)
+        .limit(1)
+
+      if (existing && existing.length > 0) {
+        await supabase
+          .from('causas')
+          .update({
+            caratulado: pc.caratulado || undefined,
+            estado: pc.estado_procesal || undefined,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('rit', pc.rit)
+        status.exitosas++
+      } else {
+        await supabase
+          .from('causas')
+          .insert({
+            rit: pc.rit,
+            caratulado: pc.caratulado || null,
+            estado: pc.estado_procesal || null,
+            tipo: inferirTipoRIT(pc.rit),
+            fecha_apertura: parseDateCL(pc.fecha_ingreso),
+            notas: `Tribunal: ${pc.tribunal}. Institución: ${pc.institucion}`,
+          })
+        status.exitosas++
+        log('info', `  + Nueva causa: ${pc.rit}`)
+      }
+      status.procesadas++
+    } catch (err: any) {
+      status.fallidas++
+      status.procesadas++
+      status.errores.push(`${pc.rit}: ${err.message}`)
+    }
+  }
+
+  // Entrar a detalles de las primeras N causas
+  const envMaxDetails = process.env.BOT_MAX_DETAILS ? parseInt(process.env.BOT_MAX_DETAILS) : undefined
+  if (envMaxDetails && envMaxDetails > 0) {
+    cfg.maxDetailsPorSesion = envMaxDetails
+  }
+  const maxDetails = cfg.maxDetailsPorSesion
+  log('info', `\nExtrayendo detalles de las primeras ${maxDetails} causas...`)
+
+  const causasByYear = new Map<string, CausaFoundInPortal[]>()
+  for (const pc of allPortalCausas) {
+    const yearMatch = pc.rit.match(/(\d{4})$/)
+    const causaYear = yearMatch ? yearMatch[1] : years[0]
+    if (!causasByYear.has(causaYear)) causasByYear.set(causaYear, [])
+    causasByYear.get(causaYear)!.push(pc)
+  }
+
+  let detailCount = 0
+  for (const [causaYear, causasInYear] of causasByYear) {
+    if (detailCount >= maxDetails) break
+
+    log('info', `  Re-buscando year ${causaYear} para navegar detalles...`)
+    await searchByYear(page, causaYear)
+    await sleep(2000)
+
+    for (const pc of causasInYear) {
+      if (detailCount >= maxDetails) break
+      detailCount++
+
+      log('info', `  [${detailCount}/${maxDetails}] Detalle de ${pc.rit}...`)
+
+      try {
+        const opened = await navigateToCausaDetail(page, pc.rit)
+
+        if (opened) {
+          const { data: causaDb } = await supabase
+            .from('causas')
+            .select('id')
+            .eq('rit', pc.rit)
+            .single()
+
+          if (causaDb) {
+            const scrapedData = await scrapeCausaCompleta(page, { id: causaDb.id, rit: pc.rit })
+            const analysis = analyzeCausaUrgency(scrapedData)
+            await saveCausaData(scrapedData, analysis)
+            results.push(scrapedData)
+            await markCausaScraped(causaDb.id)
+
+            if (analysis.requiere_accion_inmediata) {
+              log('warn', `  ${generateAlertSummary(analysis)}`)
+            }
+          }
+        }
+
+        await navigateToConsulta(page)
+        await sleep(2000)
+        await searchByYear(page, causaYear)
+        await sleep(2000)
+
+      } catch (err: any) {
+        log('warn', `  Error en detalle ${pc.rit}: ${err.message}`)
+        try {
+          await navigateToConsulta(page)
+          await sleep(2000)
+          await searchByYear(page, causaYear)
+          await sleep(2000)
+        } catch {
+          log('warn', '  No se pudo recuperar la navegacion, continuando...')
+        }
+      }
+
+      await humanDelay(cfg.delayMin, cfg.delayMax)
+    }
+  }
+
+  status.detenido_por = 'completado'
 }
 
 /**
