@@ -30,15 +30,53 @@ PJUD_PASSWORD=tu_contraseña
 
 ### 3. Ejecutar
 ```bash
-# Normal (25 causas)
+# Normal (hasta 100 causas cargadas por sesión, invisible)
 npm run bot
 
 # Solo urgentes (10 causas, más rápido)
 npm run bot:urgent
 
-# Test (1 causa, visible)
+# Test (5 causas, navegador VISIBLE) — recomendado para la primera prueba
 npm run bot:test
 ```
+
+> Los modos `test` y `urgent` usan `cross-env` para funcionar igual en Windows,
+> Mac y Linux.
+
+---
+
+## 🪟 Cómo correrlo en Windows (paso a paso)
+
+1. **Instalar dependencias** (una sola vez):
+   ```cmd
+   npm install
+   npx playwright install chromium
+   ```
+2. **Crear tu archivo de credenciales** a partir de la plantilla:
+   ```cmd
+   copy correr-bot-playwright.bat.example correr-bot-playwright.bat
+   ```
+3. Abre `correr-bot-playwright.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
+   - `PJUD_RUT` → tu RUT (ej: `17692174-9`)
+   - `PJUD_PASSWORD` → tu contraseña de Clave Única
+   - `SUPABASE_SERVICE_ROLE_KEY` → tu service role key (Supabase → Settings → API)
+4. **Doble clic** en `correr-bot-playwright.bat` → arranca en modo prueba (5 causas,
+   navegador visible). Verás el navegador hacer login, buscar y scrapear.
+
+> ⚠️ **Requisito para que el modo prueba scrapee algo:** el bot revisa las causas
+> que YA tienes cargadas en la base de datos (tabla `causas`). Si la BD está vacía,
+> el bot hará login pero terminará sin scrapear (logueará "No hay causas cargadas").
+> Primero sube tu Excel de causas desde la app. (Alternativa para probar contra todo
+> el portal sin causas cargadas: agrega `set BOT_SEARCH_MODE=listado` al `.bat`, pero
+> ojo que el listado masivo puede disparar el CAPTCHA — ver bitácora de errores.)
+
+> ⚠️ El `.bat` con tus claves **NO se sube a git** (está en `.gitignore`). Solo se
+> versiona el `.bat.example` sin secretos.
+
+### Requisito de base de datos
+Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
+- `schema.sql` (tablas base: causas, audiencias, ...)
+- `schema-bot.sql` (tablas `movimientos`, `bot_logs`, `bot_runs` + vista de urgencia)
 
 ---
 
