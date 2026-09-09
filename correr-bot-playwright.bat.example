@@ -1,0 +1,29 @@
+@echo off
+REM ============================================================
+REM CausasPro Bot PJUD (Playwright) - PLANTILLA para Windows
+REM
+REM COMO USAR:
+REM   1. Copia este archivo como "correr-bot-playwright.bat"
+REM   2. Reemplaza los valores CAMBIAR_* con tus datos reales
+REM   3. NUNCA subas el .bat con secretos a git (esta en .gitignore)
+REM
+REM PRIMERA VEZ (instalar dependencias, una sola vez):
+REM   npm install
+REM   npx playwright install chromium
+REM ============================================================
+
+cd /d "%~dp0"
+
+set PJUD_RUT=CAMBIAR_POR_TU_RUT
+set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
+set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
+set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
+
+REM Ignorar el chequeo de horario laboral (para poder probar a cualquier hora)
+set SKIP_HOUR_CHECK=1
+
+REM MODO DE PRUEBA: solo 5 causas, navegador VISIBLE (para ver que hace el bot).
+REM Para produccion (todas las causas, invisible) usar en su lugar:  npm run bot
+call npm run bot:test
+
+pause
