@@ -9,7 +9,8 @@
     "bot": "tsx src/bot/index.ts",
     "bot:test": "BOT_MODE=test tsx src/bot/index.ts",
     "bot:urgent": "BOT_MODE=urgent tsx src/bot/index.ts",
-    "email": "tsx src/email/index.ts"
+    "email": "tsx src/email/index.ts",
+    "test": "tsx --test src/lib/*.test.ts"
   },
   "dependencies": {
     "next": "^14.2.0",

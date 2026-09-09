@@ -3,11 +3,14 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import HonorariosCausa from '@/components/HonorariosCausa'
+import type { Cliente } from '@/lib/types'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
   programa_vigente: string; sintesis: string; notas: string; saj: string;
   fecha_apertura: string; updated_at: string;
+  cliente_id: string | null;
   datos_extra: Record<string, any> | null;
   columnas_origen: string[] | null;
 }
@@ -30,7 +33,9 @@ export default function CausaDetalle() {
   const [nnas, setNnas] = useState<Nna[]>([])
   const [adultos, setAdultos] = useState<Adulto[]>([])
   const [audiencias, setAudiencias] = useState<Audiencia[]>([])
+  const [clientes, setClientes] = useState<Cliente[]>([])
   const [loading, setLoading] = useState(true)
+  const [guardandoCliente, setGuardandoCliente] = useState(false)
 
   useEffect(() => {
     if (id) loadData()
@@ -49,6 +54,33 @@ export default function CausaDetalle() {
     if (a.data) setAdultos(a.data)
     if (au.data) setAudiencias(au.data)
     setLoading(false)
+
+    // Cargar clientes para el selector. No bloquea la vista: si la capa de
+    // negocio aun no esta migrada, la API responde con error y degradamos via
+    // el check de data.ok (el try/catch solo cubre fallos de red).
+    try {
+      const res = await fetch('/api/clientes')
+      const data = await res.json()
+      if (res.ok && data.ok) setClientes(data.clientes)
+    } catch {
+      /* sin conexion: dejamos la lista de clientes vacia */
+    }
+  }
+
+  async function asociarCliente(clienteId: string) {
+    setGuardandoCliente(true)
+    try {
+      const { error } = await supabase
+        .from('causas')
+        .update({ cliente_id: clienteId || null })
+        .eq('id', id)
+      if (error) throw new Error(error.message)
+      setCausa((prev) => (prev ? { ...prev, cliente_id: clienteId || null } : prev))
+    } catch (e: any) {
+      alert('No se pudo asociar el cliente: ' + e.message)
+    } finally {
+      setGuardandoCliente(false)
+    }
   }
 
   if (loading) return (
@@ -104,6 +136,52 @@ export default function CausaDetalle() {
               <p className="text-sm text-gray-700 mt-1">{causa.sintesis}</p>
             </div>
           )}
+        </section>
+
+        {/* Cliente + Honorarios: cierra el circulo causa -> cliente -> cobro */}
+        <section className="bg-white rounded-xl border p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="font-bold text-gray-700">💰 Cliente y Honorarios</h2>
+            <Link href="/finanzas" className="text-xs text-emerald-700 hover:underline">
+              Ver panel financiero →
+            </Link>
+          </div>
+
+          {/* Selector de cliente */}
+          <div className="mb-4">
+            <label className="text-xs font-medium text-gray-500 uppercase">Cliente asociado</label>
+            <div className="flex items-center gap-2 mt-1">
+              <select
+                value={causa.cliente_id || ''}
+                onChange={(e) => asociarCliente(e.target.value)}
+                disabled={guardandoCliente}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-400 disabled:opacity-50"
+              >
+                <option value="">— Sin cliente —</option>
+                {clientes.map((cl) => (
+                  <option key={cl.id} value={cl.id}>
+                    {cl.nombre}{cl.rut ? ` (${cl.rut})` : ''}
+                  </option>
+                ))}
+                {/* Si la causa tiene un cliente que no esta en la lista cargada
+                    (lista no migrada, cliente borrado, etc.) mostramos una opcion
+                    sintetica para NO presentarlo como "sin cliente" y evitar
+                    que se borre la asociacion sin querer. */}
+                {causa.cliente_id && !clientes.some((cl) => cl.id === causa.cliente_id) && (
+                  <option value={causa.cliente_id}>Cliente asociado (no cargado)</option>
+                )}
+              </select>
+              {guardandoCliente && <span className="text-xs text-gray-400">Guardando...</span>}
+              {clientes.length === 0 && !causa.cliente_id && (
+                <Link href="/finanzas" className="text-xs text-blue-600 hover:underline">
+                  + Crear clientes
+                </Link>
+              )}
+            </div>
+          </div>
+
+          {/* Honorarios y cuotas de esta causa */}
+          <HonorariosCausa causaId={causa.id} />
         </section>
 
         {/* TODOS los datos extras del Excel */}
