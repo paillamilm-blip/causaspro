@@ -199,9 +199,43 @@ async function saveBotLog(sb: SupabaseClient, data: CausaScrapedData, analysis: 
       nivel_urgencia: analysis.nivel_urgencia,
       motivos: analysis.motivos,
       error: data.error || null,
+      paso: data.error ? 'scrape' : 'ok',
     })
   } catch {
     // No fallar si la tabla de logs no existe aún
+  }
+}
+
+/**
+ * QA / Trazabilidad: registra un ERROR del bot con el paso donde ocurrió y la
+ * ruta de la screenshot. Sirve para no repetir el mismo error y depurar rápido.
+ * No lanza excepción si la tabla no existe (falla en silencio).
+ *
+ * @param paso            Etapa del flujo: 'login' | 'navegacion' | 'search' | 'detalle' | 'scrape' | 'critico'
+ * @param error           Mensaje de error
+ * @param opts.rit        RIT de la causa afectada (si aplica)
+ * @param opts.causaId    UUID de la causa (si aplica)
+ * @param opts.runId      ID de la sesión del bot (para agrupar logs)
+ * @param opts.screenshotPath Ruta del screenshot capturado en el fallo
+ */
+export async function saveBotError(
+  paso: string,
+  error: string,
+  opts: { rit?: string; causaId?: string; runId?: string; screenshotPath?: string } = {}
+): Promise<void> {
+  try {
+    const sb = initSupabase()
+    await sb.from('bot_logs').insert({
+      causa_id: opts.causaId || null,
+      rit: opts.rit || null,
+      fecha_scraping: new Date().toISOString(),
+      error: error?.slice(0, 2000) || 'error desconocido',
+      paso,
+      screenshot_path: opts.screenshotPath || null,
+      run_id: opts.runId || null,
+    })
+  } catch {
+    // No fallar si la tabla/columnas no existen aún
   }
 }
 
