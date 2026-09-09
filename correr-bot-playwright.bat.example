@@ -22,6 +22,11 @@ set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
 REM Ignorar el chequeo de horario laboral (para poder probar a cualquier hora)
 set SKIP_HOUR_CHECK=1
 
+REM Si la descarga de Chromium de Playwright falla (timeout), descomenta la
+REM siguiente linea para usar el Google Chrome que ya tienes instalado
+REM (quita el "REM " del inicio):
+REM set BOT_USE_SYSTEM_CHROME=1
+
 REM MODO DE PRUEBA: solo 5 causas, navegador VISIBLE (para ver que hace el bot).
 REM Para produccion (todas las causas, invisible) usar en su lugar:  npm run bot
 call npm run bot:test
