@@ -466,9 +466,11 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
 // BÚSQUEDA POR RIT INDIVIDUAL (anti-CAPTCHA)
 // ============================================================
 // En vez de listar TODO el portal con filtros masivos (5/5, 12/12) que devuelve
-// ~17.500 registros y dispara el CAPTCHA, se busca UNA causa concreta llenando el
-// formulario: Rit (dropdown tipo) + Rol (número) + Año. Devuelve 1 resultado y
-// se parece a lo que hace un humano.
+// ~17.500 registros y dispara el CAPTCHA, se busca UNA causa concreta llenando SOLO
+// el campo "Rol" (el número del RIT). NO se toca el dropdown "Rit" (letra) ni el
+// campo "Año" — daban problemas y no son necesarios para acotar. La letra y el año
+// se usan solo al final para FILTRAR y quedarse con la causa exacta (Opción A).
+// Devuelve la coincidencia exacta y se parece a lo que hace un humano.
 // ============================================================
 export async function searchByRitExacto(page: Page, rit: string): Promise<CausaFoundInPortal[]> {
   const parsed = parseRIT(rit)
@@ -502,22 +504,12 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     })
     await sleep(300)
 
-    // PASO 3: Seleccionar el TIPO en el dropdown "Rit" (es un <select> o dropdown custom).
-    // El campo "Rit" del formulario corresponde a la LETRA/tipo (C, P, F, X, ...).
-    const tipoOk = await selectRitTipo(page, tipo)
-    if (!tipoOk) {
-      // Si no logramos fijar el tipo, NO seguir: una búsqueda sin el tipo correcto
-      // devuelve resultados equivocados. Mejor abortar limpio y marcar como no-encontrada.
-      log('warn', `  No se pudo seleccionar el tipo "${tipo}" en el dropdown Rit — se omite ${rit}`)
-      await page.screenshot({ path: `/tmp/bot_error_rit_tipo_${tipo}${numero}${año}.png` }).catch(() => {})
-      return []
-    }
-    // Cerrar el dropdown (si quedó abierto) para que no tape el botón Buscar
-    await page.keyboard.press('Escape').catch(() => {})
-    await sleep(400)
-
-    // PASO 4: Escribir el número en el campo "Rol"
-    await page.evaluate((rol: string) => {
+    // PASO 3: Escribir SOLO el número en el campo "Rol".
+    // NO se toca el dropdown "Rit" (letra) ni el campo "Año": buscamos únicamente por
+    // el número, que es más simple y confiable (el dropdown de la letra daba problemas).
+    // La letra y el año se usan solo al final para FILTRAR el resultado correcto (PASO 9),
+    // así no se confunde con causas de otro tipo/año que compartan el mismo número.
+    const rolOk = await page.evaluate((rol: string) => {
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
         if ((input as HTMLElement).offsetParent === null) continue
@@ -528,29 +520,17 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
           (input as HTMLInputElement).value = rol
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new Event('change', { bubbles: true }))
-          return
+          return true
         }
       }
+      return false
     }, numero)
+    if (!rolOk) {
+      log('warn', `  No se encontró el campo "Rol" para escribir el número ${numero} — se omite ${rit}`)
+      await page.screenshot({ path: `/tmp/bot_error_rol_${numero}.png` }).catch(() => {})
+      return []
+    }
     await sleep(300)
-
-    // PASO 5: Escribir el año — solo inputs VISIBLES
-    await page.evaluate((y: string) => {
-      const inputs = document.querySelectorAll('input')
-      for (const input of inputs) {
-        if ((input as HTMLElement).offsetParent === null) continue
-        const name = (input.getAttribute('name') || '').toLowerCase()
-        const id = (input.getAttribute('id') || '').toLowerCase()
-        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
-        if (name.includes('ano') || name.includes('año') || id.includes('ano') || ph.includes('año')) {
-          (input as HTMLInputElement).value = y
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
-          return
-        }
-      }
-    }, año)
-    await sleep(500)
 
     // PASO 6: Click en Buscar (solo el botón VISIBLE del tab Familia)
     await page.evaluate(() => {
@@ -566,13 +546,16 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
       }
     })
 
-    // PASO 7: Esperar resultados con polling (búsqueda exacta = respuesta rápida,
-    // timeout más corto que el listado masivo).
-    const pollTimeout = process.env.BOT_POLL_TIMEOUT ? parseInt(process.env.BOT_POLL_TIMEOUT) * 1000 : 20000
+    // PASO 7: Esperar resultados con polling. Como ahora buscamos solo por número
+    // (sin año), el portal puede devolver más filas y tardar un poco más → timeout 30s.
+    // CLAVE: esperamos a que aparezca una fila cuyo RIT contenga EXACTAMENTE el número
+    // buscado (no cualquier RIT), para no cortar el polling sobre resultados residuales
+    // de otra búsqueda antes de que renderice la causa correcta.
+    const pollTimeout = process.env.BOT_POLL_TIMEOUT ? parseInt(process.env.BOT_POLL_TIMEOUT) * 1000 : 30000
     let resultsFound = false
     const pollStart = Date.now()
     while (Date.now() - pollStart < pollTimeout) {
-      const hasRows = await page.evaluate(() => {
+      const hasRows = await page.evaluate((rolBuscado: string) => {
         const tables = document.querySelectorAll('table')
         for (const table of tables) {
           const trs = table.querySelectorAll('tbody tr, tr')
@@ -581,12 +564,14 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
             if (tds.length < 4) continue
             const cells = Array.from(tds).map(td => (td.textContent || '').trim())
             for (const cell of cells) {
-              if (cell.match(/^[A-Z]{0,3}-?\d+-\d{4}$/)) return true
+              // RIT con formato válido Y cuyo número (parte del medio) sea el buscado
+              const m = cell.match(/^[A-Z]{0,3}-?(\d+)-\d{4}$/)
+              if (m && m[1] === rolBuscado) return true
             }
           }
         }
         return false
-      })
+      }, numero)
       if (hasRows) { resultsFound = true; break }
       await sleep(1500)
     }
@@ -625,76 +610,6 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     await page.screenshot({ path: `/tmp/bot_error_rit_${rit}.png` }).catch(() => {})
     return []
   }
-}
-
-// ============================================================
-// HELPER: Seleccionar el tipo en el dropdown "Rit"
-// Soporta <select> nativo Y dropdown custom (como el de Tipo Causa/Estado).
-// El dropdown custom se puebla de forma asíncrona, así que se abre, se espera,
-// y recién ahí se busca la opción (igual que selectAllInDropdown).
-// ============================================================
-async function selectRitTipo(page: Page, tipo: string): Promise<boolean> {
-  // Estrategia 1: <select> nativo cuyo contexto mencione "Rit" (síncrono, sin esperas)
-  const nativeOk = await page.evaluate((tipoBuscado: string) => {
-    const selects = document.querySelectorAll('select')
-    for (const sel of selects) {
-      if ((sel as HTMLElement).offsetParent === null) continue
-      const name = (sel.getAttribute('name') || '').toLowerCase()
-      const id = (sel.getAttribute('id') || '').toLowerCase()
-      const nearText = (sel.closest('div, td, .form-group')?.textContent || '').toLowerCase()
-      const esRit = name.includes('rit') || id.includes('rit') ||
-        (nearText.includes('rit') && !nearText.includes('escrit'))
-      if (!esRit) continue
-      const options = Array.from(sel.querySelectorAll('option'))
-      for (const opt of options) {
-        const val = (opt.getAttribute('value') || '').trim().toUpperCase()
-        const txt = (opt.textContent || '').trim().toUpperCase()
-        // El option puede ser "C", "C - Cumplimiento", etc.
-        if (val === tipoBuscado || txt === tipoBuscado || txt.startsWith(tipoBuscado + ' ') || txt.startsWith(tipoBuscado + '-')) {
-          (sel as HTMLSelectElement).value = opt.getAttribute('value') || opt.value
-          sel.dispatchEvent(new Event('input', { bubbles: true }))
-          sel.dispatchEvent(new Event('change', { bubbles: true }))
-          return true
-        }
-      }
-    }
-    return false
-  }, tipo)
-
-  if (nativeOk) return true
-
-  // Estrategia 2: dropdown custom — ABRIR el trigger cercano al label "Rit"...
-  const opened = await page.evaluate(() => {
-    const dropdowns = document.querySelectorAll('.multiselect, [class*="select"], [class*="dropdown"], button[data-toggle]')
-    for (const dd of dropdowns) {
-      if ((dd as HTMLElement).offsetParent === null) continue
-      const nearText = (dd.closest('div, td, .form-group')?.textContent || '').toLowerCase()
-      if (nearText.includes('rit') && !nearText.includes('escrit')) {
-        (dd as HTMLElement).click()
-        return true
-      }
-    }
-    return false
-  })
-
-  if (!opened) return false
-
-  // ...ESPERAR a que el panel renderice sus opciones (poblado asíncrono)...
-  await sleep(600)
-
-  // ...y recién ahora buscar y clickear la opción con la letra.
-  return await page.evaluate((tipoBuscado: string) => {
-    const items = document.querySelectorAll('li, a, span, div, label, option')
-    for (const item of items) {
-      if ((item as HTMLElement).offsetParent === null) continue
-      const t = (item.textContent || '').trim().toUpperCase()
-      if (t === tipoBuscado || t.startsWith(tipoBuscado + ' ') || t.startsWith(tipoBuscado + '-')) {
-        (item as HTMLElement).click()
-        return true
-      }
-    }
-    return false
-  }, tipo)
 }
 
 // ============================================================
@@ -850,8 +765,10 @@ export async function navigateToCausaDetail(page: Page, rit: string): Promise<bo
       const norm = (s: string) => (s || '').replace(/\s+/g, '').toUpperCase()
       const target = norm(targetRit)
       const rows = document.querySelectorAll('table tr')
-      // 1er intento: fila con una CELDA que sea EXACTAMENTE el RIT (evita colisiones
-      // por substring, ej. C-844-2026 vs C-8440-2026).
+      // Abrir SOLO la fila cuya celda sea EXACTAMENTE el RIT completo.
+      // NO hay fallback por substring: como ahora buscamos solo por número, la tabla
+      // puede traer varias causas con el mismo número (distinta letra/año). Un match
+      // laxo abriría la causa equivocada. Si ninguna celda coincide exacto, no abrimos.
       for (const row of rows) {
         const tds = row.querySelectorAll('td')
         for (const td of tds) {
@@ -859,13 +776,6 @@ export async function navigateToCausaDetail(page: Page, rit: string): Promise<bo
             const link = row.querySelector('a[href], button, .btn')
             if (link) { (link as HTMLElement).click(); return true }
           }
-        }
-      }
-      // Fallback: substring en el texto de la fila (por si el RIT viene con formato distinto)
-      for (const row of rows) {
-        if (norm(row.textContent || '').includes(target)) {
-          const link = row.querySelector('a[href], button, .btn')
-          if (link) { (link as HTMLElement).click(); return true }
         }
       }
       return false
