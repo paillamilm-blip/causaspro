@@ -7,3 +7,7 @@ node_modules
 # NO versionar: contienen credenciales. Usar los .bat.example como plantilla.
 *.bat
 !*.bat.example
+
+
+# TypeScript build info (generado, no versionar)
+*.tsbuildinfo
