@@ -139,6 +139,36 @@ activamente.
 - Requisitos: `npm install` (incluye `cross-env`) + Chromium (o `BOT_USE_SYSTEM_CHROME=1`).
 - Antes de la 1ª corrida: ejecutar `schema.sql` + `schema-bot.sql` en Supabase.
 
+## 🧠 Auto-aprendizaje del bot (modo conservador)
+
+El bot **aprende de su propio flujo**: registra métricas ricas de cada corrida y,
+antes de arrancar, muestra un **diagnóstico con recomendaciones**. Importante:
+está en **modo conservador** → solo registra y aconseja, **NO cambia delays, orden
+de causas ni configuración por sí solo**. El humano decide si aplica cada consejo.
+
+**Qué registra (requiere correr `schema-bot-aprendizaje.sql` en Supabase):**
+- `bot_runs` (ampliado): `duracion_ms`, `causas_por_min` (exitosas/min), `tasa_exito`,
+  `search_mode`, `bloqueo_detectado`.
+- `bot_logs` (ampliado): `duracion_ms`, `tipo_error` (categorizado).
+- `bot_step_metrics` (nueva): tiempo y éxito/fallo de **cada etapa** (login, navegación,
+  búsqueda, detalle, scrape) → muestra dónde se va el tiempo y dónde falla más.
+
+**Vistas para revisar de un vistazo:**
+- `v_bot_health` → salud de las últimas 30 corridas (tasa de éxito, duración, bloqueos).
+- `v_bot_fallos_por_paso` → dónde y por qué falla (base de las recomendaciones).
+- `v_bot_causas_problematicas` → qué RIT dan problemas recurrentes.
+
+**Dónde vive:** `src/bot/modules/learningEngine.ts` (`analizarHistorial` + `logDiagnostico`),
+instrumentación en `orchestrator.ts` (helper `medirPaso`), categorización en
+`utils/index.ts` (`categorizarError`).
+
+**Relación con ERROR #1 (CAPTCHA):** el sistema ya **marca `bloqueo_detectado`** cuando
+un error se categoriza como `captcha` o la sesión se detiene por `captcha`/`bloqueado`, y
+recomienda bajar el ritmo. Sigue **pendiente** abortar la sesión de forma limpia al detectar
+el selector de CAPTCHA en vivo (hoy solo se detecta a posteriori por el mensaje de error).
+
+---
+
 ## 📸 Trazabilidad: capturas y logs de errores
 
 - En los **puntos de fallo instrumentados** (login, navegación, error crítico, y el

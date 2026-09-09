@@ -7,3 +7,4 @@ node_modules
 # NO versionar: contienen credenciales. Usar los .bat.example como plantilla.
 *.bat
 !*.bat.example
+semantic-review/

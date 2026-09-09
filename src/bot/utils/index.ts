@@ -3,6 +3,7 @@
 // ============================================================
 
 import { ALLOWED_HOURS } from '../config'
+import type { BotErrorType } from '../types'
 
 /**
  * Genera un delay aleatorio entre min y max (milisegundos)
@@ -169,6 +170,24 @@ export function inferirTipoRIT(rit: string): string | null {
   const parsed = parseRIT(rit)
   if (!parsed) return null
   return (TIPOS_RIT_VALIDOS as readonly string[]).includes(parsed.tipo) ? parsed.tipo : null
+}
+
+/**
+ * Categoriza un error en un tipo conocido (BotErrorType) a partir de su mensaje.
+ * Esto convierte texto libre en una etiqueta agrupable, para que el motor de
+ * aprendizaje pueda contar "cuántos timeouts", "cuántos captcha", etc.
+ * No hace nada "inteligente": solo busca palabras clave.
+ */
+export function categorizarError(mensaje: string | undefined | null): BotErrorType {
+  const m = (mensaje || '').toLowerCase()
+  if (!m) return 'desconocido'
+  if (m.includes('captcha') || m.includes('recaptcha') || m.includes('denegado') || m.includes('blocked')) return 'captcha'
+  if (m.includes('timeout') || m.includes('timed out') || m.includes('exceeded')) return 'timeout'
+  if (m.includes('no encontrada') || m.includes('not found') || m.includes('sin resultados') || m.includes('0 resultado')) return 'no_encontrada'
+  if (m.includes('navega') || m.includes('navigation') || m.includes('net::') || m.includes('goto')) return 'navegacion'
+  if (m.includes('sesión') || m.includes('sesion') || m.includes('session') || m.includes('login') || m.includes('logout')) return 'sesion'
+  if (m.includes('parse') || m.includes('undefined') || m.includes('null') || m.includes('cannot read')) return 'parseo'
+  return 'desconocido'
 }
 
 /**
