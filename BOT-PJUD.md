@@ -78,6 +78,20 @@ Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
 - `schema.sql` (tablas base: causas, audiencias, ...)
 - `schema-bot.sql` (tablas `movimientos`, `bot_logs`, `bot_runs` + vista de urgencia)
 
+### ⚠️ Si falla la descarga de Chromium (`npx playwright install`)
+Si `npx playwright install chromium` da timeout o "Download failure", puedes usar el
+**Google Chrome que ya tienes instalado** en vez de descargar el de Playwright:
+
+1. Abre tu `correr-bot-playwright.bat` con el Bloc de notas.
+2. Descomenta (quita el `REM `) esta línea:
+   ```
+   set BOT_USE_SYSTEM_CHROME=1
+   ```
+3. Guarda y corre el `.bat`. El bot usará tu Chrome del sistema.
+
+> Alternativa avanzada: si el Chrome está en una ruta no estándar, usa
+> `set CHROME_PATH=C:\ruta\a\chrome.exe` en vez de `BOT_USE_SYSTEM_CHROME`.
+
 ---
 
 ## 🔐 Seguridad

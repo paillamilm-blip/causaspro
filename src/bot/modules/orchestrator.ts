@@ -54,10 +54,22 @@ export async function runBotSession(
     
     // 1. Lanzar navegador
     log('info', 'Lanzando navegador...')
-    browser = await chromium.launch({
+    // Opciones de lanzamiento. Por defecto usa el Chromium que instala Playwright.
+    // Alternativas para NO tener que descargar Chromium (útil si la descarga falla):
+    //   - CHROME_PATH=C:\ruta\chrome.exe  → usa un Chrome/Chromium especifico
+    //   - BOT_USE_SYSTEM_CHROME=1         → usa el Google Chrome ya instalado (channel)
+    const launchOpts: Parameters<typeof chromium.launch>[0] = {
       headless: cfg.headless,
       args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
-    })
+    }
+    if (process.env.CHROME_PATH) {
+      launchOpts.executablePath = process.env.CHROME_PATH
+      log('info', `  Usando Chrome de: ${process.env.CHROME_PATH}`)
+    } else if (process.env.BOT_USE_SYSTEM_CHROME === '1') {
+      launchOpts.channel = 'chrome'
+      log('info', '  Usando el Google Chrome del sistema (channel=chrome)')
+    }
+    browser = await chromium.launch(launchOpts)
     
     context = await createStealthContext(browser)
     page = await context.newPage()
