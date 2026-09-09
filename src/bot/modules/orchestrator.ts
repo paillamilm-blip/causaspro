@@ -10,9 +10,30 @@ import { createStealthContext, loginOJV, logoutOJV, isSessionActive } from './lo
 import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDetail, CausaFoundInPortal } from './search'
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT } from '../utils'
 import { createClient } from '@supabase/supabase-js'
+
+/**
+ * QA / Trazabilidad: toma una screenshot EN EL MOMENTO del fallo (con la page real)
+ * y devuelve la ruta guardada, o undefined si no se pudo capturar. Así la captura
+ * corresponde exactamente al error que se registra (no a otra corrida ni a un archivo
+ * inexistente). El nombre incluye runId + paso para que sea único y rastreable.
+ */
+async function capturarError(
+  page: Page | null,
+  runId: string,
+  paso: string,
+): Promise<string | undefined> {
+  if (!page) return undefined
+  const ruta = `/tmp/bot_error_${runId}_${paso}.png`
+  try {
+    await page.screenshot({ path: ruta })
+    return ruta
+  } catch {
+    return undefined
+  }
+}
 
 /**
  * Ejecuta una sesión completa del bot
@@ -84,6 +105,12 @@ export async function runBotSession(
       log('error', `Login fallido: ${loginResult.error}`)
       status.detenido_por = 'error_critico'
       status.errores.push(`Login fallido: ${loginResult.error}`)
+      // QA: capturar screenshot AHORA (coincide con el fallo) y registrarlo
+      const shot = await capturarError(page, runId, 'login')
+      await saveBotError('login', `Login fallido: ${loginResult.error}`, {
+        runId,
+        screenshotPath: shot,
+      }).catch(() => {})
       return { status, data: results }
     }
     
@@ -93,6 +120,12 @@ export async function runBotSession(
       log('error', 'No se pudo navegar a Mis Causas')
       status.detenido_por = 'error_critico'
       status.errores.push('No se pudo navegar a Mis Causas')
+      // QA: capturar screenshot AHORA y registrarlo
+      const shot = await capturarError(page, runId, 'navegacion')
+      await saveBotError('navegacion', 'No se pudo navegar a Mis Causas', {
+        runId,
+        screenshotPath: shot,
+      }).catch(() => {})
       return { status, data: results }
     }
     
@@ -117,6 +150,9 @@ export async function runBotSession(
     log('error', `Error crítico: ${error.message}`)
     status.detenido_por = 'error_critico'
     status.errores.push(error.message)
+    // QA: capturar screenshot del estado al momento del error crítico
+    const shot = await capturarError(page, runId, 'critico')
+    await saveBotError('critico', error.message, { runId, screenshotPath: shot }).catch(() => {})
   } finally {
     if (page) await page.close().catch(() => {})
     if (context) await context.close().catch(() => {})
@@ -206,6 +242,14 @@ async function runBusquedaPorRit(
       status.fallidas++
       status.errores.push(`${causa.rit}: ${err.message}`)
       log('warn', `  Error en ${causa.rit}: ${err.message}`)
+      // QA: capturar screenshot AHORA (coincide con el fallo de esta causa) y registrarlo
+      const shot = await capturarError(page, status.run_id, `detalle_${causa.rit}`)
+      await saveBotError('detalle', err.message, {
+        rit: causa.rit,
+        causaId: causa.id,
+        runId: status.run_id,
+        screenshotPath: shot,
+      }).catch(() => {})
       // Intentar recuperar la navegación para la siguiente causa
       try {
         await navigateToConsulta(page)
