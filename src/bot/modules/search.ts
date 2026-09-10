@@ -177,6 +177,109 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
 }
 
 // ============================================================
+// HELPER: Activar el toggle "Filtros" (switch verde junto a "Filtros").
+// El switch tiene el <input type=checkbox> OCULTO (display:none / opacity:0), por eso
+// clickear el input directo no sirve (offsetParent === null) y el click JS no dispara
+// los handlers del framework. Estrategia robusta:
+//   1) localizar el elemento clickeable VISIBLE del switch cerca del texto "Filtros"
+//      y marcarlo con un atributo temporal;
+//   2) hacer un CLICK REAL de Playwright sobre él (dispara eventos como un humano);
+//   3) verificar que el input quedó checked; si no, reintentar.
+// ============================================================
+async function activarFiltros(page: Page): Promise<boolean> {
+  const MARK = 'data-bot-filtros-toggle'
+  const limpiarMarca = () => page.evaluate((mark: string) => {
+    document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark))
+  }, MARK).catch(() => {})
+
+  // Lee el estado del checkbox del switch marcado.
+  //   true/false → checkbox encontrado y su valor;  null → no se pudo leer (no verificable).
+  const yaActivo = async (): Promise<boolean | null> => page.evaluate((mark: string) => {
+    const el = document.querySelector(`[${mark}]`)
+    if (!el) return null
+    const cont = el.closest('.custom-switch, .form-check, .form-switch, label, div') || el
+    const input = (el.matches('input[type="checkbox"]') ? el : cont.querySelector('input[type="checkbox"]')) as HTMLInputElement | null
+    return input ? input.checked : null
+  }, MARK)
+
+  // 1) Marcar el elemento VISIBLE y clickeable del switch asociado al texto "Filtros".
+  //    Dos pasadas: primero match EXACTO ("Filtros"), luego includes como fallback; en ambas
+  //    exigimos que el elemento a clickear sea visible (offsetParent !== null) para no marcar
+  //    el input oculto (que haría fallar el click).
+  const found = await page.evaluate((mark: string) => {
+    document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark))
+    const candidatos = Array.from(document.querySelectorAll(
+      'label, .custom-switch, .custom-control, .form-switch, .form-check, [role="switch"], .switch, .toggle'
+    ))
+    const esVisible = (e: Element | null): e is HTMLElement => !!e && (e as HTMLElement).offsetParent !== null
+    // Elige, dentro del candidato, un elemento VISIBLE para clickear (el propio o un hijo del switch).
+    const elegirVisible = (c: Element): HTMLElement | null => {
+      if (c.matches('label, .custom-switch, .custom-control, .form-switch, .switch, .toggle, [role="switch"]') && esVisible(c)) return c as HTMLElement
+      const hijo = c.querySelector('label, .custom-control-label, .slider, .switch, .toggle, [role="switch"]')
+      if (esVisible(hijo)) return hijo as HTMLElement
+      return esVisible(c) ? (c as HTMLElement) : null
+    }
+    const marcar = (predicado: (txt: string) => boolean): boolean => {
+      for (const c of candidatos) {
+        const txt = (c.textContent || '').trim()
+        if (!predicado(txt)) continue
+        const vis = elegirVisible(c)
+        if (vis) { vis.setAttribute(mark, '1'); return true }
+      }
+      return false
+    }
+    // Pasada 1: match exacto. Pasada 2: contiene "filtro".
+    return marcar(t => /^filtros?$/i.test(t)) || marcar(t => t.toLowerCase().includes('filtro'))
+  }, MARK)
+
+  if (!found) {
+    log('warn', '  Toggle "Filtros" no encontrado (visible) en la página.')
+    return false
+  }
+
+  // Si ya está activo, no hacemos nada (y limpiamos la marca).
+  if ((await yaActivo()) === true) {
+    await limpiarMarca()
+    log('info', '  Filtros ya estaban activos.')
+    return true
+  }
+
+  // 2) Click REAL de Playwright sobre el elemento visible del switch. Reintenta hasta 3 veces.
+  let noVerificable = false
+  for (let intento = 1; intento <= 3; intento++) {
+    try {
+      await page.click(`[${MARK}]`, { timeout: 3000 })
+    } catch {
+      // Fallback: click JS por si el elemento no es directamente clickeable por Playwright.
+      await page.evaluate((mark: string) => {
+        const el = document.querySelector(`[${mark}]`) as HTMLElement | null
+        el?.click()
+      }, MARK)
+    }
+    await sleep(1200)
+    const estado = await yaActivo()
+    if (estado === true) {
+      await limpiarMarca()
+      log('info', `  Filtros activados (intento ${intento}).`)
+      return true
+    }
+    if (estado === null) noVerificable = true
+    log('info', `  Filtros aún no confirmados, reintentando (${intento}/3)...`)
+  }
+
+  await limpiarMarca()
+  if (noVerificable) {
+    // Se hizo click pero no encontramos un checkbox para confirmar. No lo damos por éxito
+    // (fail-closed), pero avisamos que quizá sí quedó activo — el flujo posterior (dropdowns)
+    // lo dirá. Devolvemos false para que el caller lo registre.
+    log('warn', '  Se clickeó "Filtros" pero no se pudo verificar su estado (sin checkbox legible).')
+  } else {
+    log('warn', '  No se pudo confirmar la activación de "Filtros" tras 3 intentos.')
+  }
+  return false
+}
+
+// ============================================================
 // HELPER: Open a custom dropdown, click "Seleccionar Todos", and close it properly
 // Uses the trigger element to open/close (toggle) instead of document.body.click()
 // ============================================================
@@ -306,20 +409,10 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
     // PASO 2: Activar Filtros (toggle dentro del tab Familia)
     log('info', '  Activando filtros...')
-    await page.evaluate(() => {
-      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
-      for (const toggle of toggles) {
-        if ((toggle as HTMLElement).offsetParent === null) continue
-        const parent = toggle.closest('.custom-switch, .form-check, label, div')
-        const parentText = parent ? (parent.textContent || '') : ''
-        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
-          if (!(toggle as HTMLInputElement).checked) {
-            (toggle as HTMLElement).click()
-          }
-          return
-        }
-      }
-    })
+    const filtrosOk = await activarFiltros(page)
+    if (!filtrosOk) {
+      log('warn', '  ⚠️ No se confirmó la activación de "Filtros"; los dropdowns Tipo/Estado podrían no estar disponibles.')
+    }
     await sleep(2000)
 
     // PASO 2.5: Limpiar campo RUT (auto-rellenado con RUT del curador tras login)
@@ -491,18 +584,11 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
 
     // PASO 2.1: Activar el toggle de "Filtros" PRIMERO (igual que searchByYear). Sin esto,
     // los dropdowns de Tipo Causa / Estado pueden no estar disponibles.
-    await page.evaluate(() => {
-      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
-      for (const toggle of toggles) {
-        if ((toggle as HTMLElement).offsetParent === null) continue
-        const parent = toggle.closest('.custom-switch, .form-check, label, div')
-        const parentText = parent ? (parent.textContent || '') : ''
-        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
-          if (!(toggle as HTMLInputElement).checked) (toggle as HTMLElement).click()
-          return
-        }
-      }
-    })
+    log('info', '  Activando filtros...')
+    const filtrosOk = await activarFiltros(page)
+    if (!filtrosOk) {
+      log('warn', '  ⚠️ No se confirmó la activación de "Filtros"; los dropdowns Tipo/Estado podrían no estar disponibles y la causa podría no aparecer.')
+    }
     await sleep(2000)
 
     // NOTA: NO se toca el campo RUT. El portal lo llena por defecto (RUT del curador) y así
