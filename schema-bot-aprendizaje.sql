@@ -36,6 +36,8 @@ ALTER TABLE bot_runs ADD COLUMN IF NOT EXISTS tasa_exito NUMERIC(5,2);
 ALTER TABLE bot_runs ADD COLUMN IF NOT EXISTS search_mode TEXT;
 -- Señal de bloqueo detectada en la sesión (captcha / acceso denegado)
 ALTER TABLE bot_runs ADD COLUMN IF NOT EXISTS bloqueo_detectado BOOLEAN DEFAULT FALSE;
+-- Reintentos totales de la sesión (usado por la vista v_bot_health)
+ALTER TABLE bot_runs ADD COLUMN IF NOT EXISTS reintentos INT DEFAULT 0;
 
 
 -- ============================================================
