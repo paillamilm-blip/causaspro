@@ -15,6 +15,8 @@
 // (si corres el bot normalmente, ya las tienes en tu entorno / .env).
 // ============================================================
 
+// Cargar .env primero (tsx no lo hace solo) para tener SUPABASE_* disponibles.
+import './loadEnv'
 import { initSupabase } from './modules/supabaseSync'
 
 /** Descripción legible del prefijo/tipo de RIT (foco en Familia). */
