@@ -111,6 +111,12 @@ export interface BotRunStatus {
   search_mode?: string
   /** Si se detectó una señal de bloqueo/CAPTCHA durante la sesión */
   bloqueo_detectado?: boolean
+  /**
+   * Causas procesadas en modo SOLO DIAGNÓSTICO (BOT_RIT con id temporal, no en la BD):
+   * se scrapean/diagnostican pero NO se persisten. No cuentan como exitosas para no
+   * reportar un falso éxito. 0/undefined en corridas normales.
+   */
+  solo_diagnostico?: number
 }
 
 /** Métrica de una etapa del flujo (una fila en bot_step_metrics) */
