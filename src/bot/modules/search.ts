@@ -728,7 +728,17 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // NO se toca el dropdown "Rit" (letra): buscamos por número + año, que es lo que el
     // portal necesita para encontrar la causa. La letra se usa solo al final para FILTRAR
     // el resultado correcto (PASO 9), así no se confunde con causas de otro tipo.
+    // DIAGNÓSTICO (BOT_DIAG_DETALLE=1): volcar SIEMPRE los inputs visibles del formulario
+    // de Familia ANTES de escribir, para ver cómo se llaman realmente los campos (Rol/Año).
+    // El síntoma observado (3 causas activas dan "No existen causas" tras escribir solo el
+    // Año) apunta a que el campo "Rol" no se está llenando porque no matchea name/id "rol".
+    if (process.env.BOT_DIAG_DETALLE === '1') {
+      log('info', '  [DIAG-FORM] Campos del formulario de Familia ANTES de escribir Rol:')
+      await dumpInputsVisibles(page)
+    }
+
     const rolOk = await page.evaluate((rol: string) => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
         if ((input as HTMLElement).offsetParent === null) continue
@@ -739,12 +749,13 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
           (input as HTMLInputElement).value = rol
           input.dispatchEvent(new Event('input', { bubbles: true }))
           input.dispatchEvent(new Event('change', { bubbles: true }))
-          return true
+          // Devolver dónde se escribió, para diagnóstico honesto.
+          return { ok: true, campo: `name="${name}" id="${id}" ph="${ph}"` }
         }
       }
-      return false
+      return { ok: false, campo: '' }
     }, numero)
-    if (!rolOk) {
+    if (!rolOk.ok) {
       log('warn', `  No se encontró el campo "Rol" para escribir el número ${numero} — se omite ${rit}`)
       { const p = capturaPath(`bot_error_rol_${numero}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot: ${p}`) }
       // DIAGNÓSTICO: listar los inputs visibles del formulario para saber cómo se llama
@@ -752,6 +763,8 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
       await dumpInputsVisibles(page)
       return []
     }
+    // LOG DE ÉXITO (antes faltaba): confirma que SÍ escribió el Rol y en qué campo.
+    log('info', `  Rol ${numero} escrito en el formulario (${rolOk.campo}).`)
     await sleep(300)
 
     // PASO 3.5: Escribir el AÑO. El portal necesita número + año para encontrar la causa;
@@ -881,6 +894,14 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
         }
       }
     }, { rol: numero, anio: año })
+
+    // DIAGNÓSTICO (BOT_DIAG_DETALLE=1): volcar los campos DESPUÉS de escribir Rol+Año y
+    // ANTES de clickear Buscar, para confirmar QUÉ quedó realmente en cada campo (value=...).
+    // Si el Rol quedó vacío aquí, ese es el bug de por qué "no existen causas".
+    if (process.env.BOT_DIAG_DETALLE === '1') {
+      log('info', '  [DIAG-FORM] Campos del formulario JUSTO ANTES de Buscar (revisar value=):')
+      await dumpInputsVisibles(page)
+    }
 
     // PASO 6: primer click en "Buscar".
     await clickBuscar()
@@ -1030,6 +1051,7 @@ async function dumpInputsVisibles(page: Page): Promise<void> {
   if (!DIAG_ON) return
   try {
     const info = await page.evaluate(() => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
       const out: string[] = []
       document.querySelectorAll('input, select').forEach((el) => {
         if ((el as HTMLElement).offsetParent === null) return // solo visibles
@@ -1038,12 +1060,21 @@ async function dumpInputsVisibles(page: Page): Promise<void> {
         const id = el.getAttribute('id') || ''
         const ph = el.getAttribute('placeholder') || ''
         const type = el.getAttribute('type') || ''
-        out.push(`${tag}[type=${type}] name="${name}" id="${id}" ph="${ph}"`)
+        // VALOR actual: clave para ver si el Rol quedó vacío o si el año quedó puesto.
+        // En <select> mostramos la opción seleccionada; en <input> el value.
+        let val = ''
+        if (tag === 'select') {
+          const s = el as HTMLSelectElement
+          val = s.options[s.selectedIndex]?.textContent?.trim() || s.value || ''
+        } else {
+          val = (el as HTMLInputElement).value || ''
+        }
+        out.push(`${tag}[type=${type}] name="${name}" id="${id}" ph="${ph}" value="${val}"`)
       })
       return out
     })
     log('info', `  [DIAG] Campos visibles del formulario (${info.length}):`)
-    info.slice(0, 25).forEach((l) => log('info', `    · ${l}`))
+    info.slice(0, 40).forEach((l) => log('info', `    · ${l}`))
   } catch (e: any) {
     log('warn', `  [DIAG] No se pudieron listar los inputs: ${e.message}`)
   }
