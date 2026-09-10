@@ -316,9 +316,14 @@ async function runBusquedaPorRit(
       }
 
       // Abrir el detalle y scrapear (instrumentado + reintento seguro).
+      // IMPORTANTE: usamos el RIT RESUELTO por el portal (encontradas[0].rit, que ya pasó
+      // el filtro exacto/fail-closed del PASO 9), NO el causa.rit del usuario. Así la fila
+      // que se abre es EXACTAMENTE la validada como encontrada (el portal puede mostrar el
+      // prefijo de letra aunque el usuario lo tenga sin letra), evitando abrir otra fila.
+      const ritResuelto = encontradas[0].rit
       const opened = await medirPaso(
         status.run_id, 'detalle',
-        () => navigateToCausaDetail(page, causa.rit),
+        () => navigateToCausaDetail(page, ritResuelto),
         causa.rit,
       )
       if (opened) {
