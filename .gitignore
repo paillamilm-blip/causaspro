@@ -12,3 +12,6 @@ semantic-review/
 
 # TypeScript build info (generado, no versionar)
 *.tsbuildinfo
+
+# Capturas de debug del bot (generadas en cada corrida, no versionar)
+bot-capturas/

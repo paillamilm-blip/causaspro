@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, categorizarError } from '../utils'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, categorizarError, capturaPath } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
 
@@ -76,7 +76,7 @@ async function capturarError(
   paso: string,
 ): Promise<string | undefined> {
   if (!page) return undefined
-  const ruta = `/tmp/bot_error_${runId}_${paso}.png`
+  const ruta = capturaPath(`bot_error_${runId}_${paso}.png`)
   try {
     await page.screenshot({ path: ruta })
     return ruta

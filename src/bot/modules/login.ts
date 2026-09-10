@@ -7,7 +7,7 @@
 import type { Page, Browser, BrowserContext } from 'playwright'
 import type { OJVCredentials, LoginResult } from '../types'
 import { OJV_URLS, DEFAULT_CONFIG } from '../config'
-import { sleep, log } from '../utils'
+import { sleep, log, capturaPath } from '../utils'
 
 /**
  * Crea un contexto de navegador con fingerprint realista
@@ -156,7 +156,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     
     if (!clicked) {
       log('error', 'No se encontró "Clave Única" después de "Todos los servicios"')
-      await page.screenshot({ path: '/tmp/bot_error_no_claveunica.png' }).catch(() => {})
+      await page.screenshot({ path: capturaPath('bot_error_no_claveunica.png') }).catch(() => {})
       return { success: false, error: 'Botón "Clave Única" no encontrado después de abrir servicios' }
     }
     
@@ -179,7 +179,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     if (!redirected) {
       const finalUrl = page.url()
       log('error', `No redirigió a Clave Única. URL actual: ${finalUrl}`)
-      await page.screenshot({ path: '/tmp/bot_error_no_redirect.png' }).catch(() => {})
+      await page.screenshot({ path: capturaPath('bot_error_no_redirect.png') }).catch(() => {})
       return { success: false, error: 'No se redirigió a Clave Única' }
     }
     
@@ -194,7 +194,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     const runInput = await findRunInput(page)
     if (!runInput) {
       log('error', 'No se encontró campo de RUN en Clave Única')
-      await page.screenshot({ path: '/tmp/bot_error_no_run_field.png' }).catch(() => {})
+      await page.screenshot({ path: capturaPath('bot_error_no_run_field.png') }).catch(() => {})
       return { success: false, error: 'Campo RUN no encontrado en Clave Única' }
     }
     
@@ -228,7 +228,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     if (!passwordInput) {
       // Puede ser que RUN y password estén en la misma página
       log('error', 'No se encontró campo de contraseña')
-      await page.screenshot({ path: '/tmp/bot_error_no_pass_field.png' }).catch(() => {})
+      await page.screenshot({ path: capturaPath('bot_error_no_pass_field.png') }).catch(() => {})
       return { success: false, error: 'Campo de contraseña no encontrado' }
     }
     
@@ -305,7 +305,7 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     
   } catch (error: any) {
     log('error', `Error durante login: ${error.message}`)
-    await page.screenshot({ path: '/tmp/bot_error_exception.png' }).catch(() => {})
+    await page.screenshot({ path: capturaPath('bot_error_exception.png') }).catch(() => {})
     return { success: false, error: error.message }
   }
 }

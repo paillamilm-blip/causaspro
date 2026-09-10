@@ -5,7 +5,12 @@
 
 import type { Page } from 'playwright'
 import type { CausaToScrape } from '../types'
-import { sleep, log, parseRIT } from '../utils'
+import { sleep, log, parseRIT, capturaPath } from '../utils'
+
+// El diagnóstico detallado (que puede volcar nombres de partes/causas al log) se activa
+// por defecto en local, pero se puede desactivar con BOT_DIAG=0 (así lo hace el CI, para
+// no filtrar datos sensibles a los logs públicos de GitHub Actions).
+const DIAG_ON = process.env.BOT_DIAG !== '0'
 
 // ============================================================
 // HELPER: Click en tab Familia (usado en múltiples lugares)
@@ -160,8 +165,7 @@ export async function navigateToConsulta(page: Page): Promise<boolean> {
       await clickFamiliaTab(page)
       await sleep(5000)
       // Tomar screenshot para debug
-      await page.screenshot({ path: '/tmp/bot_error_familia_fail.png' }).catch(() => {})
-      log('info', '  Screenshot guardado: /tmp/bot_error_familia_fail.png')
+      { const p = capturaPath('bot_error_familia_fail.png'); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot guardado: ${p}`) }
     }
     
     return true
@@ -423,8 +427,7 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
 
     if (!resultsFound) {
       log('warn', `  No se encontraron resultados tras ${pollTimeout / 1000}s de polling para año ${year}`)
-      await page.screenshot({ path: `/tmp/bot_error_buscar_${year}.png` }).catch(() => {})
-      log('info', `  Screenshot guardado: /tmp/bot_error_buscar_${year}.png`)
+      { const p = capturaPath(`bot_error_buscar_${year}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot guardado: ${p}`) }
     }
     
     // PASO 8: Leer tabla de resultados
@@ -457,7 +460,7 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     
   } catch (error: any) {
     log('error', `Error buscando año ${year}: ${error.message}`)
-    await page.screenshot({ path: `/tmp/bot_error_search_${year}.png` }).catch(() => {})
+    await page.screenshot({ path: capturaPath(`bot_error_search_${year}.png`) }).catch(() => {})
     return []
   }
 }
@@ -528,7 +531,10 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     }, numero)
     if (!rolOk) {
       log('warn', `  No se encontró el campo "Rol" para escribir el número ${numero} — se omite ${rit}`)
-      await page.screenshot({ path: `/tmp/bot_error_rol_${numero}.png` }).catch(() => {})
+      { const p = capturaPath(`bot_error_rol_${numero}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot: ${p}`) }
+      // DIAGNÓSTICO: listar los inputs visibles del formulario para saber cómo se llama
+      // realmente el campo de búsqueda (quizá no contiene "rol").
+      await dumpInputsVisibles(page)
       return []
     }
     await sleep(300)
@@ -579,7 +585,11 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
 
     if (!resultsFound) {
       log('warn', `  Sin resultados para ${ritLegible} (¿causa no visible en este tribunal/año?)`)
-      await page.screenshot({ path: `/tmp/bot_error_rit_${tipo}${numero}${año}.png` }).catch(() => {})
+      { const p = capturaPath(`bot_error_rit_${tipo}${numero}${año}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot: ${p}`) }
+      // DIAGNÓSTICO: volcar al log qué está viendo realmente el portal. Esto nos dice si
+      // el problema es (a) el campo/botón de búsqueda, (b) que el portal pide más datos,
+      // o (c) que el RIT en la tabla tiene un formato que nuestro regex no reconoce.
+      await dumpEstadoBusqueda(page, numero)
       return []
     }
 
@@ -617,7 +627,11 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
 
     if (exactas.length === 0) {
       log('warn', `  La búsqueda de ${ritPedido} no devolvió una coincidencia EXACTA (${causas.length} fila(s) genéricas). Se omite para no scrapear la causa equivocada.`)
-      await page.screenshot({ path: `/tmp/bot_error_rit_nomatch_${tipo}${numero}${año}.png` }).catch(() => {})
+      // DIAGNÓSTICO: log de los RIT que SÍ leyó la tabla, para ver por qué ninguno matcheó.
+      if (DIAG_ON && causas.length > 0) {
+        log('info', `  RIT leídos en la tabla: ${causas.map(c => c.rit).join(' | ')}`)
+      }
+      await page.screenshot({ path: capturaPath(`bot_error_rit_nomatch_${tipo}${numero}${año}.png`) }).catch(() => {})
       return []
     }
     // FAIL-CLOSED ante ambigüedad de letra: si el usuario buscó SIN letra y el portal
@@ -627,7 +641,7 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     const letrasDistintas = new Set(exactas.map(c => partes(c.rit)?.letra || '')).size
     if (exactas.length > 1 && letrasDistintas > 1) {
       log('warn', `  ${exactas.length} causas con número ${numero}-${año} pero distinta letra (${exactas.map(c => c.rit).join(', ')}). Ambiguo: se OMITE para no scrapear la causa equivocada. Especifica la letra del RIT si conoces el tipo.`)
-      await page.screenshot({ path: `/tmp/bot_error_rit_ambiguo_${numero}${año}.png` }).catch(() => {})
+      await page.screenshot({ path: capturaPath(`bot_error_rit_ambiguo_${numero}${año}.png`) }).catch(() => {})
       return []
     }
     if (exactas.length > 1) {
@@ -638,8 +652,98 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
 
   } catch (error: any) {
     log('error', `Error buscando RIT ${rit}: ${error.message}`)
-    await page.screenshot({ path: `/tmp/bot_error_rit_${rit}.png` }).catch(() => {})
+    await page.screenshot({ path: capturaPath(`bot_error_rit_${rit}.png`) }).catch(() => {})
     return []
+  }
+}
+
+// ============================================================
+// DIAGNÓSTICO (solo lectura, no cambia el flujo del bot)
+// ============================================================
+
+/**
+ * Vuelca al log los inputs y selects VISIBLES del formulario actual. Sirve para
+ * descubrir cómo se llama realmente el campo de búsqueda del portal (name/id/placeholder)
+ * cuando no encontramos el campo "Rol".
+ */
+async function dumpInputsVisibles(page: Page): Promise<void> {
+  if (!DIAG_ON) return
+  try {
+    const info = await page.evaluate(() => {
+      const out: string[] = []
+      document.querySelectorAll('input, select').forEach((el) => {
+        if ((el as HTMLElement).offsetParent === null) return // solo visibles
+        const tag = el.tagName.toLowerCase()
+        const name = el.getAttribute('name') || ''
+        const id = el.getAttribute('id') || ''
+        const ph = el.getAttribute('placeholder') || ''
+        const type = el.getAttribute('type') || ''
+        out.push(`${tag}[type=${type}] name="${name}" id="${id}" ph="${ph}"`)
+      })
+      return out
+    })
+    log('info', `  [DIAG] Campos visibles del formulario (${info.length}):`)
+    info.slice(0, 25).forEach((l) => log('info', `    · ${l}`))
+  } catch (e: any) {
+    log('warn', `  [DIAG] No se pudieron listar los inputs: ${e.message}`)
+  }
+}
+
+/**
+ * Cuando la búsqueda por RIT no devuelve resultados, vuelca al log el estado real de
+ * la página: cuántas tablas hay, sus encabezados, y las primeras filas/celdas. Así
+ * sabemos si el portal (a) no mostró tabla (pidió más datos / error), (b) mostró tabla
+ * pero con RIT en otro formato, o (c) mostró un mensaje tipo "sin resultados".
+ */
+async function dumpEstadoBusqueda(page: Page, numeroBuscado: string): Promise<void> {
+  try {
+    const diag = await page.evaluate(() => {
+      const res: any = { url: location.href, tablas: [], mensajes: [] }
+      // Mensajes tipo "no se encontraron registros"
+      document.querySelectorAll('div, span, p, td').forEach((el) => {
+        const t = (el.textContent || '').trim().toLowerCase()
+        if (!t) return
+        if ((t.includes('no') && (t.includes('registro') || t.includes('resultado') || t.includes('dato'))) ||
+            t.includes('sin resultado') || t.includes('no existen')) {
+          if (t.length < 120) res.mensajes.push((el.textContent || '').trim())
+        }
+      })
+      document.querySelectorAll('table').forEach((table, ti) => {
+        const headers = Array.from(table.querySelectorAll('th')).map(th => (th.textContent || '').trim()).filter(Boolean)
+        const filas: string[][] = []
+        const trs = table.querySelectorAll('tbody tr, tr')
+        let count = 0
+        for (const tr of Array.from(trs)) {
+          const tds = tr.querySelectorAll('td')
+          if (tds.length === 0) continue
+          filas.push(Array.from(tds).map(td => (td.textContent || '').trim()))
+          if (++count >= 3) break // solo las primeras 3 filas de cada tabla
+        }
+        res.tablas.push({ idx: ti, headers, filasMuestra: filas })
+      })
+      return res
+    })
+    log('info', `  [DIAG] URL actual: ${diag.url}`)
+    log('info', `  [DIAG] Tablas encontradas: ${diag.tablas.length}`)
+    // El contenido de las tablas (headers, filas) y los mensajes pueden incluir nombres
+    // de partes/causas → solo se vuelcan si el diagnóstico detallado está activo (local).
+    if (DIAG_ON) {
+      if (diag.mensajes.length) {
+        const unicos = Array.from(new Set(diag.mensajes)) as string[]
+        log('info', `  [DIAG] Mensajes en pantalla: ${unicos.slice(0, 5).join(' || ')}`)
+      }
+      diag.tablas.forEach((t: any) => {
+        log('info', `    · Tabla #${t.idx} headers=[${t.headers.join(', ')}]`)
+        t.filasMuestra.forEach((f: string[], i: number) => {
+          log('info', `        fila${i}: ${f.join(' | ')}`)
+        })
+      })
+    }
+    if (diag.tablas.length === 0) {
+      log('warn', `  [DIAG] NO hay ninguna <table> en la página → el portal no mostró resultados (¿pidió más filtros o dio error?). Buscábamos el número ${numeroBuscado}.`)
+    }
+  } catch (e: any) {
+    log('warn', `  [DIAG] No se pudo volcar el estado de la búsqueda: ${e.message}`)
   }
 }
 

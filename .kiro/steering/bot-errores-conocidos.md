@@ -174,8 +174,10 @@ el selector de CAPTCHA en vivo (hoy solo se detecta a posteriori por el mensaje 
 - En los **puntos de fallo instrumentados** (login, navegación, error crítico, y el
   detalle de cada causa), el bot toma una **screenshot en ese momento** y guarda la ruta
   junto al registro del error. El nombre incluye el `run_id` y el paso, ej:
-  `/tmp/bot_error_<run_id>_login.png`, `..._navegacion.png`, `..._detalle_<rit>.png`.
-  Así la captura corresponde exactamente al error registrado (no a otra corrida).
+  `bot-capturas/bot_error_<run_id>_login.png`, `..._navegacion.png`, `..._detalle_<rit>.png`.
+  Las capturas se guardan en la carpeta `bot-capturas/` del proyecto (o la ruta de
+  `BOT_SCREENSHOT_DIR` si se define; el CI usa `/tmp/bot-capturas`). Cross-OS, funciona en
+  Windows. Así la captura corresponde exactamente al error registrado (no a otra corrida).
 - Además, `login.ts` y `search.ts` generan capturas propias por modo de fallo
   (`bot_error_no_redirect.png`, `bot_error_buscar_<año>.png`, etc.) útiles para depurar.
 - Cada corrida y cada error se registran en Supabase:
