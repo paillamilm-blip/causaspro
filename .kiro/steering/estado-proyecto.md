@@ -56,16 +56,26 @@ Datos clave del dominio:
 
 ## Estado del bot (búsqueda por RIT — `searchByRitExacto`)
 
-Flujo implementado tras los PRs #16–#21:
+✅ **FUNCIONANDO END-TO-END** — corrida `run_20260910_1821_kde4` (10-sep-2026):
+**5/5 causas exitosas, 100% de éxito.** Scrapeó los movimientos reales (5, 6, 13, 13, 6 mov).
+
+Flujo implementado y verificado:
 `Familia → Filtros → (RUT intacto) → Tipo 5/5 → Estado 12/12 → Rol → Año → Buscar (con scroll + reintento)`.
 
 - `parseRIT` acepta RIT con letra y **sin letra** (número-año).
 - Matching por componentes (letra opcional + número + año); **fail-closed** ante ambigüedad.
+- Toggle "Filtros" localizado por texto (`hermano`) y activado con click real + verificación.
 - Diagnóstico: capturas en `bot-capturas/` (cross-OS) + volcado `[DIAG]` del portal cuando
   una búsqueda falla (desactivable con `BOT_DIAG=0`, así lo hace el CI).
 
 ## Historial de decisiones y avances (reciente → antiguo)
 
+- **PR #24** — 🟢 **BUG DE FONDO RESUELTO**: `ReferenceError: __name is not defined` en
+  `page.evaluate` (tsx/esbuild con keepNames inserta `__name()`, inexistente en el navegador).
+  Shim `window.__name` global vía `addInitScript`. Esto era lo que rompía "Activando filtros"
+  y enmascaraba todo. Tras esto: **bot 100% funcional**.
+- **PR #23** — Toggle "Filtros" por TEXTO (genérico, no por clases CSS) + `dumpZonaFiltros` diag.
+- **PR #22** — Steering `estado-proyecto.md` (memoria del proyecto en el repo).
 - **PR #21** — Toggle "Filtros" robusto (click real de Playwright sobre el elemento visible
   del switch, verificación + reintentos, fail-closed).
 - **PR #20** — NO limpiar el campo RUT (se llena por defecto y así debe quedar).
@@ -78,8 +88,17 @@ Flujo implementado tras los PRs #16–#21:
 
 ## Pendientes conocidos
 
-- Validar end-to-end que el bot ya extrae las 5 causas reales del usuario (esperando el log
-  de la próxima corrida).
+- ✅ ~~Validar end-to-end~~ — HECHO: 5/5 exitosas el 10-sep-2026.
+- **Detalles menores observados en la corrida 100% (no bloquean, mejoras de robustez/velocidad):**
+  1. Tras scrapear cada causa, al volver a "Mis Causas" aparece `⚠️ Familia no confirmado en
+     tabla` (verifyFamiliaTab no detecta la tabla, pero igual sigue y encuentra la siguiente
+     causa). Revisar los selectores de `verifyFamiliaTab` — mete ~20s de espera por causa.
+  2. `No se encontró sección de audiencias` en las 5 causas → puede ser real (sin audiencias)
+     o el selector de audiencias del scraper no matchea. Verificar contra una causa que sí
+     tenga audiencias.
+  3. Dropdowns Tipo/Estado: `aun abierto tras Escape, re-click para cerrar` — funciona, pero
+     el cierre por Escape no basta; menor.
+  4. Duración ~2 min/causa (mucho por el timeout de verifyFamiliaTab). Optimizable.
 - `searchByYear` sigue limpiando el RUT (teoría opuesta a la confirmada) — corregir si se
   reactiva la búsqueda por año.
 - Ejecutar en Supabase, en orden: `schema-bot.sql` → `schema-qa-trazabilidad.sql` →
