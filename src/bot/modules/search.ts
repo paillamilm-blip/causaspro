@@ -192,91 +192,184 @@ async function activarFiltros(page: Page): Promise<boolean> {
     document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark))
   }, MARK).catch(() => {})
 
-  // Lee el estado del checkbox del switch marcado.
-  //   true/false → checkbox encontrado y su valor;  null → no se pudo leer (no verificable).
-  const yaActivo = async (): Promise<boolean | null> => page.evaluate((mark: string) => {
-    const el = document.querySelector(`[${mark}]`)
+  // Estado del switch por MÚLTIPLES señales (no dependemos de un <input checkbox>, porque el
+  // toggle del PJUD puede no tener uno accesible). Señales de "activo":
+  //   - input[type=checkbox].checked  |  aria-checked="true"  |  data-checked/data-on
+  //   - clase que sugiera encendido (active/on/checked/enabled/selected) en el propio nodo
+  //     o en un descendiente típico de switch
+  //   null solo si de verdad no hay ninguna señal legible.
+  const leerEstado = async (): Promise<boolean | null> => page.evaluate((mark: string) => {
+    const el = document.querySelector(`[${mark}]`) as HTMLElement | null
     if (!el) return null
-    const cont = el.closest('.custom-switch, .form-check, .form-switch, label, div') || el
-    const input = (el.matches('input[type="checkbox"]') ? el : cont.querySelector('input[type="checkbox"]')) as HTMLInputElement | null
-    return input ? input.checked : null
+    const scope = el.closest('label, .custom-switch, .custom-control, .form-switch, .form-check, [role="switch"], .switch, .toggle, div') || el
+    // 1) checkbox real
+    const cb = (el.matches('input[type="checkbox"]') ? el : scope.querySelector('input[type="checkbox"]')) as HTMLInputElement | null
+    if (cb) return cb.checked
+    // 2) aria-checked / data-*
+    const aria = el.getAttribute('aria-checked') || scope.querySelector('[aria-checked]')?.getAttribute('aria-checked')
+    if (aria === 'true') return true
+    if (aria === 'false') return false
+    const data = el.getAttribute('data-checked') || el.getAttribute('data-on') || el.getAttribute('data-state')
+    if (data != null) return /^(true|on|checked|1)$/i.test(data)
+    // 3) clases del propio nodo o de un descendiente "switch/slider/toggle"
+    const claseActiva = (n: Element | null) => !!n && /(?:^|[\s_-])(active|on|checked|enabled|selected)(?:$|[\s_-])/i.test(n.className || '')
+    if (claseActiva(el)) return true
+    const sub = scope.querySelector('.slider, .switch, .toggle, [class*="switch"], [class*="toggle"], [class*="slider"]')
+    if (claseActiva(sub)) return true
+    return null
   }, MARK)
 
-  // 1) Marcar el elemento VISIBLE y clickeable del switch asociado al texto "Filtros".
-  //    Dos pasadas: primero match EXACTO ("Filtros"), luego includes como fallback; en ambas
-  //    exigimos que el elemento a clickear sea visible (offsetParent !== null) para no marcar
-  //    el input oculto (que haría fallar el click).
+  // 1) Marcar el elemento clickeable del switch a partir del TEXTO "Filtros".
+  //    Estrategia genérica (no depende de clases del framework): ubicar el nodo cuyo texto
+  //    propio sea "Filtros" y, desde su contenedor, tomar el control interactivo asociado —
+  //    normalmente el elemento hermano/cercano a la DERECHA del label (el switch). Si el
+  //    contenedor tiene un input/[role=switch]/label-for, se prefiere ese.
   const found = await page.evaluate((mark: string) => {
     document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark))
-    const candidatos = Array.from(document.querySelectorAll(
-      'label, .custom-switch, .custom-control, .form-switch, .form-check, [role="switch"], .switch, .toggle'
-    ))
     const esVisible = (e: Element | null): e is HTMLElement => !!e && (e as HTMLElement).offsetParent !== null
-    // Elige, dentro del candidato, un elemento VISIBLE para clickear (el propio o un hijo del switch).
-    const elegirVisible = (c: Element): HTMLElement | null => {
-      if (c.matches('label, .custom-switch, .custom-control, .form-switch, .switch, .toggle, [role="switch"]') && esVisible(c)) return c as HTMLElement
-      const hijo = c.querySelector('label, .custom-control-label, .slider, .switch, .toggle, [role="switch"]')
-      if (esVisible(hijo)) return hijo as HTMLElement
-      return esVisible(c) ? (c as HTMLElement) : null
+
+    // Nodos cuyo TEXTO PROPIO (sin contar hijos) es "Filtros".
+    const nodosFiltros: Element[] = []
+    const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT)
+    let n = walker.nextNode() as Element | null
+    while (n) {
+      const propio = Array.from(n.childNodes)
+        .filter(c => c.nodeType === 3)
+        .map(c => (c.textContent || '').trim())
+        .join('')
+      if (/^filtros?$/i.test(propio) && esVisible(n)) nodosFiltros.push(n)
+      n = walker.nextNode() as Element | null
     }
-    const marcar = (predicado: (txt: string) => boolean): boolean => {
-      for (const c of candidatos) {
-        const txt = (c.textContent || '').trim()
-        if (!predicado(txt)) continue
-        const vis = elegirVisible(c)
-        if (vis) { vis.setAttribute(mark, '1'); return true }
-      }
+
+    const marcar = (el: Element | null): boolean => {
+      if (esVisible(el)) { (el as HTMLElement).setAttribute(mark, '1'); return true }
       return false
     }
-    // Pasada 1: match exacto. Pasada 2: contiene "filtro".
-    return marcar(t => /^filtros?$/i.test(t)) || marcar(t => t.toLowerCase().includes('filtro'))
+
+    for (const label of nodosFiltros) {
+      // a) ¿el label apunta a un control con for=?
+      const forId = label.getAttribute('for')
+      if (forId) {
+        const target = document.getElementById(forId)
+        // el input suele estar oculto; en ese caso clickeamos el propio label (visible)
+        if (target && esVisible(target) && marcar(target)) return 'for-visible'
+        if (marcar(label)) return 'label-for'
+      }
+      // b) el contenedor del label: buscar el control interactivo (switch) a la derecha.
+      const cont = label.closest('div, li, td, th, span, label') || label
+      // candidatos dentro del contenedor: switch/toggle/checkbox/role=switch/button
+      const interno = cont.querySelector(
+        '[role="switch"], input[type="checkbox"], .switch, .toggle, [class*="switch"], [class*="toggle"], button'
+      )
+      if (interno) {
+        // si es un input oculto, clickeamos su contenedor visible más cercano
+        if (esVisible(interno) && marcar(interno)) return 'interno'
+        const wrap = interno.closest('label, span, div')
+        if (marcar(wrap)) return 'interno-wrap'
+      }
+      // c) hermano SIGUIENTE del label (el switch suele ir justo a la derecha)
+      let sib = label.nextElementSibling
+      let hop = 0
+      while (sib && hop < 3) {
+        if (esVisible(sib)) {
+          const s = sib.querySelector('[role="switch"], input[type="checkbox"], .switch, .toggle, [class*="switch"], [class*="toggle"], button') || sib
+          if (marcar(s)) return 'hermano'
+          if (marcar(sib)) return 'hermano-cont'
+        }
+        sib = sib.nextElementSibling
+        hop++
+      }
+      // d) último recurso: clickear el propio label
+      if (marcar(label)) return 'label-mismo'
+    }
+    return false
   }, MARK)
 
   if (!found) {
-    log('warn', '  Toggle "Filtros" no encontrado (visible) en la página.')
+    log('warn', '  Toggle "Filtros" no encontrado (por texto "Filtros" visible).')
+    await dumpZonaFiltros(page)
     return false
   }
+  log('info', `  Toggle "Filtros" localizado (${found}).`)
 
-  // Si ya está activo, no hacemos nada (y limpiamos la marca).
-  if ((await yaActivo()) === true) {
+  // Si ya está activo, no hacemos nada.
+  if ((await leerEstado()) === true) {
     await limpiarMarca()
     log('info', '  Filtros ya estaban activos.')
     return true
   }
 
-  // 2) Click REAL de Playwright sobre el elemento visible del switch. Reintenta hasta 3 veces.
+  // ¿El elemento marcado es INEQUÍVOCAMENTE el switch? Solo entonces usamos force:true
+  // (que salta los chequeos de "actionability"); si marcamos un contenedor genérico, forzar
+  // podría clickear algo equivocado, así que preferimos scroll + click normal.
+  const marcadoEsSwitch = await page.evaluate((mark: string) => {
+    const el = document.querySelector(`[${mark}]`)
+    return !!el && el.matches('[role="switch"], input[type="checkbox"]')
+  }, MARK).catch(() => false)
+
+  // 2) Click sobre el elemento marcado. Alternamos click real de Playwright y click JS, y
+  //    reintentamos hasta 4 veces verificando el estado por múltiples señales.
   let noVerificable = false
-  for (let intento = 1; intento <= 3; intento++) {
+  for (let intento = 1; intento <= 4; intento++) {
     try {
-      await page.click(`[${MARK}]`, { timeout: 3000 })
+      await page.locator(`[${MARK}]`).scrollIntoViewIfNeeded({ timeout: 2000 }).catch(() => {})
+      // force solo si el marcado es el switch en sí y ya reintentamos una vez.
+      await page.click(`[${MARK}]`, { timeout: 3000, force: intento >= 2 && marcadoEsSwitch })
     } catch {
-      // Fallback: click JS por si el elemento no es directamente clickeable por Playwright.
       await page.evaluate((mark: string) => {
         const el = document.querySelector(`[${mark}]`) as HTMLElement | null
         el?.click()
       }, MARK)
     }
     await sleep(1200)
-    const estado = await yaActivo()
+    const estado = await leerEstado()
     if (estado === true) {
       await limpiarMarca()
-      log('info', `  Filtros activados (intento ${intento}).`)
+      log('info', `  ✓ Filtros activados (intento ${intento}).`)
       return true
     }
     if (estado === null) noVerificable = true
-    log('info', `  Filtros aún no confirmados, reintentando (${intento}/3)...`)
+    log('info', `  Filtros aún no confirmados, reintentando (${intento}/4)...`)
   }
 
-  await limpiarMarca()
   if (noVerificable) {
-    // Se hizo click pero no encontramos un checkbox para confirmar. No lo damos por éxito
-    // (fail-closed), pero avisamos que quizá sí quedó activo — el flujo posterior (dropdowns)
-    // lo dirá. Devolvemos false para que el caller lo registre.
-    log('warn', '  Se clickeó "Filtros" pero no se pudo verificar su estado (sin checkbox legible).')
+    log('warn', '  Se clickeó "Filtros" pero no se pudo verificar su estado.')
   } else {
-    log('warn', '  No se pudo confirmar la activación de "Filtros" tras 3 intentos.')
+    log('warn', '  No se pudo activar "Filtros" tras 4 intentos.')
   }
+  await dumpZonaFiltros(page)
+  await limpiarMarca()
   return false
+}
+
+/**
+ * DIAGNÓSTICO: vuelca al log el HTML de la zona alrededor del texto "Filtros" para ver
+ * cómo está construido el toggle real del portal (etiquetas, clases, atributos). Solo se
+ * llama cuando la activación falla, y solo si BOT_DIAG !== '0'.
+ */
+async function dumpZonaFiltros(page: Page): Promise<void> {
+  if (!DIAG_ON) return
+  try {
+    const html = await page.evaluate(() => {
+      const esVisible = (e: Element | null) => !!e && (e as HTMLElement).offsetParent !== null
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT)
+      let n = walker.nextNode() as Element | null
+      while (n) {
+        const propio = Array.from(n.childNodes).filter(c => c.nodeType === 3).map(c => (c.textContent || '').trim()).join('')
+        if (/^filtros?$/i.test(propio) && esVisible(n)) {
+          // subir 2 niveles para capturar el contenedor del label + el switch
+          const cont = (n.parentElement?.parentElement || n.parentElement || n)
+          return (cont as HTMLElement).outerHTML.slice(0, 1500)
+        }
+        n = walker.nextNode() as Element | null
+      }
+      return '(no se encontró un nodo con texto propio "Filtros")'
+    })
+    log('info', `  [DIAG] HTML de la zona "Filtros":`)
+    log('info', `    ${html.replace(/\s+/g, ' ').slice(0, 1200)}`)
+  } catch (e: any) {
+    log('warn', `  [DIAG] No se pudo volcar la zona de Filtros: ${e.message}`)
+  }
 }
 
 // ============================================================
