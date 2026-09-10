@@ -489,8 +489,27 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // PASO 1: Esperar a que el formulario de Familia esté cargado
     await sleep(2000)
 
-    // PASO 2: Limpiar el campo RUT (se auto-rellena con el RUT del curador tras login;
+    // PASO 2.1: Activar el toggle de "Filtros" PRIMERO (igual que searchByYear). Sin esto,
+    // los dropdowns de Tipo Causa / Estado pueden no estar disponibles. IMPORTANTE: el
+    // toggle re-renderiza el formulario, por eso va ANTES de limpiar el RUT (si se limpiara
+    // antes, el re-render podría volver a auto-rellenar el RUT del curador).
+    await page.evaluate(() => {
+      const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
+      for (const toggle of toggles) {
+        if ((toggle as HTMLElement).offsetParent === null) continue
+        const parent = toggle.closest('.custom-switch, .form-check, label, div')
+        const parentText = parent ? (parent.textContent || '') : ''
+        if (parentText.includes('Filtro') || parentText.includes('filtro')) {
+          if (!(toggle as HTMLInputElement).checked) (toggle as HTMLElement).click()
+          return
+        }
+      }
+    })
+    await sleep(2000)
+
+    // PASO 2.2: Limpiar el campo RUT (se auto-rellena con el RUT del curador tras login;
     // si queda con valor, el portal filtra por RUT y no encuentra la causa por RIT).
+    // Va DESPUÉS del toggle para que el re-render no lo repueble.
     await page.evaluate(() => {
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
@@ -506,7 +525,19 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
         }
       }
     })
-    await sleep(300)
+    await sleep(500)
+
+    // PASO 2.3: Tipo Causa → abrir dropdown → "Seleccionar Todos" (deja "5 de 5").
+    // CRÍTICO: el portal NO devuelve la causa si estos filtros multi-selección no están
+    // completos. searchByYear ya lo hacía; searchByRitExacto no, y por eso no encontraba nada.
+    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
+    await selectAllInDropdown(page, 'tipo')
+    await sleep(500)
+
+    // PASO 2.4: Estado → abrir dropdown → "Seleccionar Todos" (deja "12 de 12").
+    log('info', '  Seleccionando Estado (12 de 12)...')
+    await selectAllInDropdown(page, 'estado')
+    await sleep(500)
 
     // PASO 3: Escribir el número en el campo "Rol".
     // NO se toca el dropdown "Rit" (letra): buscamos por número + año, que es lo que el
