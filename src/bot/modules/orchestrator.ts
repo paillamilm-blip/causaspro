@@ -256,6 +256,7 @@ export async function runBotSession(
     log('info', `📊 Resumen sesión ${runId}:`)
     log('info', `   Total: ${status.total_causas} | Procesadas: ${status.procesadas}`)
     log('success', `   Exitosas: ${status.exitosas} | Fallidas: ${status.fallidas}`)
+    if (status.solo_diagnostico) log('warn', `   Solo diagnóstico (NO persistidas): ${status.solo_diagnostico}`)
     log('info', `   Detenido por: ${status.detenido_por}`)
     if (status.errores.length > 0) log('warn', `   Errores: ${status.errores.length}`)
     log('info', `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`)
@@ -279,8 +280,31 @@ async function runBusquedaPorRit(
   const envMax = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
   const maxCausas = envMax && envMax > 0 ? envMax : cfg.maxCausasPorSesion
 
-  // Leer las causas cargadas en la BD, priorizando las menos actualizadas.
-  const causas = await getCausasToScrape(maxCausas, cfg.priorizarUrgentes)
+  // OVERRIDE PUNTUAL: BOT_RIT="F-123-2024" fuerza procesar SOLO ese RIT, saltándose la
+  // selección automática (getCausasToScrape). Útil para diagnóstico/pruebas de una causa
+  // concreta (ej. una de Familia real) sin depender de cuál esté "menos actualizada".
+  // Si el RIT existe en la BD usamos su id real y SÍ se persiste normalmente. Si NO existe,
+  // usamos un id temporal "temp-<rit>": la causa se scrapea y diagnostica pero NO se
+  // persiste (el id no es UUID y fallaría la FK). Esa corrida se marca como SOLO
+  // DIAGNÓSTICO (status.solo_diagnostico) y NO se cuenta como exitosa (ver loop abajo).
+  let causas: Array<{ id: string; rit: string }>
+  const ritOverride = (process.env.BOT_RIT || '').trim()
+  if (ritOverride) {
+    let id = `temp-${ritOverride}`
+    try {
+      const sb = initSupabase()
+      const { data } = await sb.from('causas').select('id').eq('rit', ritOverride).limit(1)
+      if (data && data.length > 0) id = data[0].id
+      else log('warn', `  BOT_RIT="${ritOverride}" no está en la BD; se usa id temporal (no persiste con FK).`)
+    } catch (e: any) {
+      log('warn', `  No se pudo buscar el id de BOT_RIT en la BD (se usa id temporal): ${e?.message ?? e}`)
+    }
+    causas = [{ id, rit: ritOverride }]
+    log('info', `🎯 BOT_RIT activo: procesando SOLO ${ritOverride}`)
+  } else {
+    // Leer las causas cargadas en la BD, priorizando las menos actualizadas.
+    causas = await getCausasToScrape(maxCausas, cfg.priorizarUrgentes)
+  }
   status.total_causas = causas.length
   log('info', `📋 ${causas.length} causas cargadas a revisar (modo RIT, máx ${maxCausas})`)
 
@@ -341,10 +365,23 @@ async function runBusquedaPorRit(
           causa.rit,
         )
         const analysis = analyzeCausaUrgency(scrapedData)
-        await saveCausaData(scrapedData, analysis)
         results.push(scrapedData)
-        await markCausaScraped(causa.id)
-        status.exitosas++
+
+        // Un id "temp-*" (BOT_RIT sobre una causa que NO está en la BD) NO es un UUID y
+        // no satisface la FK causa_id → cualquier insert/update se rechazaría en silencio.
+        // En ese caso NO intentamos persistir y NO lo contamos como éxito engañoso: es una
+        // corrida de SOLO DIAGNÓSTICO. Así el resumen no miente ("exitosas") y la BD no
+        // recibe escrituras condenadas a fallar.
+        const esDiagnosticoSinPersistir = causa.id.startsWith('temp-')
+        if (esDiagnosticoSinPersistir) {
+          status.solo_diagnostico = (status.solo_diagnostico || 0) + 1
+          log('warn', `  🔎 ${causa.rit}: SOLO DIAGNÓSTICO (id temporal) — datos NO persistidos. `
+            + `${scrapedData.movimientos.length} mov, ${scrapedData.audiencias.length} aud, ${scrapedData.resoluciones.length} res`)
+        } else {
+          await saveCausaData(scrapedData, analysis)
+          await markCausaScraped(causa.id)
+          status.exitosas++
+        }
 
         if (analysis.requiere_accion_inmediata) {
           log('warn', `  ${generateAlertSummary(analysis)}`)
