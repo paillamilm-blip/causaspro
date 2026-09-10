@@ -2,6 +2,8 @@
 // CAUSASPRO BOT - Utilities
 // ============================================================
 
+import * as fs from 'fs'
+import * as path from 'path'
 import { ALLOWED_HOURS } from '../config'
 import type { BotErrorType } from '../types'
 
@@ -221,4 +223,32 @@ export async function retryWithBackoff<T>(
     }
   }
   throw new Error('Max retries exceeded')
+}
+
+
+/**
+ * Devuelve una ruta VÁLIDA en cualquier SO para guardar una screenshot de debug.
+ *
+ * PROBLEMA que resuelve: el código usaba rutas fijas tipo "/tmp/bot_error_x.png".
+ * En Windows (donde el usuario corre el bot) "/tmp" NO existe, así que page.screenshot()
+ * fallaba silenciosamente y NUNCA se guardaba la captura → diagnóstico a ciegas.
+ *
+ * Ahora escribimos dentro de una carpeta del proyecto ("bot-capturas/" por defecto,
+ * configurable con BOT_SCREENSHOT_DIR), que se crea si no existe. Funciona igual en
+ * Windows, macOS y Linux.
+ *
+ * @param nombre Nombre del archivo (sin carpeta). Se sanea para quitar caracteres
+ *               inválidos en nombres de archivo (: \ / etc.).
+ */
+export function capturaPath(nombre: string): string {
+  const dir = process.env.BOT_SCREENSHOT_DIR || path.join(process.cwd(), 'bot-capturas')
+  try {
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  } catch {
+    // Si no se puede crear la carpeta, caemos al cwd (mejor que /tmp inexistente).
+    const seguro = nombre.replace(/[^a-zA-Z0-9._-]/g, '_')
+    return path.join(process.cwd(), seguro)
+  }
+  const seguro = nombre.replace(/[^a-zA-Z0-9._-]/g, '_')
+  return path.join(dir, seguro)
 }

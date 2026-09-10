@@ -64,6 +64,11 @@ jobs:
           BOT_MAX_CAUSAS: ${{ github.event.inputs.max_causas || '25' }}
           BOT_MODE: ${{ github.event.inputs.mode || 'normal' }}
           SKIP_HOUR_CHECK: '1'
+          # Capturas de debug en una carpeta conocida (para subirlas como artifact).
+          BOT_SCREENSHOT_DIR: /tmp/bot-capturas
+          # En CI NO volcamos el contenido de las tablas (nombres de partes/causas) a los
+          # logs públicos de Actions. El diagnóstico detallado queda solo para local.
+          BOT_DIAG: '0'
         run: npx tsx src/bot/index.ts
       
       - name: 📸 Upload screenshots on failure
@@ -71,5 +76,5 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bot-error-screenshots
-          path: /tmp/bot_error_*.png
+          path: /tmp/bot-capturas/*.png
           retention-days: 7
