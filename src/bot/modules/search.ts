@@ -199,6 +199,10 @@ async function activarFiltros(page: Page): Promise<boolean> {
   //     o en un descendiente típico de switch
   //   null solo si de verdad no hay ninguna señal legible.
   const leerEstado = async (): Promise<boolean | null> => page.evaluate((mark: string) => {
+    // NOTA: el shim GLOBAL de __name está en createStealthContext (login.ts) y cubre TODOS
+    // los page.evaluate. Este const local es defensa en profundidad; no es obligatorio en
+    // cada evaluate. (esbuild/tsx con keepNames referencia __name dentro del navegador.)
+    const __name = (x: any) => x
     const el = document.querySelector(`[${mark}]`) as HTMLElement | null
     if (!el) return null
     const scope = el.closest('label, .custom-switch, .custom-control, .form-switch, .form-check, [role="switch"], .switch, .toggle, div') || el
@@ -225,6 +229,7 @@ async function activarFiltros(page: Page): Promise<boolean> {
   //    normalmente el elemento hermano/cercano a la DERECHA del label (el switch). Si el
   //    contenedor tiene un input/[role=switch]/label-for, se prefiere ese.
   const found = await page.evaluate((mark: string) => {
+    const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
     document.querySelectorAll(`[${mark}]`).forEach(e => e.removeAttribute(mark))
     const esVisible = (e: Element | null): e is HTMLElement => !!e && (e as HTMLElement).offsetParent !== null
 
@@ -351,6 +356,7 @@ async function dumpZonaFiltros(page: Page): Promise<void> {
   if (!DIAG_ON) return
   try {
     const html = await page.evaluate(() => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
       const esVisible = (e: Element | null) => !!e && (e as HTMLElement).offsetParent !== null
       const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_ELEMENT)
       let n = walker.nextNode() as Element | null
@@ -740,6 +746,7 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     //   'no_option'  → existe el <select> de año pero NO tiene el año buscado (importante:
     //                  el dropdown quedaría en su default y filtraría por el año equivocado)
     const anioRes = await page.evaluate((anioBuscado: string) => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
       // Preferimos 'anio'/'año' (formulario en español). 'year' es último recurso y solo
       // si además el elemento parece un campo de año (para no enganchar campos ajenos).
       const matchAnioFuerte = (el: Element) => {
@@ -837,6 +844,7 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // aunque el portal recargue/limpie el formulario tras un submit (en ese caso el reclick
     // buscaría con campos vacíos). Es idempotente: si los campos ya tienen valor, no toca nada.
     const reescribirCampos = () => page.evaluate((args: { rol: string; anio: string }) => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
       const setSiVacio = (el: HTMLInputElement, v: string) => {
         if ((el.value || '').trim() === '') {
           el.value = v
