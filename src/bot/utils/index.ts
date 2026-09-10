@@ -150,14 +150,26 @@ export const TIPOS_RIT_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'Z', 'T', 'FA', 'RIT'
 
 /**
  * Parsea RIT del portal PJUD.
- * Soporta prefijos de 1 a 3 letras: "P-123-2024", "C-456-2024", "FA-78-2025".
- * (El regex de búsqueda de search.ts es más laxo — ^[A-Z]{0,3}-?\d+-\d{4}$ —
- *  acepta RITs sin prefijo; aquí exigimos al menos una letra para poder derivar tipo.)
+ * Soporta dos formatos:
+ *   1. CON prefijo de 1 a 3 letras: "P-123-2024", "C-456-2024", "FA-78-2025".
+ *   2. SIN prefijo (solo número-año): "249240-2023", "2646-2022" → tipo = "".
+ * Muchas causas del usuario vienen sin letra (solo Rol numérico + año), por eso
+ * aceptamos ambos. Cuando no hay letra, `tipo` queda vacío y NO se debe usar para
+ * derivar la columna `causas.tipo` (ver inferirTipoRIT, que devolverá null).
  */
 export function parseRIT(rit: string): { tipo: string; numero: string; año: string } | null {
-  const match = rit.trim().match(/^([A-Z]{1,3})-(\d+)-(\d{4})$/i)
-  if (!match) return null
-  return { tipo: match[1].toUpperCase(), numero: match[2], año: match[3] }
+  const limpio = rit.trim()
+  // Formato con prefijo de letra(s): LETRA-NÚMERO-AÑO
+  const conLetra = limpio.match(/^([A-Z]{1,3})-(\d+)-(\d{4})$/i)
+  if (conLetra) {
+    return { tipo: conLetra[1].toUpperCase(), numero: conLetra[2], año: conLetra[3] }
+  }
+  // Formato sin prefijo: NÚMERO-AÑO (tipo vacío)
+  const sinLetra = limpio.match(/^(\d+)-(\d{4})$/)
+  if (sinLetra) {
+    return { tipo: '', numero: sinLetra[1], año: sinLetra[2] }
+  }
+  return null
 }
 
 /**

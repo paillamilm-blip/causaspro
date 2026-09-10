@@ -479,7 +479,8 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     return []
   }
   const { tipo, numero, año } = parsed
-  log('info', `  Buscando RIT exacto: ${tipo}-${numero}-${año}...`)
+  const ritLegible = tipo ? `${tipo}-${numero}-${año}` : `${numero}-${año}`
+  log('info', `  Buscando RIT exacto: ${ritLegible}...`)
 
   try {
     // PASO 1: Esperar a que el formulario de Familia esté cargado
@@ -577,7 +578,7 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     }
 
     if (!resultsFound) {
-      log('warn', `  Sin resultados para ${tipo}-${numero}-${año} (¿causa no visible en este tribunal/año?)`)
+      log('warn', `  Sin resultados para ${ritLegible} (¿causa no visible en este tribunal/año?)`)
       await page.screenshot({ path: `/tmp/bot_error_rit_${tipo}${numero}${año}.png` }).catch(() => {})
       return []
     }
@@ -590,19 +591,49 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // tabla previa sin refrescar) y devolver causas de OTRO expediente. Si abriéramos
     // una fila equivocada, scrapearíamos y guardaríamos datos ajenos bajo este id.
     // Comparamos normalizado (sin espacios, mayúsculas) contra el RIT pedido.
-    const ritPedido = `${tipo}-${numero}-${año}`.toUpperCase()
-    const norm = (s: string) => s.replace(/\s+/g, '').toUpperCase()
-    const exactas = causas.filter(c => norm(c.rit) === norm(ritPedido))
+    // El RIT pedido puede venir SIN letra (tipo === ""): "249240-2023". En ese caso NO
+    // anteponemos el guion (evita "-249240-2023" que nunca coincidiría). Etiqueta legible:
+    const ritPedido = tipo ? `${tipo}-${numero}-${año}` : `${numero}-${año}`
+    // Comparación por componentes (letra opcional, número, año) en vez de string literal:
+    //   - número y año DEBEN coincidir siempre.
+    //   - si el RIT pedido trae letra (tipo), la letra de la fila debe coincidir.
+    //   - si el RIT pedido NO trae letra, aceptamos la fila tenga o no letra
+    //     (el portal a veces muestra el prefijo aunque busquemos solo por número).
+    const partes = (s: string) => {
+      const m = s.replace(/\s+/g, '').toUpperCase().match(/^([A-Z]{0,3})-?(\d+)-(\d{4})$/)
+      return m ? { letra: m[1], numero: m[2], año: m[3] } : null
+    }
+    const tipoUp = tipo.toUpperCase()
+    // Comparación de número robusta a ceros a la izquierda (el portal podría zero-padear
+    // el Rol): comparamos el valor entero, no el string.
+    const mismoNumero = (a: string, b: string) => parseInt(a, 10) === parseInt(b, 10)
+    const exactas = causas.filter(c => {
+      const p = partes(c.rit)
+      if (!p) return false
+      if (!mismoNumero(p.numero, numero) || p.año !== año) return false
+      if (tipoUp && p.letra !== tipoUp) return false
+      return true
+    })
 
     if (exactas.length === 0) {
       log('warn', `  La búsqueda de ${ritPedido} no devolvió una coincidencia EXACTA (${causas.length} fila(s) genéricas). Se omite para no scrapear la causa equivocada.`)
       await page.screenshot({ path: `/tmp/bot_error_rit_nomatch_${tipo}${numero}${año}.png` }).catch(() => {})
       return []
     }
-    if (exactas.length > 1) {
-      log('warn', `  ${exactas.length} coincidencias exactas para ${ritPedido} (inusual). Se usa la primera.`)
+    // FAIL-CLOSED ante ambigüedad de letra: si el usuario buscó SIN letra y el portal
+    // devuelve varias causas con el mismo número/año pero DISTINTA letra (P-, F-, ...),
+    // no podemos saber cuál es la suya. Adivinar "la primera" arriesga scrapear el
+    // expediente equivocado y guardarlo bajo este id. Preferimos omitir la causa.
+    const letrasDistintas = new Set(exactas.map(c => partes(c.rit)?.letra || '')).size
+    if (exactas.length > 1 && letrasDistintas > 1) {
+      log('warn', `  ${exactas.length} causas con número ${numero}-${año} pero distinta letra (${exactas.map(c => c.rit).join(', ')}). Ambiguo: se OMITE para no scrapear la causa equivocada. Especifica la letra del RIT si conoces el tipo.`)
+      await page.screenshot({ path: `/tmp/bot_error_rit_ambiguo_${numero}${año}.png` }).catch(() => {})
+      return []
     }
-    log('info', `  → coincidencia exacta para ${ritPedido}`)
+    if (exactas.length > 1) {
+      log('warn', `  ${exactas.length} coincidencias para ${ritPedido} con la misma letra (posible duplicado del portal). Se usa la primera.`)
+    }
+    log('info', `  → coincidencia exacta para ${exactas[0].rit}`)
     return exactas
 
   } catch (error: any) {
@@ -762,20 +793,32 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
 export async function navigateToCausaDetail(page: Page, rit: string): Promise<boolean> {
   try {
     const clicked = await page.evaluate((targetRit: string) => {
-      const norm = (s: string) => (s || '').replace(/\s+/g, '').toUpperCase()
-      const target = norm(targetRit)
+      // Compara por COMPONENTES (letra opcional, número, año), no por string literal.
+      // Motivo: el RIT objetivo puede venir SIN letra ("249240-2023") mientras el portal
+      // muestra la celda CON prefijo ("F-249240-2023"). Un match literal fallaría.
+      // Reglas para considerar una fila como la correcta:
+      //   - número y año deben coincidir SIEMPRE;
+      //   - si el RIT objetivo trae letra, la letra de la fila debe coincidir;
+      //   - si el RIT objetivo NO trae letra, se acepta la fila tenga o no letra.
+      // Seguimos SIN fallback por substring: solo abrimos ante una coincidencia de
+      // número+año (y letra cuando aplica), nunca por coincidencia parcial de dígitos.
+      const partes = (s: string) => {
+        const m = (s || '').replace(/\s+/g, '').toUpperCase().match(/^([A-Z]{0,3})-?(\d+)-(\d{4})$/)
+        return m ? { letra: m[1], numero: m[2], año: m[3] } : null
+      }
+      const t = partes(targetRit)
+      if (!t) return false
+      const mismoNumero = (a: string, b: string) => parseInt(a, 10) === parseInt(b, 10)
       const rows = document.querySelectorAll('table tr')
-      // Abrir SOLO la fila cuya celda sea EXACTAMENTE el RIT completo.
-      // NO hay fallback por substring: como ahora buscamos solo por número, la tabla
-      // puede traer varias causas con el mismo número (distinta letra/año). Un match
-      // laxo abriría la causa equivocada. Si ninguna celda coincide exacto, no abrimos.
       for (const row of rows) {
         const tds = row.querySelectorAll('td')
         for (const td of tds) {
-          if (norm(td.textContent || '') === target) {
-            const link = row.querySelector('a[href], button, .btn')
-            if (link) { (link as HTMLElement).click(); return true }
-          }
+          const p = partes(td.textContent || '')
+          if (!p) continue
+          if (!mismoNumero(p.numero, t.numero) || p.año !== t.año) continue
+          if (t.letra && p.letra !== t.letra) continue
+          const link = row.querySelector('a[href], button, .btn')
+          if (link) { (link as HTMLElement).click(); return true }
         }
       }
       return false
