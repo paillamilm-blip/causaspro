@@ -26,8 +26,15 @@ export async function createStealthContext(browser: Browser): Promise<BrowserCon
     ignoreHTTPSErrors: true,
   })
 
-  // Anti-detección
+  // Anti-detección + shim de __name.
+  // IMPORTANTE: tsx/esbuild compilan el bot con "keepNames", lo que inserta llamadas a un
+  // helper `__name(...)` alrededor de funciones. Ese helper NO existe dentro del navegador,
+  // así que cualquier page.evaluate() con funciones internas fallaba con
+  // "ReferenceError: __name is not defined". Definirlo como global en cada página lo arregla
+  // de raíz para TODOS los evaluate (presentes y futuros).
   await context.addInitScript(() => {
+    // @ts-ignore
+    if (typeof window.__name === 'undefined') window.__name = (fn: any) => fn
     Object.defineProperty(navigator, 'webdriver', { get: () => false })
     // @ts-ignore
     window.chrome = { runtime: {} }
