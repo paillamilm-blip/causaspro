@@ -4,7 +4,7 @@
 // ============================================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import type { CausaScrapedData, CausaToScrape, BotRunStatus } from '../types'
+import type { CausaScrapedData, CausaToScrape, BotRunStatus, BotStepMetric } from '../types'
 import type { UrgencyAnalysis } from './detection'
 import { log } from '../utils'
 
@@ -240,26 +240,76 @@ export async function saveBotError(
 }
 
 /**
- * Guarda el estado de una ejecución del bot
+ * Guarda el estado de una ejecución del bot, incluyendo las métricas de
+ * auto-aprendizaje (duración, velocidad, tasa de éxito).
+ *
+ * Robustez: si las columnas nuevas todavía no existen en la BD (no se corrió
+ * schema-bot-aprendizaje.sql), reintenta el insert solo con las columnas base
+ * para no perder el registro de la sesión.
  */
 export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
   const sb = initSupabase()
-  
+
+  const base = {
+    run_id: status.run_id,
+    started_at: status.started_at,
+    finished_at: status.finished_at,
+    total_causas: status.total_causas,
+    procesadas: status.procesadas,
+    exitosas: status.exitosas,
+    fallidas: status.fallidas,
+    detenido_por: status.detenido_por,
+    errores: status.errores,
+  }
+
+  // Columnas de aprendizaje (pueden no existir aún)
+  const conMetricas = {
+    ...base,
+    duracion_ms: status.duracion_ms ?? null,
+    causas_por_min: status.causas_por_min ?? null,
+    tasa_exito: status.tasa_exito ?? null,
+    search_mode: status.search_mode ?? null,
+    bloqueo_detectado: status.bloqueo_detectado ?? false,
+  }
+
+  const { error } = await sb.from('bot_runs').insert(conMetricas)
+  if (!error) return
+
+  // Solo degradamos a "columnas base" si el error es COLUMNA INEXISTENTE (Postgres 42703),
+  // es decir, todavía no se corrió schema-bot-aprendizaje.sql. Cualquier otro error
+  // (constraint, red, etc.) se reporta con su mensaje real — no lo ocultamos.
+  const esColumnaFaltante = (error as any)?.code === '42703'
+  if (!esColumnaFaltante) {
+    log('warn', `No se pudo guardar estado del bot: ${error.message}`)
+    return
+  }
+
+  const { error: baseErr } = await sb.from('bot_runs').insert(base)
+  if (baseErr) {
+    log('warn', `No se pudo guardar estado del bot (columnas base): ${baseErr.message}`)
+  } else {
+    log('warn', 'bot_runs guardado sin métricas nuevas (corré schema-bot-aprendizaje.sql para habilitarlas)')
+  }
+}
+
+/**
+ * Registra la métrica de una ETAPA del flujo (una fila en bot_step_metrics).
+ * Es el núcleo del "aprendizaje": permite ver dónde se va el tiempo y dónde
+ * falla más el bot. Falla en silencio si la tabla no existe todavía.
+ */
+export async function saveStepMetric(metric: BotStepMetric): Promise<void> {
   try {
-    await sb.from('bot_runs').insert({
-      run_id: status.run_id,
-      started_at: status.started_at,
-      finished_at: status.finished_at,
-      total_causas: status.total_causas,
-      procesadas: status.procesadas,
-      exitosas: status.exitosas,
-      fallidas: status.fallidas,
-      detenido_por: status.detenido_por,
-      errores: status.errores,
+    const sb = initSupabase()
+    await sb.from('bot_step_metrics').insert({
+      run_id: metric.run_id,
+      rit: metric.rit ?? null,
+      paso: metric.paso,
+      duracion_ms: metric.duracion_ms,
+      exito: metric.exito,
+      tipo_error: metric.tipo_error ?? null,
     })
   } catch {
-    // No fallar si la tabla no existe
-    log('warn', 'No se pudo guardar estado del bot (tabla bot_runs no existe)')
+    // No fallar si la tabla bot_step_metrics no existe aún
   }
 }
 

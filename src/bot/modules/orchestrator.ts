@@ -10,9 +10,59 @@ import { createStealthContext, loginOJV, logoutOJV, isSessionActive } from './lo
 import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDetail, CausaFoundInPortal } from './search'
 import { scrapeCausaCompleta } from './scraper'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT } from '../utils'
-import { createClient } from '@supabase/supabase-js'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric } from './supabaseSync'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, categorizarError } from '../utils'
+import { analizarHistorial, logDiagnostico } from './learningEngine'
+import type { BotStep, BotErrorType } from '../types'
+
+/**
+ * Envuelve un paso del flujo: mide su duración y registra una fila en
+ * bot_step_metrics (éxito o fallo + tipo de error). Devuelve el resultado
+ * de la función. Si la función lanza, registra el fallo y re-lanza para que
+ * el llamador maneje el control de flujo como siempre.
+ *
+ * Es el ladrillo del "aprendizaje": con esto sabemos cuánto tarda y cuánto
+ * falla CADA etapa, sin cambiar la lógica del bot.
+ */
+async function medirPaso<T>(
+  runId: string,
+  paso: BotStep,
+  fn: () => Promise<T>,
+  rit?: string,
+  // Predicado opcional: define si el RESULTADO cuenta como éxito. Útil cuando la
+  // función no lanza pero devuelve un "vacío" que en realidad es un fallo
+  // (ej: searchByRitExacto devuelve [] = no encontrada). Si se omite, todo lo que
+  // no lance se considera éxito. Evita registrar dos filas contradictorias del mismo paso.
+  esExito?: (res: T) => boolean,
+  tipoErrorSiVacio?: BotErrorType,
+): Promise<T> {
+  const inicio = Date.now()
+  try {
+    const res = await fn()
+    const ok = esExito ? esExito(res) : true
+    // La telemetría NUNCA debe afectar el scraping: se traga cualquier fallo propio.
+    await saveStepMetric({
+      run_id: runId,
+      rit,
+      paso,
+      duracion_ms: Date.now() - inicio,
+      exito: ok,
+      tipo_error: ok ? undefined : (tipoErrorSiVacio || 'no_encontrada'),
+    }).catch(() => {})
+    return res
+  } catch (err: any) {
+    const tipo: BotErrorType = categorizarError(err?.message)
+    await saveStepMetric({
+      run_id: runId,
+      rit,
+      paso,
+      duracion_ms: Date.now() - inicio,
+      exito: false,
+      tipo_error: tipo,
+    }).catch(() => {})
+    throw err
+  }
+}
 
 /**
  * QA / Trazabilidad: toma una screenshot EN EL MOMENTO del fallo (con la page real)
@@ -73,6 +123,15 @@ export async function runBotSession(
       return { status, data: results }
     }
     
+    // 0.5. APRENDIZAJE (modo conservador): leer el historial y mostrar consejos.
+    //      Solo informa — no cambia delays, orden ni config. Nunca bloquea la corrida.
+    try {
+      const diag = await analizarHistorial()
+      logDiagnostico(diag)
+    } catch (e: any) {
+      log('warn', `No se pudo analizar el historial (se continúa igual): ${e?.message ?? e}`)
+    }
+
     // 1. Lanzar navegador
     log('info', 'Lanzando navegador...')
     // Opciones de lanzamiento. Por defecto usa el Chromium que instala Playwright.
@@ -97,10 +156,19 @@ export async function runBotSession(
     page.setDefaultTimeout(cfg.selectorTimeout)
     page.setDefaultNavigationTimeout(cfg.navigationTimeout)
     
-    // 2. Login
+    // 2. Login. OJO: loginOJV/navigateToConsulta devuelven success:false / false
+    //    en el camino de fallo esperado (no lanzan). Por eso NO se envuelven en
+    //    medirPaso (que solo detecta fallo si la fn lanza); se mide a mano y se
+    //    registra el paso con el éxito REAL según el valor de retorno.
     log('info', 'Intentando login...')
+    const tLogin = Date.now()
     const loginResult = await loginOJV(page, credentials)
-    
+    await saveStepMetric({
+      run_id: runId, paso: 'login', duracion_ms: Date.now() - tLogin,
+      exito: loginResult.success,
+      tipo_error: loginResult.success ? undefined : categorizarError(loginResult.error),
+    }).catch(() => {})
+
     if (!loginResult.success) {
       log('error', `Login fallido: ${loginResult.error}`)
       status.detenido_por = 'error_critico'
@@ -114,8 +182,13 @@ export async function runBotSession(
       return { status, data: results }
     }
     
-    // 3. Navegar a Mis Causas
+    // 3. Navegar a Mis Causas (mismo patrón: se mide a mano por el retorno booleano)
+    const tNav = Date.now()
     const navOk = await navigateToConsulta(page)
+    await saveStepMetric({
+      run_id: runId, paso: 'navegacion', duracion_ms: Date.now() - tNav,
+      exito: navOk, tipo_error: navOk ? undefined : 'navegacion',
+    }).catch(() => {})
     if (!navOk) {
       log('error', 'No se pudo navegar a Mis Causas')
       status.detenido_por = 'error_critico'
@@ -135,6 +208,7 @@ export async function runBotSession(
     //                                       dispara el listado masivo (~17.500 registros).
     //   BOT_SEARCH_MODE=listado          → flujo antiguo: lista todo el portal por año.
     const searchMode = (process.env.BOT_SEARCH_MODE || 'rit').toLowerCase()
+    status.search_mode = searchMode
 
     if (searchMode === 'listado') {
       await runListadoMasivo(page, cfg, status, results)
@@ -159,6 +233,22 @@ export async function runBotSession(
     if (browser) await browser.close().catch(() => {})
     
     status.finished_at = new Date().toISOString()
+
+    // Métricas de auto-aprendizaje (derivadas): duración, velocidad y tasa de éxito.
+    // Se calculan aquí para que queden guardadas en bot_runs y el motor las lea luego.
+    const durMs = new Date(status.finished_at).getTime() - new Date(status.started_at).getTime()
+    status.duracion_ms = durMs
+    // causas_por_min = velocidad de scraping ÚTIL → usa exitosas (no procesadas,
+    // que incluye fallidas y daría una "velocidad" engañosa).
+    status.causas_por_min = durMs > 0 ? Number(((status.exitosas / durMs) * 60000).toFixed(2)) : 0
+    status.tasa_exito = status.procesadas > 0
+      ? Number(((status.exitosas / status.procesadas) * 100).toFixed(2))
+      : 0
+    // Marca de bloqueo: si la sesión se detuvo por captcha/bloqueo
+    if (status.detenido_por === 'captcha' || status.detenido_por === 'bloqueado') {
+      status.bloqueo_detectado = true
+    }
+
     await saveBotRunStatus(status).catch(() => {})
     
     log('info', `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
@@ -204,22 +294,39 @@ async function runBusquedaPorRit(
     log('info', `  [${status.procesadas}/${causas.length}] ${causa.rit}...`)
 
     try {
-      // Buscar la causa por su RIT exacto (1 resultado, sin listado masivo)
-      const encontradas = await searchByRitExacto(page, causa.rit)
+      // Buscar la causa por su RIT exacto (1 resultado, sin listado masivo).
+      // Instrumentado: mide cuánto tarda. Un array vacío = "no encontrada" = fallo,
+      // así medirPaso registra UNA sola fila con el resultado correcto (no dos).
+      const encontradas = await medirPaso(
+        status.run_id, 'busqueda',
+        () => searchByRitExacto(page, causa.rit),
+        causa.rit,
+        (res) => res.length > 0,   // éxito solo si encontró la causa
+        'no_encontrada',
+      )
 
       if (encontradas.length === 0) {
         status.fallidas++
         status.errores.push(`${causa.rit}: no encontrada en el portal`)
+        // (La métrica del paso 'busqueda' con exito=false ya la registró medirPaso.)
         // Volver al formulario limpio para la siguiente búsqueda
         await navigateToConsulta(page)
         await sleep(1500)
         continue
       }
 
-      // Abrir el detalle y scrapear
-      const opened = await navigateToCausaDetail(page, causa.rit)
+      // Abrir el detalle y scrapear (instrumentado + reintento seguro).
+      const opened = await medirPaso(
+        status.run_id, 'detalle',
+        () => navigateToCausaDetail(page, causa.rit),
+        causa.rit,
+      )
       if (opened) {
-        const scrapedData = await scrapeCausaCompleta(page, { id: causa.id, rit: causa.rit })
+        const scrapedData = await medirPaso(
+          status.run_id, 'scrape',
+          () => scrapeCausaCompleta(page, { id: causa.id, rit: causa.rit }),
+          causa.rit,
+        )
         const analysis = analyzeCausaUrgency(scrapedData)
         await saveCausaData(scrapedData, analysis)
         results.push(scrapedData)
@@ -242,6 +349,10 @@ async function runBusquedaPorRit(
       status.fallidas++
       status.errores.push(`${causa.rit}: ${err.message}`)
       log('warn', `  Error en ${causa.rit}: ${err.message}`)
+      // Aprendizaje: si el error parece bloqueo/CAPTCHA, marcar la sesión.
+      if (categorizarError(err?.message) === 'captcha') {
+        status.bloqueo_detectado = true
+      }
       // QA: capturar screenshot AHORA (coincide con el fallo de esta causa) y registrarlo
       const shot = await capturarError(page, status.run_id, `detalle_${causa.rit}`)
       await saveBotError('detalle', err.message, {

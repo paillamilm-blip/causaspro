@@ -63,6 +63,32 @@ export interface CausaScrapedData {
   error?: string            // Si hubo error al scrapear
 }
 
+/**
+ * Etapa del flujo del bot. Sirve para saber DÓNDE ocurre cada cosa
+ * (métricas y errores) y así "aprender" en qué paso falla más.
+ */
+export type BotStep =
+  | 'login'
+  | 'navegacion'
+  | 'busqueda'
+  | 'detalle'
+  | 'scrape'
+  | 'logout'
+  | 'critico'
+
+/**
+ * Tipo de error categorizado (no texto libre). Permite AGRUPAR fallos
+ * y que el motor de aprendizaje detecte patrones. Ver schema-bot-aprendizaje.sql.
+ */
+export type BotErrorType =
+  | 'timeout'
+  | 'no_encontrada'
+  | 'navegacion'
+  | 'parseo'
+  | 'captcha'
+  | 'sesion'
+  | 'desconocido'
+
 /** Estado de ejecución del bot */
 export interface BotRunStatus {
   run_id: string
@@ -74,6 +100,27 @@ export interface BotRunStatus {
   fallidas: number
   detenido_por?: 'completado' | 'limite_sesion' | 'error_critico' | 'captcha' | 'bloqueado'
   errores: string[]
+  // --- Métricas de auto-aprendizaje (modo conservador: solo se registran) ---
+  /** Duración total de la sesión en ms (finished - started) */
+  duracion_ms?: number
+  /** Velocidad: causas exitosas por minuto */
+  causas_por_min?: number
+  /** Tasa de éxito 0-100 (exitosas / procesadas) */
+  tasa_exito?: number
+  /** Modo de búsqueda usado ('rit' | 'listado') */
+  search_mode?: string
+  /** Si se detectó una señal de bloqueo/CAPTCHA durante la sesión */
+  bloqueo_detectado?: boolean
+}
+
+/** Métrica de una etapa del flujo (una fila en bot_step_metrics) */
+export interface BotStepMetric {
+  run_id: string
+  rit?: string
+  paso: BotStep
+  duracion_ms: number
+  exito: boolean
+  tipo_error?: BotErrorType
 }
 
 /** Configuración del bot */
