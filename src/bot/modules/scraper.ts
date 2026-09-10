@@ -26,21 +26,19 @@ export async function scrapeCausaCompleta(page: Page, causa: CausaToScrape): Pro
     // 1. Extraer estado actual
     result.estado_actual = await extractEstadoActual(page)
     
-    // 2. Extraer movimientos/historial de tramitación
+    // 2. Extraer movimientos/historial de tramitación (pestaña "Movimientos")
     result.movimientos = await extractMovimientos(page)
-    
-    // Delay entre tabs (humano)
-    await sleep(1500 + Math.random() * 2500)
-    
-    // 3. Extraer audiencias
-    result.audiencias = await extractAudiencias(page)
-    
-    // Delay entre tabs
-    await sleep(1500 + Math.random() * 2500)
-    
-    // 4. Extraer resoluciones
-    result.resoluciones = await extractResoluciones(page)
-    
+
+    // 3. DERIVAR audiencias y resoluciones DESDE los movimientos.
+    //    IMPORTANTE (confirmado con el portal real): el detalle de causa de Familia NO tiene
+    //    pestañas separadas de "Audiencias" ni "Resoluciones". Las audiencias y resoluciones
+    //    aparecen como FILAS dentro de "Movimientos", identificadas por la columna Trámite
+    //    (ej. Trámite="Audiencia", "Audiencia Preparatoria"; Trámite="Resolución").
+    //    Antes buscábamos pestañas inexistentes → siempre daba 0. Ahora las clasificamos
+    //    a partir de los movimientos ya scrapeados (sin tocar el portal de nuevo).
+    result.audiencias = derivarAudiencias(result.movimientos)
+    result.resoluciones = derivarResoluciones(result.movimientos)
+
     // 5. Detectar TRASLADO AL CURADOR
     result.tiene_traslado_curador = result.movimientos.some(m => m.es_traslado_curador)
     
@@ -181,116 +179,76 @@ async function extractMovimientos(page: Page): Promise<MovimientoPJUD[]> {
 }
 
 /**
- * Extrae la tabla de audiencias
+ * Busca una fecha (dd/mm/aaaa o dd-mm-aaaa) DENTRO de un texto libre y la normaliza.
+ * Devuelve la fecha ISO (vía parsePJUDDate) o null si no hay una fecha reconocible.
+ * Se usa para intentar rescatar la fecha REAL de una audiencia desde la descripción
+ * del trámite (ej. "Cita a Aud. Preparatoria ZOOM para el 12-03-2026").
  */
-async function extractAudiencias(page: Page): Promise<AudienciaPJUD[]> {
+function extraerFechaDeTexto(texto: string | undefined): string | null {
+  if (!texto) return null
+  const m = texto.match(/\b(\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4})\b/)
+  if (!m) return null
+  return parsePJUDDate(m[1])
+}
+
+/**
+ * DERIVA las audiencias a partir de los movimientos ya extraídos.
+ *
+ * En el portal de Familia las audiencias son filas de "Movimientos" cuyo Trámite indica
+ * una audiencia. Ejemplos reales vistos: Trámite="Audiencia" con Desc.="Audiencia
+ * Preparatoria"; Etapa="Aud. Prep.". Reconocemos por palabra clave "audiencia" en
+ * trámite/descripción/etapa. El "tipo" de audiencia es la descripción (más informativa)
+ * o el trámite; el "estado" lo tomamos de la etapa si aporta.
+ */
+function derivarAudiencias(movimientos: MovimientoPJUD[]): AudienciaPJUD[] {
   const audiencias: AudienciaPJUD[] = []
-  
-  try {
-    // Navegar al tab de audiencias
-    const tabClicked = await clickTab(page, [
-      'a:has-text("Audiencia")',
-      'li:has-text("Audiencia") a',
-      '#tabAudiencias',
-      'a[href*="audiencia"]',
-    ])
-    
-    if (tabClicked) {
-      await sleep(2000 + Math.random() * 1500)
-    }
-    
-    // Buscar tabla de audiencias
-    const table = await findTable(page, [
-      'table:has(th:has-text("Audiencia"))',
-      'table:has(th:has-text("Tipo Audiencia"))',
-      '#tablaAudiencias',
-      '.tabla-audiencias table',
-      'table.audiencias',
-    ])
-    
-    if (!table) {
-      // Las audiencias pueden estar en la misma página como sección
-      const audienciaSection = await page.$('.seccion-audiencias, #audiencias, div:has(h3:has-text("Audiencia"))')
-      if (!audienciaSection) {
-        log('warn', 'No se encontró sección de audiencias')
-        return audiencias
-      }
-    }
-    
-    const rows = await (table || page).$$('table:has(th:has-text("Audiencia")) tbody tr, .audiencia-item')
-    
-    for (const row of rows) {
-      try {
-        const cells = await row.$$('td')
-        if (cells.length < 2) continue
-        
-        const textos = await Promise.all(cells.map(async (cell: any) => {
-          const text = await cell.textContent()
-          return cleanText(text)
-        }))
-        
-        const audiencia = parseAudienciaRow(textos)
-        if (audiencia) audiencias.push(audiencia)
-      } catch {}
-    }
-    
-  } catch (error: any) {
-    log('warn', `Error extrayendo audiencias: ${error.message}`)
+  for (const m of movimientos) {
+    const tramite = (m.tramite || '').toLowerCase()
+    const campos = `${m.tramite || ''} ${m.descripcion || ''} ${m.etapa || ''}`.toLowerCase()
+    if (!campos.includes('audiencia')) continue
+
+    // Evitar FALSOS POSITIVOS: filas que solo *mencionan* una audiencia (notificación,
+    // certificación, acta, citación) no son la audiencia en sí. Solo contamos como
+    // audiencia cuando el TRÁMITE es propiamente "audiencia" (ej. Trámite="Audiencia").
+    const esRuido = /notific|certif|acta|c[ií]ta/.test(tramite)
+    if (!tramite.includes('audiencia') && esRuido) continue
+
+    // FECHA: la fecha del movimiento es la fecha de REGISTRO del trámite, NO necesariamente
+    // la fecha en que ocurre/ocurrió la audiencia. Intentamos extraer una fecha explícita
+    // del texto de la descripción (ej. "... 12-03-2026"); si no hay, usamos la del movimiento
+    // pero marcamos la audiencia como histórica para no confundir al detector de "próximas".
+    const fechaEnTexto = extraerFechaDeTexto(m.descripcion) || extraerFechaDeTexto(m.tramite)
+    audiencias.push({
+      fecha: fechaEnTexto || m.fecha,
+      tipo: (m.descripcion && m.descripcion.length > 0 ? m.descripcion : m.tramite) || 'Audiencia',
+      // NO usamos m.etapa como "estado": la etapa procesal ("Aud. Prep.") no indica el estado
+      // real de la audiencia (Programada/Realizada/Suspendida). Sin dato fiable → sin estado,
+      // salvo que el texto lo diga explícitamente.
+      estado: /suspend|cancel/i.test(campos) ? 'Suspendida'
+            : (fechaEnTexto ? undefined : 'histórica (fecha de registro)'),
+    })
   }
-  
   return audiencias
 }
 
 /**
- * Extrae resoluciones
+ * DERIVA las resoluciones a partir de los movimientos ya extraídos.
+ *
+ * En el portal de Familia las resoluciones son filas de "Movimientos" cuyo Trámite es
+ * "Resolución" (ej. Desc.="Cita a Aud. Preparatoria ZOOM"). Reconocemos por "resoluc"
+ * (cubre "Resolución"/"Resolucion") o "sentencia" en el trámite.
  */
-async function extractResoluciones(page: Page): Promise<ResolucionPJUD[]> {
+function derivarResoluciones(movimientos: MovimientoPJUD[]): ResolucionPJUD[] {
   const resoluciones: ResolucionPJUD[] = []
-  
-  try {
-    // Navegar al tab de resoluciones
-    const tabClicked = await clickTab(page, [
-      'a:has-text("Resoluc")',
-      'li:has-text("Resoluc") a',
-      '#tabResoluciones',
-      'a[href*="resolucion"]',
-    ])
-    
-    if (tabClicked) {
-      await sleep(2000 + Math.random() * 1500)
-    }
-    
-    // Buscar tabla
-    const table = await findTable(page, [
-      'table:has(th:has-text("Resolución"))',
-      'table:has(th:has-text("Resolucion"))',
-      '#tablaResoluciones',
-      '.tabla-resoluciones table',
-    ])
-    
-    if (!table) return resoluciones
-    
-    const rows = await table.$$('tbody tr')
-    
-    for (const row of rows) {
-      try {
-        const cells = await row.$$('td')
-        if (cells.length < 2) continue
-        
-        const textos = await Promise.all(cells.map(async (cell: any) => {
-          const text = await cell.textContent()
-          return cleanText(text)
-        }))
-        
-        const resolucion = parseResolucionRow(textos)
-        if (resolucion) resoluciones.push(resolucion)
-      } catch {}
-    }
-    
-  } catch (error: any) {
-    log('warn', `Error extrayendo resoluciones: ${error.message}`)
+  for (const m of movimientos) {
+    const tramite = (m.tramite || '').toLowerCase()
+    if (!tramite.includes('resoluc') && !tramite.includes('sentencia')) continue
+    resoluciones.push({
+      fecha: m.fecha,
+      tipo: m.tramite || 'Resolución',
+      texto_resumen: m.descripcion,
+    })
   }
-  
   return resoluciones
 }
 
@@ -359,53 +317,8 @@ function parseMovimientoRow(textos: string[]): MovimientoPJUD | null {
   }
 }
 
-function parseAudienciaRow(textos: string[]): AudienciaPJUD | null {
-  if (textos.length < 2) return null
-  
-  let fecha: string | null = null
-  let tipo = ''
-  let sala: string | undefined
-  let estado: string | undefined
-  
-  for (let i = 0; i < textos.length; i++) {
-    const parsed = parsePJUDDate(textos[i])
-    if (parsed && !fecha) {
-      fecha = parsed
-    } else if (fecha && !tipo) {
-      tipo = textos[i]
-    } else if (fecha && tipo) {
-      if (!sala && textos[i].toLowerCase().includes('sala')) {
-        sala = textos[i]
-      } else {
-        estado = textos[i]
-      }
-    }
-  }
-  
-  if (!fecha) {
-    fecha = parsePJUDDate(textos[0])
-    tipo = textos[1] || 'Audiencia'
-    sala = textos[2] || undefined
-    estado = textos[3] || undefined
-  }
-  
-  if (!fecha) return null
-  
-  return { fecha, tipo: tipo || 'Audiencia', sala, estado }
-}
-
-function parseResolucionRow(textos: string[]): ResolucionPJUD | null {
-  if (textos.length < 2) return null
-  
-  const fecha = parsePJUDDate(textos[0])
-  if (!fecha) return null
-  
-  return {
-    fecha,
-    tipo: textos[1] || 'Resolución',
-    texto_resumen: textos[2] || undefined,
-  }
-}
+// (parseAudienciaRow / parseResolucionRow eliminados: audiencias y resoluciones ahora se
+//  DERIVAN de los movimientos, ver derivarAudiencias/derivarResoluciones arriba.)
 
 // ============================================================
 // HELPERS

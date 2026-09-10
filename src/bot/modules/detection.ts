@@ -129,7 +129,13 @@ function findProximaAudiencia(audiencias: AudienciaPJUD[]): { fecha: string; dia
     const fecha = new Date(aud.fecha)
     if (isNaN(fecha.getTime())) continue
     
-    // Solo audiencias futuras y no suspendidas
+    // Solo audiencias futuras y no suspendidas.
+    // Las audiencias "histórica (fecha de registro)" se derivan de un movimiento cuya fecha
+    // es la de REGISTRO del trámite, NO la fecha real de la audiencia. Aunque normalmente
+    // caen en el pasado (y el chequeo de abajo las descarta), las excluimos explícitamente
+    // para que jamás se cuelen como "próxima audiencia" con una fecha equivocada.
+    if (aud.estado?.toLowerCase().includes('histórica')) continue
+    if (aud.estado?.toLowerCase().includes('historica')) continue
     if (fecha <= now) continue
     if (aud.estado?.toLowerCase().includes('suspendida')) continue
     if (aud.estado?.toLowerCase().includes('cancelada')) continue
