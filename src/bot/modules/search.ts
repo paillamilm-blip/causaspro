@@ -508,11 +508,10 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     })
     await sleep(300)
 
-    // PASO 3: Escribir SOLO el número en el campo "Rol".
-    // NO se toca el dropdown "Rit" (letra) ni el campo "Año": buscamos únicamente por
-    // el número, que es más simple y confiable (el dropdown de la letra daba problemas).
-    // La letra y el año se usan solo al final para FILTRAR el resultado correcto (PASO 9),
-    // así no se confunde con causas de otro tipo/año que compartan el mismo número.
+    // PASO 3: Escribir el número en el campo "Rol".
+    // NO se toca el dropdown "Rit" (letra): buscamos por número + año, que es lo que el
+    // portal necesita para encontrar la causa. La letra se usa solo al final para FILTRAR
+    // el resultado correcto (PASO 9), así no se confunde con causas de otro tipo.
     const rolOk = await page.evaluate((rol: string) => {
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
@@ -539,28 +538,147 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     }
     await sleep(300)
 
+    // PASO 3.5: Escribir el AÑO. El portal necesita número + año para encontrar la causa;
+    // buscar solo por número devolvía "no encontrada". El campo de año puede ser un <input>
+    // o un <select> (dropdown), así que manejamos ambos. Si no existe el campo, seguimos
+    // igual (algunas vistas no lo piden) — no es fatal.
+    // Devuelve un código para distinguir los 3 casos y dar un diagnóstico honesto:
+    //   'set'        → se escribió el año OK
+    //   'no_field'   → no existe campo de año en el formulario (no fatal)
+    //   'no_option'  → existe el <select> de año pero NO tiene el año buscado (importante:
+    //                  el dropdown quedaría en su default y filtraría por el año equivocado)
+    const anioRes = await page.evaluate((anioBuscado: string) => {
+      // Preferimos 'anio'/'año' (formulario en español). 'year' es último recurso y solo
+      // si además el elemento parece un campo de año (para no enganchar campos ajenos).
+      const matchAnioFuerte = (el: Element) => {
+        const name = (el.getAttribute('name') || '').toLowerCase()
+        const id = (el.getAttribute('id') || '').toLowerCase()
+        const ph = (el.getAttribute('placeholder') || '').toLowerCase()
+        return name.includes('anio') || name.includes('año') ||
+               id.includes('anio') || id.includes('año') ||
+               ph.includes('año') || ph.includes('anio')
+      }
+      const matchYearDebil = (el: Element) => {
+        const name = (el.getAttribute('name') || '').toLowerCase()
+        const id = (el.getAttribute('id') || '').toLowerCase()
+        return name.includes('year') || id.includes('year')
+      }
+      // Un <select> "parece de años" si tiene ≥2 opciones que son números de 4 dígitos.
+      const pareceSelectDeAnios = (s: HTMLSelectElement) => {
+        const opts = Array.from(s.options).map(o => (o.textContent || o.value || '').trim())
+        return opts.filter(t => /^\d{4}$/.test(t)).length >= 2
+      }
+      // Intenta fijar el año en un <select>. Devuelve 'set' si lo puso, 'no_option' si el
+      // select no ofrece el año buscado, o null si no debe considerarse.
+      const trySelect = (s: HTMLSelectElement): 'set' | 'no_option' | null => {
+        const opt = Array.from(s.options).find(o => o.value.trim() === anioBuscado || (o.textContent || '').trim() === anioBuscado)
+        if (opt) {
+          s.value = opt.value
+          s.dispatchEvent(new Event('input', { bubbles: true }))
+          s.dispatchEvent(new Event('change', { bubbles: true }))
+          return 'set'
+        }
+        return 'no_option'
+      }
+
+      const selects = Array.from(document.querySelectorAll('select')).filter(s => (s as HTMLElement).offsetParent !== null) as HTMLSelectElement[]
+
+      // 1a) PRIMERO: selects con match FUERTE por name/id/placeholder (anio/año). Estos son
+      //     inequívocamente el campo de año, así que si alguno tiene el año buscado, lo usamos;
+      //     si NINGUNO fuerte lo tiene, reportamos no_option (el año no está disponible).
+      const fuertes = selects.filter(matchAnioFuerte)
+      if (fuertes.length) {
+        for (const s of fuertes) { if (trySelect(s) === 'set') return 'set' }
+        return 'no_option'
+      }
+      // 1b) LUEGO: selects con match débil por 'year' pero que además parezcan de años.
+      const debiles = selects.filter(s => matchYearDebil(s) && pareceSelectDeAnios(s))
+      if (debiles.length) {
+        for (const s of debiles) { if (trySelect(s) === 'set') return 'set' }
+        return 'no_option'
+      }
+      // 1c) ÚLTIMO RECURSO (sin ningún name/id de año): un select que "parezca de años".
+      //     Solo lo aceptamos si contiene el año buscado; si no, NO lo tocamos (podría ser
+      //     otro filtro) y seguimos buscando un <input>.
+      const heuristicos = selects.filter(pareceSelectDeAnios)
+      for (const s of heuristicos) { if (trySelect(s) === 'set') return 'set' }
+      // 2) <input> de año
+      for (const input of Array.from(document.querySelectorAll('input'))) {
+        if ((input as HTMLElement).offsetParent === null) continue
+        if (!(matchAnioFuerte(input) || matchYearDebil(input))) continue
+        ;(input as HTMLInputElement).value = anioBuscado
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        return 'set'
+      }
+      return 'no_field'
+    }, año)
+    if (anioRes === 'set') {
+      log('info', `  Año ${año} escrito en el formulario.`)
+    } else if (anioRes === 'no_option') {
+      log('warn', `  El selector de "Año" existe pero NO ofrece ${año} → la causa quizá no está en este tribunal/año. Se continúa, pero probablemente no aparezca.`)
+    } else {
+      log('info', `  (No hay campo "Año" en el formulario; se busca solo por número ${numero}.)`)
+    }
+    await sleep(300)
+
     // PASO 6: Click en Buscar (solo el botón VISIBLE del tab Familia)
-    await page.evaluate(() => {
+    // Helper: hace scroll hasta el botón "Buscar" y lo clickea. El scroll importa porque,
+    // según prueba en vivo, el portal a veces no renderiza la tabla hasta que el botón
+    // (o la zona de resultados) entra en viewport y se vuelve a apretar el filtro.
+    const clickBuscar = () => page.evaluate(() => {
       const btns = document.querySelectorAll('button, input[type="submit"], input[type="button"]')
       for (const btn of btns) {
         if ((btn as HTMLElement).offsetParent === null) continue
         const text = (btn.textContent || '').trim()
         const val = (btn as HTMLInputElement).value || ''
         if (text === 'Buscar' || val === 'Buscar') {
-          (btn as HTMLElement).click()
-          return
+          (btn as HTMLElement).scrollIntoView({ block: 'center' })
+          ;(btn as HTMLElement).click()
+          return true
         }
       }
+      return false
     })
 
-    // PASO 7: Esperar resultados con polling. Como ahora buscamos solo por número
-    // (sin año), el portal puede devolver más filas y tardar un poco más → timeout 30s.
-    // CLAVE: esperamos a que aparezca una fila cuyo RIT contenga EXACTAMENTE el número
+    // Helper: RE-ESCRIBE Rol y Año SOLO si quedaron vacíos. Esto hace el reintento robusto
+    // aunque el portal recargue/limpie el formulario tras un submit (en ese caso el reclick
+    // buscaría con campos vacíos). Es idempotente: si los campos ya tienen valor, no toca nada.
+    const reescribirCampos = () => page.evaluate((args: { rol: string; anio: string }) => {
+      const setSiVacio = (el: HTMLInputElement, v: string) => {
+        if ((el.value || '').trim() === '') {
+          el.value = v
+          el.dispatchEvent(new Event('input', { bubbles: true }))
+          el.dispatchEvent(new Event('change', { bubbles: true }))
+        }
+      }
+      for (const input of Array.from(document.querySelectorAll('input'))) {
+        if ((input as HTMLElement).offsetParent === null) continue
+        const name = (input.getAttribute('name') || '').toLowerCase()
+        const id = (input.getAttribute('id') || '').toLowerCase()
+        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
+        if (name.includes('rol') || id.includes('rol') || ph === 'rol') setSiVacio(input as HTMLInputElement, args.rol)
+        if (args.anio && (name.includes('anio') || name.includes('año') || id.includes('anio') || id.includes('año') || name.includes('year') || id.includes('year'))) {
+          setSiVacio(input as HTMLInputElement, args.anio)
+        }
+      }
+    }, { rol: numero, anio: año })
+
+    // PASO 6: primer click en "Buscar".
+    await clickBuscar()
+
+    // PASO 7: Esperar resultados con polling (número + año ya escritos → menos filas).
+    // CLAVE 1: esperamos a que aparezca una fila cuyo RIT tenga EXACTAMENTE el número
     // buscado (no cualquier RIT), para no cortar el polling sobre resultados residuales
     // de otra búsqueda antes de que renderice la causa correcta.
+    // CLAVE 2 (observación en vivo): el portal a veces necesita scrollear y REAPRETAR el
+    // filtro para que la tabla aparezca. Por eso, mientras no haya filas, cada ~4.5s
+    // hacemos scroll + volvemos a clickear "Buscar". Así reproducimos el gesto humano
+    // sin acoplarnos al timing exacto del render.
     const pollTimeout = process.env.BOT_POLL_TIMEOUT ? parseInt(process.env.BOT_POLL_TIMEOUT) * 1000 : 30000
     let resultsFound = false
     const pollStart = Date.now()
+    let iter = 0
     while (Date.now() - pollStart < pollTimeout) {
       const hasRows = await page.evaluate((rolBuscado: string) => {
         const tables = document.querySelectorAll('table')
@@ -580,6 +698,16 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
         return false
       }, numero)
       if (hasRows) { resultsFound = true; break }
+      iter++
+      // Cada 3 iteraciones (~4.5s) reintentamos: re-escribir campos (por si el portal los
+      // limpió) + scroll + click en "Buscar".
+      if (iter % 3 === 0) {
+        await reescribirCampos().catch(() => {})
+        await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight)).catch(() => {})
+        await sleep(200)
+        await clickBuscar()
+        log('info', `  (Reintentando filtro: scroll + click en "Buscar"...)`)
+      }
       await sleep(1500)
     }
 
