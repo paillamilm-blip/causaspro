@@ -11,6 +11,32 @@ error dos veces**.
 
 ---
 
+## ERROR #6 — 💥 `ReferenceError: __name is not defined` dentro de `page.evaluate`
+
+**Síntoma:** el bot loguea `Activando filtros...` e inmediatamente
+`❌ Error buscando RIT ...: page.evaluate: ReferenceError: __name is not defined
+at eval (eval at evaluate ...)`. La búsqueda de la causa aborta. Enmascara cualquier otro
+arreglo (filtros/toggle/etc.) porque el `evaluate` muere antes de ejecutarse.
+
+**Causa raíz:** el bot se ejecuta con `tsx`/esbuild, que compila con **`keepNames`**. Eso
+reescribe las funciones nombradas insertando llamadas a un helper `__name(fn, "name")`. Ese
+helper existe en el bundle de Node, **pero NO dentro del navegador**. Por eso, cualquier
+`page.evaluate()` cuyo cuerpo declare una función interna nombrada (`const f = () => {}`,
+`function f(){}`) referencia un `__name` inexistente y lanza `ReferenceError`.
+
+**Solución que FUNCIONÓ (PR #24):** definir `__name` como global en el navegador. En
+`createStealthContext` (`src/bot/modules/login.ts`), dentro del `addInitScript`:
+`if (typeof window.__name === 'undefined') window.__name = (fn) => fn`. Como `page.evaluate`
+corre en el *main world* — el mismo contexto que siembra `addInitScript` en cada documento —
+cubre TODOS los evaluate. (Defensa extra: `const __name = (x) => x` al inicio de los evaluate
+con funciones internas.) Resultado: bot 100% funcional (5/5 causas).
+
+**Regla para el futuro:** si agregás un `page.evaluate` con funciones internas y ves
+`__name is not defined`, el shim global ya debería cubrirlo; si no, agregá el `const __name`
+local. NO quites el shim de `createStealthContext`.
+
+---
+
 ## ERROR #5 — 🌐 `ERR_NAME_NOT_RESOLVED` / el portal no responde
 
 **Síntoma:** el bot lanza el navegador, intenta el login y falla con
