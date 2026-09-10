@@ -379,8 +379,62 @@ async function dumpZonaFiltros(page: Page): Promise<void> {
 }
 
 // ============================================================
-// HELPER: Open a custom dropdown, click "Seleccionar Todos", and close it properly
+// HELPER: Seleccionar TODAS las opciones de un <select multiple> nativo por su ID.
+// ------------------------------------------------------------
+// El diagnóstico en vivo (BOT_DIAG_DETALLE) reveló que los filtros del tab Familia
+// son <select multiple> HTML nativos con IDs fijos:
+//   - tipCausaMisCauFam   (Tipo Causa)   → quedaba en "Causas Propias" (default)
+//   - estadoCausaMisCauFam (Estado)      → quedaba en "Tramitación" (default)
+// El helper genérico selectAllInDropdown buscaba un panel "Seleccionar Todos"
+// (patrón de multiselect JS), que NO aplica a un <select multiple> nativo: ahí hay
+// que marcar option.selected=true en TODAS las opciones y disparar 'change'. Por eso
+// los filtros quedaban en su default y el portal no devolvía la causa buscada.
+//
+// Esta función va DIRECTO al <select> por id (con fallback por name) y selecciona
+// todo de forma nativa y confiable (excluye opciones placeholder tipo value vacío o
+// "Seleccione...", que podrían envenenar el filtro).
+// RETORNO: nº de opciones marcadas (>0 = OK). -1 = no se encontró el <select>.
+// 0 = se encontró pero no marcó nada (sin opciones o solo placeholders). El llamador
+// trata TANTO -1 COMO 0 como fallo y cae al helper genérico (ambos son inservibles).
+// ============================================================
+async function selectAllNativeMultiselect(page: Page, selectId: string, selectName: string): Promise<number> {
+  return page.evaluate((args: { id: string; name: string }) => {
+    const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+    // Localizar el <select>: primero por id exacto; si no, por atributo name
+    // (el name real trae corchetes: "tipCausaMisCauFam[]").
+    let sel = document.getElementById(args.id) as HTMLSelectElement | null
+    if (!sel || sel.tagName.toLowerCase() !== 'select') {
+      sel = (document.querySelector(`select[name="${args.name}"]`)
+        || document.querySelector(`select[name="${args.name}[]"]`)) as HTMLSelectElement | null
+    }
+    if (!sel) return -1               // no se encontró el <select>
+    const opciones = Array.from(sel.options)
+    if (opciones.length === 0) return 0
+    let marcadas = 0
+    for (const opt of opciones) {
+      if (opt.disabled) continue
+      // NO marcar opciones "placeholder" (value vacío o textos tipo "Seleccione...",
+      // "Todos", "-- --"). Seleccionar un value vacío en un multi-select puede hacer que
+      // el backend filtre por "vacío" y devuelva 0 filas (reproduciría el bug por otra vía).
+      const val = (opt.value || '').trim()
+      const txt = (opt.textContent || '').trim().toLowerCase()
+      if (val === '') continue
+      if (txt.startsWith('--') || /^(seleccione|seleccionar|todos|todas)\b/.test(txt)) continue
+      opt.selected = true
+      marcadas++
+    }
+    // Disparar eventos para que el framework del portal registre el cambio.
+    sel.dispatchEvent(new Event('input', { bubbles: true }))
+    sel.dispatchEvent(new Event('change', { bubbles: true }))
+    return marcadas
+  }, { id: selectId, name: selectName })
+}
+
+// ============================================================
+// HELPER (legacy): Open a custom dropdown, click "Seleccionar Todos", and close it properly
 // Uses the trigger element to open/close (toggle) instead of document.body.click()
+// NOTA: quedó como fallback. Para el tab Familia se usa selectAllNativeMultiselect
+// (los filtros son <select multiple> nativos, no un multiselect JS con panel).
 // ============================================================
 async function selectAllInDropdown(page: Page, dropdownLabel: string): Promise<void> {
   // Step 1: Find and click the dropdown trigger to OPEN it
@@ -537,16 +591,18 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     })
     await sleep(500)
     
-    // PASO 3: Tipo Causa → Click dropdown → "Seleccionar Todos" (5 de 5)
-    // MUST come FIRST before Estado
-    log('info', '  Seleccionando Tipo Causa (5 de 5)...')
-    await selectAllInDropdown(page, 'tipo')
+    // PASO 3: Tipo Causa → seleccionar TODAS las opciones del <select multiple> nativo.
+    log('info', '  Seleccionando Tipo Causa (todas)...')
+    const tipoNY = await selectAllNativeMultiselect(page, 'tipCausaMisCauFam', 'tipCausaMisCauFam')
+    if (tipoNY > 0) log('info', `  Tipo Causa: ${tipoNY} opciones seleccionadas (todas).`)
+    else { log('warn', `  Tipo Causa por <select> nativo falló (${tipoNY}); método genérico...`); await selectAllInDropdown(page, 'tipo') }
     await sleep(500)
-    
-    // PASO 4: Estado → Click dropdown → "Seleccionar Todos" (12 de 12)
-    // MUST come SECOND after Tipo Causa
-    log('info', '  Seleccionando Estado (12 de 12)...')
-    await selectAllInDropdown(page, 'estado')
+
+    // PASO 4: Estado → seleccionar TODAS las opciones del <select multiple> nativo.
+    log('info', '  Seleccionando Estado (todas)...')
+    const estadoNY = await selectAllNativeMultiselect(page, 'estadoCausaMisCauFam', 'estadoCausaMisCauFam')
+    if (estadoNY > 0) log('info', `  Estado: ${estadoNY} opciones seleccionadas (todas).`)
+    else { log('warn', `  Estado por <select> nativo falló (${estadoNY}); método genérico...`); await selectAllInDropdown(page, 'estado') }
     await sleep(500)
     
     // PASO 5: Año — solo inputs VISIBLES
@@ -716,12 +772,29 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // CRÍTICO: el portal NO devuelve la causa si estos filtros multi-selección no están
     // completos. searchByYear ya lo hacía; searchByRitExacto no, y por eso no encontraba nada.
     log('info', '  Seleccionando Tipo Causa (5 de 5)...')
-    await selectAllInDropdown(page, 'tipo')
+    // Los filtros de Familia son <select multiple> nativos (tipCausaMisCauFam,
+    // estadoCausaMisCauFam). Seleccionamos TODO por id directo (confiable). Si por
+    // algún motivo no se encuentra el select, caemos al helper genérico viejo.
+    // ORDEN: Tipo Causa PRIMERO, luego Estado (el portal puede repoblar Estado al
+    // cambiar Tipo, así que no reordenar).
+    const tipoN = await selectAllNativeMultiselect(page, 'tipCausaMisCauFam', 'tipCausaMisCauFam')
+    if (tipoN > 0) {
+      log('info', `  Tipo Causa: ${tipoN} opciones seleccionadas (todas).`)
+    } else {
+      log('warn', `  No se pudo marcar Tipo Causa por <select> nativo (${tipoN}); usando método genérico...`)
+      await selectAllInDropdown(page, 'tipo')
+    }
     await sleep(500)
 
-    // PASO 2.4: Estado → abrir dropdown → "Seleccionar Todos" (deja "12 de 12").
-    log('info', '  Seleccionando Estado (12 de 12)...')
-    await selectAllInDropdown(page, 'estado')
+    // PASO 2.4: Estado → seleccionar TODAS las opciones del <select multiple> nativo.
+    log('info', '  Seleccionando Estado (todas las opciones)...')
+    const estadoN = await selectAllNativeMultiselect(page, 'estadoCausaMisCauFam', 'estadoCausaMisCauFam')
+    if (estadoN > 0) {
+      log('info', `  Estado: ${estadoN} opciones seleccionadas (todas).`)
+    } else {
+      log('warn', `  No se pudo marcar Estado por <select> nativo (${estadoN}); usando método genérico...`)
+      await selectAllInDropdown(page, 'estado')
+    }
     await sleep(500)
 
     // PASO 3: Escribir el número en el campo "Rol".
