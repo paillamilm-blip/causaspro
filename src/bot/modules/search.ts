@@ -678,6 +678,24 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
   log('info', `  Buscando RIT exacto: ${ritLegible}...`)
 
   try {
+    // PASO 0: RE-FORZAR el tab Familia antes de cada búsqueda. navigateToConsulta
+    // selecciona Familia una sola vez al inicio, pero entre causa y causa el foco/formulario
+    // puede quedar en otra competencia (Corte Suprema, etc.), y la búsqueda terminaría
+    // corriendo/leyendo fuera de Familia (bug de "resultados de Corte Suprema"). Es barato
+    // e idempotente: si ya estamos en Familia, el click no molesta.
+    await clickFamiliaTab(page)
+    await sleep(1000)
+    // Verificar que quedamos en Familia y, si no, reintentar el click una vez.
+    // NOTA: verifyFamiliaTab confirma buscando nombres de juzgado en celdas de tabla, que
+    // aún NO existen antes de que una búsqueda pinte resultados. Por eso, en la PRIMERA
+    // búsqueda es normal que no confirme: NO es un error (la selección de tabla por
+    // contenido en readResultsTable es la salvaguarda final). Por eso el log es 'info'.
+    if (!(await verifyFamiliaTab(page, 8000))) {
+      log('info', '  Tab Familia no confirmado por contenido (normal antes de tener resultados); reintentando click...')
+      await clickFamiliaTab(page)
+      await sleep(1500)
+    }
+
     // PASO 1: Esperar a que el formulario de Familia esté cargado
     await sleep(2000)
 
@@ -880,23 +898,35 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     const pollStart = Date.now()
     let iter = 0
     while (Date.now() - pollStart < pollTimeout) {
-      const hasRows = await page.evaluate((rolBuscado: string) => {
-        const tables = document.querySelectorAll('table')
+      const hasRows = await page.evaluate((args: { rol: string; anio: string }) => {
+        const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+        const rolNum = parseInt(args.rol, 10)
+        const tables = Array.from(document.querySelectorAll('table')) as HTMLTableElement[]
         for (const table of tables) {
+          // Alinear con la lectura: ignorar tablas de Corte Suprema/Apelaciones
+          // (encabezados "Corte" sin "Tribunal"). Así el polling no da "encontrado"
+          // por una fila de otra competencia mientras Familia sigue vacía.
+          // ⚠️ MISMO criterio que esTablaOtraCompetencia() en readResultsTable — si
+          // ajustás uno (ej. agregar "apelaciones"), actualizá el otro en paralelo
+          // (son 2 page.evaluate distintos, no comparten closure).
+          const ths = Array.from(table.querySelectorAll('th')).map(th => (th.textContent || '').trim().toLowerCase())
+          const otraCompetencia = ths.some(t => t.includes('corte')) && !ths.some(t => t.includes('tribunal'))
+          if (otraCompetencia) continue
           const trs = table.querySelectorAll('tbody tr, tr')
           for (const tr of trs) {
             const tds = tr.querySelectorAll('td')
             if (tds.length < 4) continue
             const cells = Array.from(tds).map(td => (td.textContent || '').trim())
             for (const cell of cells) {
-              // RIT con formato válido Y cuyo número (parte del medio) sea el buscado
-              const m = cell.match(/^[A-Z]{0,3}-?(\d+)-\d{4}$/)
-              if (m && m[1] === rolBuscado) return true
+              // RIT válido cuyo número Y año coincidan con lo buscado (antes solo el
+              // número → podía cortar el polling sobre una causa de otro año).
+              const m = cell.match(/^[A-Z]{0,3}-?(\d+)-(\d{4})$/)
+              if (m && parseInt(m[1], 10) === rolNum && m[2] === args.anio) return true
             }
           }
         }
         return false
-      }, numero)
+      }, { rol: numero, anio: año })
       if (hasRows) { resultsFound = true; break }
       iter++
       // Cada 3 iteraciones (~4.5s) reintentamos: re-escribir campos (por si el portal los
@@ -921,8 +951,10 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
       return []
     }
 
-    // PASO 8: Leer la tabla (reutiliza el parser existente)
-    const causas = await readResultsTable(page)
+    // PASO 8: Leer la tabla. Pasamos número+año+letra para que elija LA TABLA QUE
+    // CONTIENE esta causa (no la primera con datos → evita leer Corte Suprema), y
+    // para que una colisión de número con otra competencia no seleccione la equivocada.
+    const causas = await readResultsTable(page, { numero, año, letra: tipo.toUpperCase() })
 
     // PASO 9: FILTRAR al RIT EXACTO. CRÍTICO para integridad de datos: el formulario
     // podría no haber filtrado bien (RUT no limpiado, coincidencia por prefijo del Rol,
@@ -1090,51 +1122,62 @@ export interface CausaFoundInPortal {
 
 // ============================================================
 // LEER TABLA DE RESULTADOS
+// ------------------------------------------------------------
+// IMPORTANTE (fix del bug "lee la tabla equivocada"): el portal de "Mis Causas"
+// pinta VARIAS tablas a la vez (una por competencia: Corte Suprema, Apelaciones,
+// Civil, ... y Familia). La versión anterior tomaba "la PRIMERA tabla con th
+// Rit/Rol que tuviera filas" → como la de Corte Suprema tiene th "Rol" y a veces
+// datos residuales, se quedaba con ESA y nunca leía la de Familia (que estaba
+// vacía o más abajo). De ahí "No existen causas" aunque la causa sí estaba.
+//
+// AHORA (Opción B — robusta al reordenamiento de tablas): si conocemos el
+// número+año buscado, elegimos LA TABLA QUE CONTIENE la fila de esa causa. Si no
+// se puede (o no se pasó target), caemos a la tabla de FAMILIA identificada por
+// sus encabezados (Rit + Tribunal, que la de Corte Suprema —Rol + Corte— no
+// tiene). Nunca más "la primera tabla con datos".
+//
+// @param target opcional { numero, año, letra } de la causa buscada (búsqueda por RIT).
+//   letra puede ser "" si el RIT se buscó sin prefijo.
 // ============================================================
-async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
+async function readResultsTable(
+  page: Page,
+  target?: { numero: string; año: string; letra: string },
+): Promise<CausaFoundInPortal[]> {
   const causas: CausaFoundInPortal[] = []
-  
-  const data = await page.evaluate(() => {
-    const rows: any[] = []
-    const tables = document.querySelectorAll('table')
-    
-    for (const table of tables) {
-      const headers = table.querySelectorAll('th')
-      let isCorrect = false
-      for (const th of headers) {
-        const text = (th.textContent || '').trim().toLowerCase()
-        if (text.includes('rit') || text.includes('rol')) {
-          isCorrect = true
-          break
-        }
-      }
-      if (!isCorrect) continue
-      
+
+  const data = await page.evaluate((target: { numero: string; año: string; letra: string } | null) => {
+    const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+    const RIT_RE = /^[A-Z]{0,3}-?\d+-\d{4}$/
+    // Captura letra + número + año (la letra puede estar vacía).
+    const partesDe = (s: string) => { const m = s.match(/^([A-Z]{0,3})-?(\d+)-(\d{4})$/); return m ? { letra: m[1], n: parseInt(m[2], 10), a: m[3] } : null }
+
+    // ¿Esta tabla es de Corte Suprema/Apelaciones? Esas usan encabezados "Rol" y
+    // "Corte" (NO "Rit"/"Tribunal"). Las descartamos de la estrategia por-contenido
+    // para que una colisión de número con Familia no nos haga leer la competencia
+    // equivocada (bug original: se leía Corte Suprema).
+    const esTablaOtraCompetencia = (table: HTMLTableElement) => {
+      const ths = Array.from(table.querySelectorAll('th')).map(th => (th.textContent || '').trim().toLowerCase())
+      const tieneTribunal = ths.some(t => t.includes('tribunal'))
+      const tieneCorte = ths.some(t => t.includes('corte'))
+      // Es "otra competencia" si menciona Corte y NO menciona Tribunal (Familia sí lo tiene).
+      return tieneCorte && !tieneTribunal
+    }
+
+    // Extrae las filas de UNA tabla (celda RIT + columnas siguientes).
+    const extraerFilas = (table: HTMLTableElement) => {
+      const out: any[] = []
       const trs = table.querySelectorAll('tbody tr, tr')
       for (const tr of trs) {
         const tds = tr.querySelectorAll('td')
         if (tds.length < 4) continue
-        
         const cells = Array.from(tds).map(td => (td.textContent || '').trim())
-        const detailLink = tr.querySelector('a[href]')
-        const href = detailLink ? detailLink.getAttribute('href') : null
-        
-        // Buscar celda RIT — ESTRICTO: requiere formato con letra O número-año
-        let rit = ''
-        let startIdx = 0
-        
+        const href = tr.querySelector('a[href]')?.getAttribute('href') || null
+        let rit = '', startIdx = 0
         for (let i = 0; i < cells.length; i++) {
-          // Match: C-4875-2025, P-7940-2026, F-3069-2026, FA-123-2024, X-4187-2026, 44977-2026
-          if (cells[i].match(/^[A-Z]{0,3}-?\d+-\d{4}$/)) {
-            rit = cells[i].trim()
-            startIdx = i
-            break
-          }
+          if (RIT_RE.test(cells[i])) { rit = cells[i].trim(); startIdx = i; break }
         }
-        
         if (!rit) continue
-        
-        rows.push({
+        out.push({
           rit,
           tribunal: cells[startIdx + 1] || '',
           caratulado: cells[startIdx + 2] || '',
@@ -1144,11 +1187,63 @@ async function readResultsTable(page: Page): Promise<CausaFoundInPortal[]> {
           href,
         })
       }
-      
-      if (rows.length > 0) break
+      return out
     }
-    return rows
-  })
+
+    const tables = Array.from(document.querySelectorAll('table')) as HTMLTableElement[]
+
+    // 1) PREFERIDO: la tabla que CONTIENE la fila de la causa buscada.
+    //    Es lo más robusto: no depende de encabezados ni de la posición de la tabla.
+    //    - Coincidencia por número+año Y, si conocemos la letra, TAMBIÉN por letra
+    //      (así P-5621-2025 no matchea un 5621-2025 de otra competencia).
+    //    - Se saltan las tablas de Corte Suprema/Apelaciones (Rol/Corte) para que una
+    //      colisión de número no nos devuelva la competencia equivocada.
+    if (target) {
+      const nTarget = parseInt(target.numero, 10)
+      for (const table of tables) {
+        if (esTablaOtraCompetencia(table)) continue
+        const filas = extraerFilas(table)
+        const contiene = filas.some(f => {
+          const d = partesDe(f.rit)
+          if (!d || d.n !== nTarget || d.a !== target.año) return false
+          // Si buscamos con letra, la fila debe tener esa letra (o venir sin letra:
+          // el portal a veces omite el prefijo). Si no buscamos con letra, aceptamos.
+          if (target.letra && d.letra && d.letra !== target.letra) return false
+          return true
+        })
+        if (contiene) return filas
+      }
+    }
+
+    // 2) RESPALDO: la tabla de FAMILIA por encabezados. La de Familia tiene
+    //    "Rit" + "Tribunal"; la de Corte Suprema usa "Rol" + "Corte". Exigimos
+    //    la combinación para no confundirlas.
+    for (const table of tables) {
+      const ths = Array.from(table.querySelectorAll('th')).map(th => (th.textContent || '').trim().toLowerCase())
+      const tieneRit = ths.some(t => t.includes('rit'))
+      const tieneTribunal = ths.some(t => t.includes('tribunal'))
+      if (tieneRit && tieneTribunal) {
+        const filas = extraerFilas(table)
+        if (filas.length > 0) return filas
+      }
+    }
+
+    // 3) ÚLTIMO RECURSO (compat.): primera tabla con th Rit/Rol y filas.
+    //    Se mantiene solo para no romper flujos donde no hay target ni tabla de
+    //    Familia identificable; puede leer otra competencia (comportamiento viejo).
+    for (const table of tables) {
+      const headers = table.querySelectorAll('th')
+      let isCorrect = false
+      for (const th of headers) {
+        const text = (th.textContent || '').trim().toLowerCase()
+        if (text.includes('rit') || text.includes('rol')) { isCorrect = true; break }
+      }
+      if (!isCorrect) continue
+      const filas = extraerFilas(table)
+      if (filas.length > 0) return filas
+    }
+    return []
+  }, target ?? null)
   
   for (const row of data) {
     causas.push({
