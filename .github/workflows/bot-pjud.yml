@@ -69,6 +69,10 @@ jobs:
           # En CI NO volcamos el contenido de las tablas (nombres de partes/causas) a los
           # logs públicos de Actions. El diagnóstico detallado queda solo para local.
           BOT_DIAG: '0'
+          # El volcado del HTML del detalle (nombres de menores, RUTs, datos de causas de
+          # familia) es SOLO para diagnóstico local. Se fuerza a '0' en CI para que ese
+          # HTML sensible nunca se escriba dentro del runner, aunque el flag se active.
+          BOT_DIAG_DETALLE: '0'
         run: npx tsx src/bot/index.ts
       
       - name: 📸 Upload screenshots on failure

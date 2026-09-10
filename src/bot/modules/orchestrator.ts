@@ -9,6 +9,7 @@ import { DEFAULT_CONFIG } from '../config'
 import { createStealthContext, loginOJV, logoutOJV, isSessionActive } from './login'
 import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDetail, CausaFoundInPortal } from './search'
 import { scrapeCausaCompleta } from './scraper'
+import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, categorizarError, capturaPath } from '../utils'
@@ -327,6 +328,13 @@ async function runBusquedaPorRit(
         causa.rit,
       )
       if (opened) {
+        // DIAGNÓSTICO (opt-in con BOT_DIAG_DETALLE=1): fotografía la estructura
+        // REAL del detalle (HTML + resumen de tablas/tabs) ANTES de scrapear, para
+        // poder reescribir los extractores sin adivinar selectores. No afecta el
+        // scraping: es totalmente defensivo y solo escribe archivos en bot-capturas/.
+        if (process.env.BOT_DIAG_DETALLE === '1') {
+          await volcarDetalleParaDiagnostico(page, causa.rit).catch(() => {})
+        }
         const scrapedData = await medirPaso(
           status.run_id, 'scrape',
           () => scrapeCausaCompleta(page, { id: causa.id, rit: causa.rit }),
