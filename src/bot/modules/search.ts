@@ -490,9 +490,7 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     await sleep(2000)
 
     // PASO 2.1: Activar el toggle de "Filtros" PRIMERO (igual que searchByYear). Sin esto,
-    // los dropdowns de Tipo Causa / Estado pueden no estar disponibles. IMPORTANTE: el
-    // toggle re-renderiza el formulario, por eso va ANTES de limpiar el RUT (si se limpiara
-    // antes, el re-render podría volver a auto-rellenar el RUT del curador).
+    // los dropdowns de Tipo Causa / Estado pueden no estar disponibles.
     await page.evaluate(() => {
       const toggles = document.querySelectorAll('input[type="checkbox"], .custom-switch input, [role="switch"]')
       for (const toggle of toggles) {
@@ -507,25 +505,9 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     })
     await sleep(2000)
 
-    // PASO 2.2: Limpiar el campo RUT (se auto-rellena con el RUT del curador tras login;
-    // si queda con valor, el portal filtra por RUT y no encuentra la causa por RIT).
-    // Va DESPUÉS del toggle para que el re-render no lo repueble.
-    await page.evaluate(() => {
-      const inputs = document.querySelectorAll('input')
-      for (const input of inputs) {
-        if ((input as HTMLElement).offsetParent === null) continue
-        const name = (input.getAttribute('name') || '').toLowerCase()
-        const id = (input.getAttribute('id') || '').toLowerCase()
-        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
-        if (name.includes('rut') || id.includes('rut') || ph.includes('rut') ||
-            name.includes('dv') || id.includes('dv')) {
-          (input as HTMLInputElement).value = ''
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
-        }
-      }
-    })
-    await sleep(500)
+    // NOTA: NO se toca el campo RUT. El portal lo llena por defecto (RUT del curador) y así
+    // es como debe quedar para que la búsqueda funcione; borrarlo era innecesario y
+    // contraproducente. Antes había un PASO que lo limpiaba — se eliminó a propósito.
 
     // PASO 2.3: Tipo Causa → abrir dropdown → "Seleccionar Todos" (deja "5 de 5").
     // CRÍTICO: el portal NO devuelve la causa si estos filtros multi-selección no están
