@@ -11,6 +11,48 @@ error dos veces**.
 
 ---
 
+## ERROR #7 — 🔍 Búsqueda por RIT devuelve "No existen causas" aunque la causa esté activa
+
+**Síntoma:** el bot busca un RIT de Familia real y activo (ej. `P-7336-2026`) y termina con
+`Sin resultados` / `No existen causas por el valor ingresado`, con ~58% de las búsquedas
+fallando (el auto-diagnóstico reportaba `paso más problemático: busqueda`, tasa ~30-42%).
+
+**Causa raíz (confirmada con `BOT_DIAG_DETALLE=1`):** los filtros **Tipo Causa** y **Estado**
+del tab Familia son `<select multiple>` **HTML nativos** (ids `tipCausaMisCauFam`,
+`estadoCausaMisCauFam`; el `name` real trae corchetes, ej. `tipCausaMisCauFam[]`), **no** un
+widget JS con un panel "Seleccionar Todos". El helper `selectAllInDropdown` buscaba ese panel
+inexistente y **no marcaba nada**, así que los filtros quedaban en su **valor por defecto**
+(`Tipo="Causas Propias"`, `Estado="Tramitación"`) y el portal no devolvía la causa. El `Rol`
+(`rolMisCauFam`) y el `Año` (`anhoMisCauFam`) **sí se escribían bien** — no eran el problema.
+
+**Solución que FUNCIONÓ (PR #33):** nueva función `selectAllNativeMultiselect(page, id, name)`
+en `search.ts` que ubica el `<select>` por id (fallback por `name` con y sin `[]`), marca
+`option.selected = true` en **todas las opciones reales** y dispara `input`+`change`. Excluye
+placeholders (value vacío o texto `Seleccione…/Todos/--`) para no envenenar el filtro. Se usa
+en `searchByRitExacto` y `searchByYear`, con fallback al helper viejo si no marca nada.
+
+**Regla:** si un filtro del portal "no toma", primero verificá con `BOT_DIAG_DETALLE=1` si es
+un `<select>` nativo (marcar `option.selected`) o un widget JS (click en panel). NO asumir.
+
+**Relacionado (misma saga):**
+- **PR #31** — `readResultsTable` leía "la primera tabla con datos", que era la de **Corte
+  Suprema** (headers `Rol`+`Corte`), no la de **Familia** (headers `Rit`+`Tribunal`). Ahora
+  elige la tabla que **CONTIENE** la causa buscada (número+año+letra) y descarta tablas de
+  otra competencia. Nunca "la primera con datos".
+- **PR #27/#32** — diagnóstico `BOT_DIAG_DETALLE=1`: vuelca `bot-capturas/detalle_<RIT>.html`
+  + `.resumen.txt` (estructura de tablas/tabs) y los campos del formulario con su `value=`.
+  Forzado a `0` en CI (datos sensibles de menores/RUTs).
+- **PR #28** — `BOT_RIT="P-1234-2025"` procesa SOLO ese RIT (diagnóstico puntual). Si no está
+  en la BD → id temporal → SOLO DIAGNÓSTICO (no persiste, no cuenta como exitosa).
+- **PR #30** — `src/bot/loadEnv.ts`: carga el `.env` automáticamente (tsx no lo hace solo).
+
+**Estructura real del formulario de Familia** (13 inputs, vía diagnóstico):
+`filtroMisCauFam` (checkbox), `rutMisCauFam`+`dvMisCauFam` (RUT curador autorellenado — NO
+tocar), `tipoMisCauFam` (select), `rolMisCauFam` (ph="Rol"), `anhoMisCauFam` (ph="Año"),
+`tipCausaMisCauFam[]` + `estadoCausaMisCauFam[]` (select multiple), fechas y nombre/apellidos.
+
+---
+
 ## ERROR #6 — 💥 `ReferenceError: __name is not defined` dentro de `page.evaluate`
 
 **Síntoma:** el bot loguea `Activando filtros...` e inmediatamente
