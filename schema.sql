@@ -24,12 +24,14 @@ CREATE TABLE causas (
     rit TEXT NOT NULL,
     rit_acumulados TEXT,
     caratulado TEXT,
-    -- Prefijo del RIT en tribunales de familia (Chile):
-    --   P=Protección, C=Cumplimiento, F=Ordinario/Familia, V=Violencia intrafamiliar,
-    --   X=Exhortos/varios, Z=Otros, T=Tutela, RIT genérico y multi-letra (ej: FA).
-    -- Se amplía respecto del CHECK original (solo P/X) para no perder causas de
-    -- familia cuyo prefijo no era P ni X (quedaban con tipo NULL).
-    tipo TEXT CHECK (tipo IN ('P','C','F','V','X','Z','T','FA','RIT')),
+    -- Prefijo del RIT en tribunales de familia (Chile) — materias reales:
+    --   Contenciosos:   C=contencioso (alimentos/cuidado/RDR), F=violencia intrafamiliar.
+    --   Protección NNA: P=medida de protección, X=cumplimiento/ejecución de protección.
+    --   Voluntarios:    V=gestión voluntaria, A=adopción/susceptibilidad de adopción.
+    --   Sin materia confirmada: Z.  Genéricos/comodines del portal: T, FA, RIT.
+    -- FUENTE ÚNICA DE VERDAD: mantener alineado con src/lib/materiasFamilia.ts
+    -- (LETRAS_VALIDAS), src/bot/utils/index.ts (TIPOS_RIT_VALIDOS) y schema-tipo-fix.sql.
+    tipo TEXT CHECK (tipo IN ('P','C','F','V','X','A','Z','T','FA','RIT')),
     fecha_apertura DATE,
     fecha_notificacion DATE,
     sintesis TEXT,

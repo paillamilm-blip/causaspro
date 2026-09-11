@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
@@ -63,6 +64,10 @@ export default function CausaDetalle() {
     </div>
   )
 
+  // Materia de la causa: se deriva del `tipo` (letra) y, si no lo hubiera, del RIT.
+  // Nunca se inventa — si la letra no está en el catálogo, queda undefined.
+  const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
+
   // Campos importantes primero, luego el resto
   const camposImportantes = ['rit', 'caratulado', 'estado', 'programa_vigente', 'sintesis', 'fecha_apertura', 'saj', 'notas']
   const datosExtra = causa.datos_extra || {}
@@ -104,9 +109,13 @@ export default function CausaDetalle() {
             {causa.estado && <InfoRow label="Estado" value={causa.estado} />}
             {causa.programa_vigente && <InfoRow label="Programa" value={causa.programa_vigente} />}
             {causa.tipo && <InfoRow label="Tipo" value={causa.tipo} />}
+            {materiaCausa && <InfoRow label="Materia" value={`${materiaCausa.materia} · ${GRUPO_LABEL[materiaCausa.grupo]}`} />}
             {causa.fecha_apertura && <InfoRow label="Fecha Apertura" value={formatFecha(causa.fecha_apertura)} />}
             {causa.saj && <InfoRow label="SAJ" value={causa.saj} />}
           </div>
+          {materiaCausa && (
+            <div className="mt-3 text-xs text-gray-500">{materiaCausa.descripcion}</div>
+          )}
           {causa.sintesis && (
             <div className="mt-4 p-3 bg-gray-50 rounded-lg">
               <span className="text-xs font-medium text-gray-500 uppercase">Síntesis</span>

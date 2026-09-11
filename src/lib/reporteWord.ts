@@ -14,6 +14,7 @@ import {
   Document, Packer, Paragraph, TextRun, HeadingLevel, AlignmentType,
   Table, TableRow, TableCell, WidthType, BorderStyle,
 } from 'docx'
+import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from './materiasFamilia'
 
 // --- Tipos de entrada (subconjunto de las tablas de la BD) ---
 export interface ReporteCausa {
@@ -109,6 +110,8 @@ function celda(texto: string, opts: { header?: boolean; width?: number; color?: 
 export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
   const { causa, movimientos, nna, adultos, audiencias, membrete } = data
   const hoy = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })
+  // Materia de la causa (del tipo/letra o del RIT). Nunca se inventa.
+  const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
 
   // --- ALERTAS ---
   const tieneTraslado = movimientos.some(m => m.es_traslado_curador)
@@ -214,6 +217,7 @@ export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
         campo('Tribunal', causa.tribunal),
         campo('Estado', causa.estado),
         campo('Tipo', causa.tipo),
+        ...(materiaCausa ? [campo('Materia', `${materiaCausa.materia} (${GRUPO_LABEL[materiaCausa.grupo]}) — ${materiaCausa.descripcion}`)] : []),
         campo('Programa vigente', causa.programa_vigente),
         campo('Fecha de apertura', fmtFecha(causa.fecha_apertura)),
         ...(causa.sintesis ? [campo('Síntesis', causa.sintesis)] : []),

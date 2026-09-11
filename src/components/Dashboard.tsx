@@ -2,6 +2,16 @@
 import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
+
+// Color del chip de materia según su grupo práctico.
+const GRUPO_CHIP: Record<GrupoMateria, string> = {
+  contencioso: 'bg-purple-100 text-purple-700',
+  proteccion: 'bg-rose-100 text-rose-700',
+  voluntario: 'bg-teal-100 text-teal-700',
+  sin_materia: 'bg-amber-100 text-amber-700',
+  generico: 'bg-gray-100 text-gray-500',
+}
 
 interface CausaResumen {
   id: string
@@ -371,6 +381,8 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
 function CausaCard({ causa: c }: { causa: CausaResumen }) {
   const sem = getSemaforo(c.nivel_urgencia)
   const motivo = getUrgenciaMotivo(c)
+  // Materia de la causa (del tipo/letra o del RIT). Nunca se inventa.
+  const materia = materiaDeTipo(c.tipo) || materiaDeRit(c.rit)
   
   return (
     <Link href={`/causa/${c.id}`}>
@@ -380,6 +392,14 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`inline-block w-4 h-4 rounded-full ${sem.dotColor} shadow-sm`}></span>
               <span className="font-mono font-bold text-sm text-gray-800">{c.rit}</span>
+              {materia && (
+                <span
+                  title={materia.descripcion}
+                  className={`text-xs px-2 py-0.5 rounded-full shrink-0 ${GRUPO_CHIP[materia.grupo]}`}
+                >
+                  {materia.materia}
+                </span>
+              )}
               {c.caratulado && (
                 <span className="font-semibold text-gray-700 truncate">{c.caratulado}</span>
               )}
