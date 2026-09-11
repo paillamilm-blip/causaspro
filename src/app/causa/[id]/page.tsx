@@ -82,6 +82,15 @@ export default function CausaDetalle() {
           {causa.programa_vigente && (
             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{causa.programa_vigente}</span>
           )}
+          {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
+              Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
+              exige autorización — el reporte contiene datos sensibles de la causa. */}
+          <a
+            href={`/api/reporte/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
+            className="ml-auto text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
+          >
+            📄 Descargar reporte Word
+          </a>
         </div>
       </header>
 
