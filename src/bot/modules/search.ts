@@ -747,7 +747,15 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
 // se usan solo al final para FILTRAR y quedarse con la causa exacta (Opción A).
 // Devuelve la coincidencia exacta y se parece a lo que hace un humano.
 // ============================================================
-export async function searchByRitExacto(page: Page, rit: string): Promise<CausaFoundInPortal[]> {
+export async function searchByRitExacto(
+  page: Page,
+  rit: string,
+  // OPCIONAL — SOLO lo usa el modo BOT_FIX_LETRAS. Si el portal devuelve AMBIGÜEDAD
+  // (mismo número+año con varias letras distintas), en vez de solo loguear y retornar
+  // [], se invoca este callback con los RIT candidatos ANTES de retornar []. El flujo
+  // normal (rit/listado) NO pasa este parámetro, así que su comportamiento es idéntico.
+  onAmbiguo?: (candidatos: string[]) => void,
+): Promise<CausaFoundInPortal[]> {
   const parsed = parseRIT(rit)
   if (!parsed) {
     log('warn', `  RIT "${rit}" no tiene formato válido (TIPO-NÚMERO-AÑO), se omite`)
@@ -1155,6 +1163,9 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     if (exactas.length > 1 && letrasDistintas > 1) {
       log('warn', `  ${exactas.length} causas con número ${numero}-${año} pero distinta letra (${exactas.map(c => c.rit).join(', ')}). Ambiguo: se OMITE para no scrapear la causa equivocada. Especifica la letra del RIT si conoces el tipo.`)
       await page.screenshot({ path: capturaPath(`bot_error_rit_ambiguo_${numero}${año}.png`) }).catch(() => {})
+      // BOT_FIX_LETRAS: reportar los candidatos ambiguos para marcarlos en revisión
+      // (nunca elegir uno). Solo actúa si el llamador pasó el callback.
+      if (onAmbiguo) onAmbiguo(exactas.map(c => c.rit))
       return []
     }
     if (exactas.length > 1) {

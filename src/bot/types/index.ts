@@ -107,7 +107,7 @@ export interface BotRunStatus {
   causas_por_min?: number
   /** Tasa de éxito 0-100 (exitosas / procesadas) */
   tasa_exito?: number
-  /** Modo de búsqueda usado ('rit' | 'listado') */
+  /** Modo usado ('rit' | 'listado' | 'fix_letras'). fix_letras = mantenimiento de letra/tipo. */
   search_mode?: string
   /** Si se detectó una señal de bloqueo/CAPTCHA durante la sesión */
   bloqueo_detectado?: boolean
