@@ -51,15 +51,37 @@ function getSemaforo(nivel: number | null): { color: string; label: string; bg: 
   return { color: 'text-green-600', label: '', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
 }
 
+// Motivo legible de la urgencia, alineado con el semáforo de la vista
+// (schema-semaforo-proteccion.sql). Prioriza la señal más fuerte de la causa.
 function getUrgenciaMotivo(causa: CausaResumen): string {
   const nivel = causa.nivel_urgencia
   if (!nivel || nivel >= 10) return ''
-  if (nivel === 1) return `⚡ Audiencia en ${Math.max(0, Math.round(causa.dias_para_audiencia || 0))} días`
+  const d = causa.dias_para_audiencia
+  // Solo consideramos "audiencia inminente" la que el CASE realmente usa para el nivel:
+  // ≤2d en nivel 1, ≤7d en nivel 3. Así el mensaje coincide con la señal que disparó el nivel.
+  const audienciaInminente = (limite: number) =>
+    causa.proxima_audiencia != null && d != null && d <= limite
+      ? `📅 Audiencia en ${Math.max(0, Math.round(d))} días`
+      : ''
+  if (nivel === 1) {
+    // El CASE llega a nivel 1 por audiencia ≤2d O por traslado curador ≤30d. Priorizamos la
+    // audiencia inminente (más urgente en el tiempo); si no hay, es el traslado reciente.
+    const aud = audienciaInminente(2)
+    if (aud) return aud
+    if (causa.tiene_traslado_curador) return '🔴 Traslado al curador (≤30 días)'
+    return '🔴 Acción inmediata'
+  }
   if (nivel === 2) return `⚠️ Medida cautelar vence en ${causa.dias_medida_vence} días`
-  if (nivel === 3) return `📅 Audiencia en ${Math.round(causa.dias_para_audiencia || 0)} días`
-  if (nivel === 4) return `😴 Sin actividad hace ${Math.round(causa.dias_sin_actividad || 0)} días`
-  if (nivel === 5) return `⏳ Sin actividad hace ${Math.round(causa.dias_sin_actividad || 0)} días`
-  if (nivel === 6) return '📋 Sin audiencia programada'
+  if (nivel === 3) {
+    // Nivel 3 = audiencia futura ≤7d O movimiento nuevo ≤7d. Solo mostramos la audiencia
+    // si de verdad es ≤7d (si no, el nivel lo disparó el movimiento nuevo).
+    const aud = audienciaInminente(7)
+    if (aud) return aud
+    const mov = causa.ultimo_movimiento ? `: ${causa.ultimo_movimiento}` : ''
+    return `🆕 Movimiento nuevo (últimos 7 días)${mov}`
+  }
+  if (nivel === 4) return '🔴 Traslado al curador (revisar)'
+  if (nivel === 6) return `😴 Sin movimiento hace ${Math.round(causa.dias_sin_actividad || 0)} días (estancada)`
   return ''
 }
 
@@ -316,10 +338,10 @@ export default function Dashboard() {
 
       {/* Leyenda */}
       <div className="flex flex-wrap gap-3 text-xs text-gray-500">
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Audiencia ≤2d / Medida por vencer</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-yellow-400"></span> Audiencia ≤7d / Sin actividad &gt;30d</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Sin actividad &gt;15d / Sin audiencia</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Sin alertas</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Traslado curador ≤30d / Audiencia ≤2d / Medida por vencer</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-yellow-400"></span> Movimiento nuevo ≤7d / Audiencia ≤7d / Traslado curador</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Estancada: sin movimiento &gt;90d</span>
+        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Con actividad reciente</span>
       </div>
 
       {/* 🚨 ALERTA: TRASLADOS AL CURADOR */}
