@@ -3,6 +3,10 @@
 // Uso: npx tsx src/bot/index.ts
 // ============================================================
 
+// IMPORTANTE: cargar el .env ANTES que cualquier otro módulo, para que al
+// ejecutarse con tsx (que no lee .env solo) estén disponibles SUPABASE_*/PJUD_*.
+import './loadEnv'
+
 export { runBotSession, runUrgentOnly, runTestSingle } from './modules/orchestrator'
 export { analyzeCausaUrgency, generateAlertSummary } from './modules/detection'
 export { initSupabase, getCausasToScrape } from './modules/supabaseSync'
