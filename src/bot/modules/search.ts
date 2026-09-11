@@ -18,10 +18,24 @@ const DIAG_ON = process.env.BOT_DIAG !== '0'
 // ============================================================
 async function clickFamiliaTab(page: Page): Promise<boolean> {
   const result = await page.evaluate(() => {
+    const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+    // Método 0 (PREFERIDO): el ENLACE REAL del tab Familia, que activa el panel del
+    // framework (Bootstrap tabs): <a id="familiaTab" href="#tab7">Familia</a>. Clickear
+    // este <a> (no un <li> contenedor) es lo que realmente muestra el panel MisCauFam y
+    // oculta el de otras competencias. Confirmado por diagnóstico: id="familiaTab",
+    // href="#tab7". Este es el fix del bug "quedaba en el panel de Corte Suprema".
+    const tabLink = (document.getElementById('familiaTab')
+      || document.querySelector('a[href="#tab7"]')) as HTMLElement | null
+    if (tabLink) {
+      tabLink.click()
+      return `link: #familiaTab`
+    }
+
     // Buscar en absolutamente todos los elementos
     const allElements = document.querySelectorAll('a, button, li, span, div, td, th, label')
-    
-    // Método 1: Buscar en contenedor que tiene los otros tabs
+
+    // Método 1: Buscar en contenedor que tiene los otros tabs → clickear el <a> hijo si
+    // existe (preferir el enlace real sobre el <li>).
     const containers = document.querySelectorAll('ul, nav, div, ol')
     for (const container of containers) {
       const text = container.textContent || ''
@@ -30,8 +44,10 @@ async function clickFamiliaTab(page: Page): Promise<boolean> {
         for (const child of children) {
           const childText = (child.textContent || '').trim()
           if (childText === 'Familia') {
-            (child as HTMLElement).click()
-            return `container: ${child.tagName}`
+            // Si el elemento es un <a>, o contiene/está dentro de uno, clickear el <a>.
+            const anchor = (child.tagName === 'A' ? child : (child.querySelector('a') || child.closest('a'))) as HTMLElement | null
+            ;(anchor || (child as HTMLElement)).click()
+            return `container: ${(anchor || child).tagName}`
           }
         }
       }
@@ -77,13 +93,21 @@ async function verifyFamiliaTab(page: Page, maxWaitMs: number = 15000): Promise<
   const start = Date.now()
   while (Date.now() - start < maxWaitMs) {
     const inFamilia = await page.evaluate(() => {
-      // Verificar en las tablas de datos (no en menú/sidebar)
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+      // SEÑAL PRINCIPAL (confiable ANTES de buscar): el FORMULARIO de Familia está VISIBLE.
+      // El portal PJUD tiene un formulario por competencia (MisCauSup/MisCauFam/...). Que el
+      // campo rolMisCauFam esté visible (offsetParent != null) significa que el panel activo
+      // es el de Familia. Esto SÍ distingue Familia de Corte Suprema (que tiene rolMisCauSup),
+      // a diferencia de mirar tablas de resultados que aún no existen antes de buscar.
+      const rolFam = document.getElementById('rolMisCauFam') as HTMLElement | null
+      if (rolFam && rolFam.offsetParent !== null) return true
+      // SEÑAL SECUNDARIA (después de buscar): tablas con nombres de juzgados de Familia.
       const tables = document.querySelectorAll('table')
       for (const table of tables) {
         const rows = table.querySelectorAll('td')
         for (const td of rows) {
           const text = td.textContent || ''
-          if (text.includes('Juzgado de Familia') || text.includes('Familia Santiago') || 
+          if (text.includes('Juzgado de Familia') || text.includes('Familia Santiago') ||
               text.includes('Familia San Miguel') || text.includes('Familia Talcahuano') ||
               text.includes('Centro de Medidas Cautelares')) {
             return true
@@ -739,17 +763,21 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     // puede quedar en otra competencia (Corte Suprema, etc.), y la búsqueda terminaría
     // corriendo/leyendo fuera de Familia (bug de "resultados de Corte Suprema"). Es barato
     // e idempotente: si ya estamos en Familia, el click no molesta.
-    await clickFamiliaTab(page)
-    await sleep(1000)
-    // Verificar que quedamos en Familia y, si no, reintentar el click una vez.
-    // NOTA: verifyFamiliaTab confirma buscando nombres de juzgado en celdas de tabla, que
-    // aún NO existen antes de que una búsqueda pinte resultados. Por eso, en la PRIMERA
-    // búsqueda es normal que no confirme: NO es un error (la selección de tabla por
-    // contenido en readResultsTable es la salvaguarda final). Por eso el log es 'info'.
-    if (!(await verifyFamiliaTab(page, 8000))) {
-      log('info', '  Tab Familia no confirmado por contenido (normal antes de tener resultados); reintentando click...')
+    // verifyFamiliaTab ahora confirma por el FORMULARIO de Familia visible (rolMisCauFam),
+    // que SÍ existe antes de buscar y distingue Familia de otras competencias. Reintentamos
+    // el click hasta confirmar (hasta 3 veces). Si tras eso NO se confirma, ABORTAMOS limpio
+    // esta causa en vez de escribir en el panel equivocado (bug: buscaba en Corte Suprema).
+    let enFamilia = false
+    for (let intento = 1; intento <= 3 && !enFamilia; intento++) {
       await clickFamiliaTab(page)
-      await sleep(1500)
+      await sleep(1200)
+      enFamilia = await verifyFamiliaTab(page, 6000)
+      if (!enFamilia) log('info', `  Panel Familia aún no visible; reintentando (${intento}/3)...`)
+    }
+    if (!enFamilia) {
+      log('warn', `  No se pudo activar el panel de Familia para ${ritLegible}; se omite esta causa para no buscar en otra competencia.`)
+      { const p = capturaPath(`bot_error_familia_panel_${tipo}${numero}${año}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot: ${p}`) }
+      return []
     }
 
     // PASO 1: Esperar a que el formulario de Familia esté cargado
@@ -812,18 +840,38 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
 
     const rolOk = await page.evaluate((rol: string) => {
       const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+      const escribir = (input: HTMLInputElement, campo: string) => {
+        input.value = rol
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+        input.dispatchEvent(new Event('change', { bubbles: true }))
+        return { ok: true, campo }
+      }
+      // PRIORIDAD 1: el campo Rol del PANEL DE FAMILIA por su id EXACTO (rolMisCauFam).
+      // El portal PJUD tiene varios formularios coexistiendo (MisCauSup=Suprema,
+      // MisCauFam=Familia, ...). Si escribimos en el "primer input visible" podemos caer
+      // en rolMisCauSup (bug real observado: el bot buscó en Corte Suprema). Anclar por id
+      // de Familia garantiza escribir SIEMPRE en el formulario correcto.
+      // Exigir que el campo esté VISIBLE (offsetParent != null), igual que el Año y
+      // verifyFamiliaTab: si el panel Familia estuviera en el DOM pero oculto, escribir
+      // ahí no serviría. Así ambas ramas (Rol/Año) usan el mismo criterio.
+      const fam = document.getElementById('rolMisCauFam') as HTMLInputElement | null
+      if (fam && (fam as HTMLElement).offsetParent !== null) return escribir(fam, 'id="rolMisCauFam" (Familia, por id)')
+      // PRIORIDAD 2 (fallback): heurística sobre inputs visibles. LISTA BLANCA: solo se
+      // acepta un campo cuyo name/id sea del panel de Familia ("miscaufam"). Así, aunque
+      // aparezca una competencia nueva/desconocida, NUNCA escribimos fuera de Familia.
       const inputs = document.querySelectorAll('input')
       for (const input of inputs) {
         if ((input as HTMLElement).offsetParent === null) continue
         const name = (input.getAttribute('name') || '').toLowerCase()
         const id = (input.getAttribute('id') || '').toLowerCase()
         const ph = (input.getAttribute('placeholder') || '').toLowerCase()
-        if (name.includes('rol') || id.includes('rol') || ph === 'rol') {
-          (input as HTMLInputElement).value = rol
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
-          // Devolver dónde se escribió, para diagnóstico honesto.
-          return { ok: true, campo: `name="${name}" id="${id}" ph="${ph}"` }
+        const esCampoRol = name.includes('rol') || id.includes('rol') || ph === 'rol'
+        if (!esCampoRol) continue
+        // Solo si es inequívocamente de Familia (o no trae sufijo de competencia alguno).
+        const esFamilia = name.includes('miscaufam') || id.includes('miscaufam')
+        const traeCompetencia = /miscau[a-z]{3}/i.test(name) || /miscau[a-z]{3}/i.test(id)
+        if (esFamilia || !traeCompetencia) {
+          return escribir(input as HTMLInputElement, `name="${name}" id="${id}" ph="${ph}"`)
         }
       }
       return { ok: false, campo: '' }
@@ -851,6 +899,17 @@ export async function searchByRitExacto(page: Page, rit: string): Promise<CausaF
     //                  el dropdown quedaría en su default y filtraría por el año equivocado)
     const anioRes = await page.evaluate((anioBuscado: string) => {
       const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+      // PRIORIDAD 1: el campo Año del PANEL DE FAMILIA por su id EXACTO (anhoMisCauFam).
+      // Igual que con el Rol: anclar por id evita escribir en el panel de otra competencia
+      // (anhoMisCauSup) cuando varios formularios coexisten en el DOM.
+      const famAnio = document.getElementById('anhoMisCauFam') as HTMLInputElement | null
+      if (famAnio && (famAnio as HTMLElement).offsetParent !== null) {
+        famAnio.value = anioBuscado
+        famAnio.dispatchEvent(new Event('input', { bubbles: true }))
+        famAnio.dispatchEvent(new Event('change', { bubbles: true }))
+        return 'set'
+      }
+      // PRIORIDAD 2 (fallback): heurística.
       // Preferimos 'anio'/'año' (formulario en español). 'year' es último recurso y solo
       // si además el elemento parece un campo de año (para no enganchar campos ajenos).
       const matchAnioFuerte = (el: Element) => {
