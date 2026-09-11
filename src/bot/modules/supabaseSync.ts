@@ -6,7 +6,22 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { CausaScrapedData, CausaToScrape, BotRunStatus, BotStepMetric } from '../types'
 import type { UrgencyAnalysis } from './detection'
-import { log, TIPOS_RIT_VALIDOS } from '../utils'
+import { log, TIPOS_RIT_VALIDOS, parseRIT } from '../utils'
+
+/**
+ * Deriva { rol, anio } (identidad estable, enteros) de un RIT usando parseRIT.
+ * rol sin ceros a la izquierda. Devuelve {} si el rit no parsea.
+ */
+function rolAnioDeRit(rit: string): { rol: number | null; anio: number | null } {
+  const p = parseRIT(rit)
+  if (!p) return { rol: null, anio: null }
+  const rol = parseInt(p.numero, 10)
+  const anio = parseInt(p.año, 10)
+  return {
+    rol: Number.isFinite(rol) ? rol : null,
+    anio: Number.isFinite(anio) ? anio : null,
+  }
+}
 
 let supabase: SupabaseClient | null = null
 
@@ -419,9 +434,12 @@ export async function updateCausaRitYTipo(
       return 'colision_rit'
     }
 
+    // Mantener rol/anio consistentes con el nuevo rit (la identidad estable no debería
+    // cambiar al corregir la letra, pero re-derivarla garantiza que nunca queden desfasados).
+    const { rol, anio } = rolAnioDeRit(nuevoRit)
     const { error } = await sb
       .from('causas')
-      .update({ rit: nuevoRit, tipo: nuevoTipo, updated_at: new Date().toISOString() })
+      .update({ rit: nuevoRit, rol, anio, tipo: nuevoTipo, updated_at: new Date().toISOString() })
       .eq('id', id)
     if (error) {
       log('warn', `  Error actualizando RIT/tipo de la causa ${id}: ${error.message}`)
@@ -477,9 +495,10 @@ export async function upsertCausaHermana(
     if (existente && existente.length > 0) {
       return { id: existente[0].id, creada: false }
     }
+    const { rol, anio } = rolAnioDeRit(rit)
     const { data, error } = await sb
       .from('causas')
-      .insert({ rit, tipo: tipoSeguro, caratulado: caratulado || null })
+      .insert({ rit, rol, anio, tipo: tipoSeguro, caratulado: caratulado || null })
       .select('id')
       .limit(1)
     if (error) {
