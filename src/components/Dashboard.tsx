@@ -78,24 +78,55 @@ export default function Dashboard() {
     loadCausas()
   }, [])
 
+  // Trae TODAS las filas de una tabla/vista paginando de a 1000 (límite por request de
+  // Supabase/PostgREST). Antes se usaba .limit(500), que ocultaba causas: si había 633,
+  // el panel solo veía 500 y NO evaluaba alertas de las otras 133 (riesgo real: perder
+  // una audiencia urgente). Ahora traemos el 100%.
+  async function fetchAll(tabla: string, columnas: string, ordenar?: string) {
+    const PAGE = 1000
+    let desde = 0
+    let todo: any[] = []
+    for (;;) {
+      let q = supabase.from(tabla).select(columnas)
+      if (ordenar) q = q.order(ordenar, { ascending: false })
+      // Desempate ÚNICO por id: con >1000 filas, OFFSET/LIMIT solo es estable si el orden
+      // es total. Sin esto, una fila del borde podría duplicarse o saltarse entre páginas
+      // (reintroduciría el bug de "causa invisible"). id es único → orden reproducible.
+      q = q.order('id', { ascending: true })
+      const { data, error } = await q.range(desde, desde + PAGE - 1)
+      if (error) return { data: null as any[] | null, error }
+      const lote = data || []
+      todo = todo.concat(lote)
+      if (lote.length < PAGE) break // última página
+      desde += PAGE
+    }
+    // Defensa extra: deduplicar por id por si el orden del backend varió entre páginas.
+    const vistos = new Set<string>()
+    const unicos = todo.filter((r: any) => {
+      const k = String(r?.id ?? '')
+      if (!k) return true
+      if (vistos.has(k)) return false
+      vistos.add(k)
+      return true
+    })
+    return { data: unicos, error: null }
+  }
+
   async function loadCausas() {
     setLoading(true)
     setError(null)
     
-    // Intentar con la vista (tiene el semáforo)
-    let { data, error: err } = await supabase
-      .from('v_causas_ranking')
-      .select('*')
-      .limit(500)
+    // Intentar con la vista (tiene el semáforo). Traemos TODAS las causas (paginado).
+    let { data, error: err } = await fetchAll('v_causas_ranking', '*')
 
     // Si la vista falla, usar tabla directa (sin semáforo pero funciona)
     if (err) {
       console.warn('Vista v_causas_ranking no disponible, usando tabla directa:', err.message)
-      const { data: directData, error: directErr } = await supabase
-        .from('causas')
-        .select('id, rit, caratulado, tipo, estado, programa_vigente, sintesis, notas, updated_at')
-        .order('updated_at', { ascending: false })
-        .limit(500)
+      const { data: directData, error: directErr } = await fetchAll(
+        'causas',
+        'id, rit, caratulado, tipo, estado, programa_vigente, sintesis, notas, updated_at',
+        'updated_at',
+      )
       
       if (directErr) {
         setError(directErr.message)
