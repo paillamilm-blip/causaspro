@@ -83,6 +83,9 @@ export default function Dashboard() {
   const [filtro, setFiltro] = useState('')
   const [totalCausas, setTotalCausas] = useState(0)
   const [error, setError] = useState<string | null>(null)
+  // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
+  // fecha_ultimo_movimiento/ultima_audiencia, así que la barra de progreso no aplica.
+  const [modoFallback, setModoFallback] = useState(false)
 
   useEffect(() => {
     loadCausas()
@@ -125,12 +128,14 @@ export default function Dashboard() {
   async function loadCausas() {
     setLoading(true)
     setError(null)
+    setModoFallback(false)
     
     // Intentar con la vista (tiene el semáforo). Traemos TODAS las causas (paginado).
     let { data, error: err } = await fetchAll('v_causas_ranking', '*')
 
     // Si la vista falla, usar tabla directa (sin semáforo pero funciona)
     if (err) {
+      setModoFallback(true)
       console.warn('Vista v_causas_ranking no disponible, usando tabla directa:', err.message)
       const { data: directData, error: directErr } = await fetchAll(
         'causas',
@@ -180,6 +185,12 @@ export default function Dashboard() {
       c.programa_vigente?.toLowerCase().includes(q)
     )
   })
+
+  // Progreso de llenado por el bot: una causa está "con datos del portal" si tiene
+  // al menos un movimiento (fecha_ultimo_movimiento) o una audiencia registrada.
+  // Se calcula sobre TODAS las causas (no las filtradas) para reflejar el avance real.
+  const conDatos = causas.filter(c => c.fecha_ultimo_movimiento || c.ultima_audiencia).length
+  const pctDatos = totalCausas > 0 ? Math.round((conDatos / totalCausas) * 100) : 0
 
   // Agrupar por nivel de urgencia
   const criticas = causasFiltradas.filter(c => (c.nivel_urgencia || 10) <= 2)
@@ -257,6 +268,32 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Progreso de llenado de datos por el bot (solo con la vista; el fallback de
+          tabla directa no trae fecha_ultimo_movimiento/ultima_audiencia). */}
+      {!modoFallback && (
+      <div className="bg-white rounded-xl p-4 border shadow-sm">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-sm font-medium text-gray-700">
+            📥 Datos cargados desde el portal
+          </span>
+          <span className="text-sm font-semibold text-blue-600">
+            {conDatos} de {totalCausas} causas ({pctDatos}%)
+          </span>
+        </div>
+        <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+          <div
+            className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+            style={{ width: `${pctDatos}%` }}
+          />
+        </div>
+        {conDatos < totalCausas && (
+          <p className="text-xs text-gray-400 mt-1.5">
+            Faltan {totalCausas - conDatos} causas por revisar con el bot (movimientos/audiencias).
+          </p>
+        )}
+      </div>
+      )}
 
       {/* Buscador */}
       <div className="relative">
