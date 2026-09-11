@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx'
+import { LETRAS_VALIDAS } from './materiasFamilia'
 
 // ============================================================
 // CAUSASPRO - Parser Universal de Documentos
@@ -184,12 +185,13 @@ function inferirPrograma(texto?: string): string | undefined {
 }
 
 /**
- * Letras de RIT VÁLIDAS (deben coincidir con el CHECK de la columna causas.tipo:
- * P/C/F/V/X/Z/T/FA/RIT). Fuente de verdad espejada de TIPOS_RIT_VALIDOS en bot/utils.
+ * Letras de RIT VÁLIDAS para la columna causas.tipo. Se toman del catálogo central
+ * de materias (src/lib/materiasFamilia.ts), que es la FUENTE ÚNICA DE VERDAD y debe
+ * coincidir con el CHECK causas_tipo_check en la BD y con TIPOS_RIT_VALIDOS del bot.
  * Si un RIT trae un prefijo FUERA de esta lista, NO lo usamos como tipo (quedaría null)
  * para no violar el constraint y perder la causa en silencio.
  */
-const TIPOS_TIPO_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'Z', 'T', 'FA', 'RIT']
+const TIPOS_TIPO_VALIDOS = LETRAS_VALIDAS
 
 /**
  * Deriva el "tipo" (letra) de un RIT YA CANÓNICO (ver limpiarRIT).

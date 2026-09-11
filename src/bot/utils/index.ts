@@ -143,12 +143,18 @@ export function detectTrasladoCurador(text: string): boolean {
 /**
  * Prefijos de RIT válidos para la columna `causas.tipo`.
  * FUENTE ÚNICA DE VERDAD: debe coincidir con el CHECK constraint de
- * schema.sql / schema-tipo-fix.sql. Si se agrega un prefijo aquí, hay que
- * ampliar también el CHECK en la BD (y viceversa).
- *   P=Protección, C=Cumplimiento, F=Ordinario/Familia, V=Violencia intrafamiliar,
- *   X=Exhortos/varios, Z=Otros, T=Tutela, FA=multi-letra, RIT genérico.
+ * schema.sql / schema-tipo-fix.sql y con el catálogo src/lib/materiasFamilia.ts.
+ * Si se agrega un prefijo aquí, hay que ampliar también el CHECK en la BD y el
+ * catálogo de materias (y viceversa).
+ *
+ * Materias reales de Tribunales de Familia (Chile):
+ *   Contenciosos:   C=contencioso (alimentos/cuidado/RDR), F=violencia intrafamiliar.
+ *   Protección NNA: P=medida de protección, X=cumplimiento/ejecución de protección.
+ *   Voluntarios:    V=gestión voluntaria, A=adopción/susceptibilidad de adopción.
+ *   Sin materia confirmada: Z.
+ *   Genéricos/comodines del portal: T, FA, RIT.
  */
-export const TIPOS_RIT_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'Z', 'T', 'FA', 'RIT'] as const
+export const TIPOS_RIT_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'A', 'Z', 'T', 'FA', 'RIT'] as const
 
 /**
  * Parsea RIT del portal PJUD.

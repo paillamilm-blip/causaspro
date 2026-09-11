@@ -85,6 +85,12 @@ export async function POST(req: NextRequest) {
     // 2. Insertar causas nuevas
     const ritToId: Record<string, string> = { ...existingRitMap }
     let causasInsertadas = 0
+    // Causas que la BD RECHAZÓ al insertar (p. ej. viola el CHECK causas_tipo_check
+    // porque su `tipo` aún no está permitido en la BD — típico si la migración
+    // schema-tipo-fix.sql no se corrió tras agregar una letra nueva). Antes se
+    // descartaban en SILENCIO (junto a sus NNA/adultos/audiencias). Ahora las
+    // registramos y las devolvemos en la respuesta para que el usuario se entere.
+    const causasFallidas: { rit: string; motivo: string }[] = []
 
     if (causasNuevas.length > 0) {
       const insertData = causasNuevas.map(c => ({
@@ -106,12 +112,20 @@ export async function POST(req: NextRequest) {
         const { data, error } = await supabase.from('causas').insert(batch).select('id, rit')
 
         if (error) {
-          // Si falla el batch, intentar uno por uno
+          // Si falla el batch, intentar uno por uno para no perder las filas buenas
+          // y quedarnos con el motivo exacto de las que la BD rechaza.
           for (const single of batch) {
-            const { data: sd } = await supabase.from('causas').insert(single).select('id, rit')
-            if (sd) {
+            const { data: sd, error: singleErr } = await supabase.from('causas').insert(single).select('id, rit')
+            if (sd && sd.length) {
               for (const c of sd) { ritToId[c.rit] = c.id }
               causasInsertadas += sd.length
+            } else {
+              // Insert rechazado: NO se enlazarán sus NNA/adultos/audiencias.
+              // Lo reportamos en vez de tragárnoslo en silencio.
+              causasFallidas.push({
+                rit: single.rit,
+                motivo: singleErr?.message || 'La base de datos rechazó la fila',
+              })
             }
           }
         } else if (data) {
@@ -176,13 +190,17 @@ export async function POST(req: NextRequest) {
       stats: {
         causas: causasInsertadas,
         causas_actualizadas: causasActualizadas,
+        causas_fallidas: causasFallidas.length,
         nna: nnaCount,
         adultos: adultosCount,
         audiencias: audienciasCount,
         columnasDetectadas: parseResult.columnasDetectadas || [],
         hoja: parseResult.hoja || '',
         totalFilas: parseResult.totalFilas,
-      }
+      },
+      // Detalle de las causas que la BD rechazó (vacío si todo entró bien). Si aquí
+      // aparecen RIT con letra nueva (p. ej. 'A'), falta correr schema-tipo-fix.sql.
+      causasFallidas,
     })
 
   } catch (err: any) {

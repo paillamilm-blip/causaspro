@@ -9,9 +9,12 @@
 -- perdiendo información. El bot ahora deriva el tipo desde el prefijo del RIT
 -- (parseRIT), así que la BD debe aceptar esos prefijos.
 --
--- Prefijos de RIT en tribunales de familia (Chile):
---   P=Protección, C=Cumplimiento, F=Ordinario/Familia, V=Violencia intrafamiliar,
---   X=Exhortos/varios, Z=Otros, T=Tutela, RIT genérico y multi-letra (ej: FA).
+-- Prefijos de RIT en tribunales de familia (Chile) — materias reales:
+--   Contenciosos:   C=contencioso (alimentos/cuidado/RDR), F=violencia intrafamiliar.
+--   Protección NNA: P=medida de protección, X=cumplimiento/ejecución de protección.
+--   Voluntarios:    V=gestión voluntaria, A=adopción/susceptibilidad de adopción.
+--   Sin materia confirmada: Z.
+--   Genéricos/comodines del portal: T, FA, RIT.
 -- ============================================================
 
 -- 1. Eliminar el CHECK constraint anterior (nombre autogenerado por Postgres).
@@ -39,7 +42,7 @@ END $$;
 -- 2. Agregar el nuevo CHECK ampliado (permite NULL y los prefijos conocidos).
 ALTER TABLE causas
   ADD CONSTRAINT causas_tipo_check
-  CHECK (tipo IS NULL OR tipo IN ('P','C','F','V','X','Z','T','FA','RIT'));
+  CHECK (tipo IS NULL OR tipo IN ('P','C','F','V','X','A','Z','T','FA','RIT'));
 
 -- 3. (Opcional) Backfill: derivar tipo desde el RIT para causas que quedaron NULL.
 --    Toma el prefijo de letras antes del primer guión. Solo actualiza si el
@@ -48,4 +51,4 @@ UPDATE causas
 SET tipo = UPPER(SUBSTRING(rit FROM '^([A-Za-z]{1,3})-'))
 WHERE tipo IS NULL
   AND rit ~ '^[A-Za-z]{1,3}-'
-  AND UPPER(SUBSTRING(rit FROM '^([A-Za-z]{1,3})-')) IN ('P','C','F','V','X','Z','T','FA','RIT');
+  AND UPPER(SUBSTRING(rit FROM '^([A-Za-z]{1,3})-')) IN ('P','C','F','V','X','A','Z','T','FA','RIT');
