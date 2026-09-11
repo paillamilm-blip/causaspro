@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
@@ -326,7 +326,13 @@ async function runBusquedaPorRit(
     }
     log('info', `🎯 BOT_RIT activo: procesando SOLO ${causas.length} causa(s): ${causas.map(c => c.rit).join(', ')}`)
   } else {
-    // Leer las causas cargadas en la BD, priorizando las menos actualizadas.
+    // RECUPERACIÓN opt-in: BOT_LIMPIAR_NO_EN_PORTAL=1 quita todas las marcas [NO EN PORTAL]
+    // antes de armar la cola, para reintentar causas que quedaron marcadas de más.
+    if (process.env.BOT_LIMPIAR_NO_EN_PORTAL === '1') {
+      const n = await limpiarMarcasNoEnPortal()
+      log('info', `  🧹 BOT_LIMPIAR_NO_EN_PORTAL: se quitaron ${n} marca(s) [NO EN PORTAL]; esas causas vuelven a la cola.`)
+    }
+    // Leer las causas cargadas en la BD, priorizando las que aún NO tienen datos.
     causas = await getCausasToScrape(maxCausas, cfg.priorizarUrgentes)
   }
   status.total_causas = causas.length
@@ -346,9 +352,14 @@ async function runBusquedaPorRit(
       // Buscar la causa por su RIT exacto (1 resultado, sin listado masivo).
       // Instrumentado: mide cuánto tarda. Un array vacío = "no encontrada" = fallo,
       // así medirPaso registra UNA sola fila con el resultado correcto (no dos).
+      // portalConfirmoNoExiste: SOLO se pone true si el portal confirmó explícitamente
+      // "no existen causas" (mensaje real, doble confirmación). Un [] por timeout/panel
+      // no cargado/ambigüedad/excepción NO lo activa → así NUNCA marcamos [NO EN PORTAL]
+      // una causa real de menores por un fallo transitorio (bug crítico evitado).
+      let portalConfirmoNoExiste = false
       const encontradas = await medirPaso(
         status.run_id, 'busqueda',
-        () => searchByRitExacto(page, causa.rit),
+        () => searchByRitExacto(page, causa.rit, undefined, () => { portalConfirmoNoExiste = true }),
         causa.rit,
         (res) => res.length > 0,   // éxito solo si encontró la causa
         'no_encontrada',
@@ -357,6 +368,13 @@ async function runBusquedaPorRit(
       if (encontradas.length === 0) {
         status.fallidas++
         status.errores.push(`${causa.rit}: no encontrada en el portal`)
+        // Marcar [NO EN PORTAL] SOLO si el portal CONFIRMÓ que no existe (no ante un fallo
+        // transitorio). Así la causa deja de reintentarse en cada tanda, pero una causa
+        // real que falló por timeout/flakiness NO se pierde: se reintentará normalmente.
+        // (Nunca marcar ids temporales de BOT_RIT.)
+        if (portalConfirmoNoExiste && !causa.id.startsWith('temp-')) {
+          await marcarCausaNoEnPortal(causa.id).catch(() => {})
+        }
         // (La métrica del paso 'busqueda' con exito=false ya la registró medirPaso.)
         // Volver al formulario limpio para la siguiente búsqueda
         await navigateToConsulta(page)

@@ -755,6 +755,12 @@ export async function searchByRitExacto(
   // [], se invoca este callback con los RIT candidatos ANTES de retornar []. El flujo
   // normal (rit/listado) NO pasa este parámetro, así que su comportamiento es idéntico.
   onAmbiguo?: (candidatos: string[]) => void,
+  // OPCIONAL — se invoca SOLO cuando el portal CONFIRMÓ explícitamente "no existen causas"
+  // (corte temprano con doble confirmación del mensaje real del panel de Familia). Sirve
+  // para distinguir "la causa NO está en el portal" (fiable) de un fallo transitorio
+  // (timeout, panel no cargó, ambigüedad, excepción) que también retorna []. NUNCA marcar
+  // como ausente ante un [] genérico: solo cuando este callback se invocó.
+  onConfirmadoNoExiste?: () => void,
 ): Promise<CausaFoundInPortal[]> {
   const parsed = parseRIT(rit)
   if (!parsed) {
@@ -1134,6 +1140,9 @@ export async function searchByRitExacto(
         if (mensajeNoExiste) {
           if (confirmadoSinResultados) {
             log('info', `  Panel de Familia indica "no existen causas" (confirmado) para ${ritLegible} → corte temprano.`)
+            // Señal FIABLE de ausencia: el portal confirmó "no existen causas" 2 veces.
+            // Solo aquí es seguro marcar la causa como no presente en el portal.
+            if (onConfirmadoNoExiste) onConfirmadoNoExiste()
             break
           }
           confirmadoSinResultados = true // 1ª lectura; si persiste en la próxima iteración, corta

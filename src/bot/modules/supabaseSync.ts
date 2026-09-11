@@ -42,33 +42,143 @@ export function initSupabase(): SupabaseClient {
   return supabase
 }
 
+/** Marca que se pone en `notas` cuando una causa NO aparece en el portal (ruido/archivada
+ *  de otra competencia). Sirve para NO reintentarla en cada tanda. */
+const MARCA_NO_EN_PORTAL = '[NO EN PORTAL]'
+
 /**
- * Obtiene las causas a scrapear, priorizando las más urgentes
+ * Obtiene las causas a scrapear, PRIORIZANDO las que aún NO tienen datos (movimientos),
+ * para que cada tanda ataque causas nuevas y no re-scrapee las ya hechas.
+ *
+ * Orden de prioridad:
+ *   1. Causas SIN movimientos y SIN la marca [NO EN PORTAL]  → lo que falta de verdad.
+ *   2. (si sobra cupo) Causas CON movimientos, las menos actualizadas → refresco.
+ * Nunca incluye las marcadas [NO EN PORTAL] (ruido que falla siempre), para no perder
+ * ~1 min por tanda en cada una.
+ *
+ * Es DEFENSIVO: si cualquier consulta auxiliar falla, cae al comportamiento original
+ * (ordenar por updated_at) para no romper el flujo que funciona.
  */
 export async function getCausasToScrape(limit: number, priorizarUrgentes: boolean): Promise<CausaToScrape[]> {
   const sb = initSupabase()
-  
-  let query = sb
-    .from('causas')
-    .select('id, rit')
-    .not('rit', 'is', null)
-  
-  if (priorizarUrgentes) {
-    // Priorizar causas que no se han actualizado recientemente
-    query = query.order('updated_at', { ascending: true })
+
+  // Fallback: consulta original (por si algo del camino optimizado falla).
+  const fallback = async (): Promise<CausaToScrape[]> => {
+    let q = sb.from('causas').select('id, rit').not('rit', 'is', null)
+    if (priorizarUrgentes) q = q.order('updated_at', { ascending: true })
+    const { data, error } = await q.limit(limit)
+    if (error) { log('error', `Error obteniendo causas: ${error.message}`); return [] }
+    return (data || []).map(c => ({ id: c.id, rit: c.rit }))
   }
-  
-  const { data, error } = await query.limit(limit)
-  
-  if (error) {
-    log('error', `Error obteniendo causas: ${error.message}`)
-    return []
+
+  try {
+    // 1) ids de causas que YA tienen movimientos (para no re-scrapear lo hecho).
+    //    Se paginan los movimientos y se arma un Set de causa_id.
+    const conMovimientos = new Set<string>()
+    for (let desde = 0; ; desde += 1000) {
+      const { data, error } = await sb
+        .from('movimientos')
+        .select('causa_id')
+        .range(desde, desde + 999)
+      if (error) return await fallback()
+      const lote = data || []
+      for (const m of lote) if (m.causa_id) conMovimientos.add(m.causa_id as string)
+      if (lote.length < 1000) break
+    }
+
+    // 2) Todas las causas candidatas (id, rit, notas), ordenadas por menos actualizadas.
+    //    Traemos notas para poder excluir las marcadas [NO EN PORTAL].
+    const causas: { id: string; rit: string; notas: string | null }[] = []
+    for (let desde = 0; ; desde += 1000) {
+      const { data, error } = await sb
+        .from('causas')
+        .select('id, rit, notas')
+        .not('rit', 'is', null)
+        .order('updated_at', { ascending: true })
+        .range(desde, desde + 999)
+      if (error) return await fallback()
+      const lote = data || []
+      for (const c of lote) causas.push({ id: c.id, rit: c.rit, notas: (c as any).notas ?? null })
+      if (lote.length < 1000) break
+    }
+
+    const esRuido = (c: { notas: string | null }) => (c.notas || '').includes(MARCA_NO_EN_PORTAL)
+    const ruido = causas.filter(esRuido).length
+
+    // Prioridad 1: sin movimientos y sin marca de ruido.
+    const sinDatos = causas.filter(c => !conMovimientos.has(c.id) && !esRuido(c))
+    // Prioridad 2: con movimientos (refresco), sin ruido.
+    const conDatos = causas.filter(c => conMovimientos.has(c.id) && !esRuido(c))
+
+    const seleccion = [...sinDatos, ...conDatos].slice(0, limit)
+    log('info', `  Cola: ${sinDatos.length} sin datos, ${conDatos.length} con datos, ${ruido} marcadas [NO EN PORTAL]. Se procesan ${seleccion.length}.`)
+    return seleccion.map(c => ({ id: c.id, rit: c.rit }))
+  } catch (e: any) {
+    log('warn', `  Selección optimizada falló (${e?.message ?? e}); usando orden simple.`)
+    return await fallback()
   }
-  
-  return (data || []).map(c => ({
-    id: c.id,
-    rit: c.rit,
-  }))
+}
+
+/**
+ * Marca una causa como "no encontrada en el portal" (ruido/otra competencia/archivada),
+ * agregando [NO EN PORTAL] a `notas` para que getCausasToScrape NO la reintente en cada
+ * tanda. Idempotente: no duplica la marca. También toca updated_at para bajarla en la cola.
+ */
+export async function marcarCausaNoEnPortal(causaId: string): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { data } = await sb.from('causas').select('notas').eq('id', causaId).limit(1)
+    const notas: string = (data && data[0]?.notas) || ''
+    if (notas.includes(MARCA_NO_EN_PORTAL)) {
+      // Ya marcada: solo actualizar updated_at para mantenerla al fondo de la cola.
+      await sb.from('causas').update({ updated_at: new Date().toISOString() }).eq('id', causaId)
+      return
+    }
+    const nuevas = notas ? `${notas}\n${MARCA_NO_EN_PORTAL} no aparece en el portal de Familia (posible ruido/otra competencia/archivada).` : `${MARCA_NO_EN_PORTAL} no aparece en el portal de Familia (posible ruido/otra competencia/archivada).`
+    await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', causaId)
+  } catch (e: any) {
+    log('warn', `  No se pudo marcar [NO EN PORTAL] la causa ${causaId}: ${e?.message ?? e}`)
+  }
+}
+
+/**
+ * RECUPERACIÓN: quita la marca [NO EN PORTAL] de TODAS las causas, para que vuelvan a
+ * entrar a la cola de scraping. Se usa vía BOT_LIMPIAR_NO_EN_PORTAL=1 por si alguna causa
+ * quedó marcada de más (aunque hoy solo se marca ante confirmación explícita del portal).
+ * Devuelve cuántas causas se limpiaron. Quita SOLO la línea de la marca, conserva el resto
+ * de las notas ([VÍNCULO], [REVISAR LETRA], etc.).
+ */
+export async function limpiarMarcasNoEnPortal(): Promise<number> {
+  const sb = initSupabase()
+  let limpiadas = 0
+  try {
+    // Traer las que tienen la marca (paginado).
+    const marcadas: { id: string; notas: string | null }[] = []
+    for (let desde = 0; ; desde += 1000) {
+      const { data, error } = await sb
+        .from('causas')
+        .select('id, notas')
+        .ilike('notas', `%${MARCA_NO_EN_PORTAL}%`)
+        .range(desde, desde + 999)
+      if (error) { log('warn', `  No se pudieron leer causas marcadas: ${error.message}`); return limpiadas }
+      const lote = data || []
+      for (const c of lote) marcadas.push({ id: c.id, notas: (c as any).notas ?? null })
+      if (lote.length < 1000) break
+    }
+    for (const c of marcadas) {
+      // Quitar las líneas que contienen la marca, conservar el resto.
+      const limpio = (c.notas || '')
+        .split('\n')
+        .filter(l => !l.includes(MARCA_NO_EN_PORTAL))
+        .join('\n')
+        .trim()
+      await sb.from('causas').update({ notas: limpio || null, updated_at: new Date().toISOString() }).eq('id', c.id)
+      limpiadas++
+    }
+  } catch (e: any) {
+    log('warn', `  Error limpiando marcas [NO EN PORTAL]: ${e?.message ?? e}`)
+  }
+  return limpiadas
 }
 
 /**
