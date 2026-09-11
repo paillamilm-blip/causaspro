@@ -1056,6 +1056,10 @@ export async function searchByRitExacto(
     // sin acoplarnos al timing exacto del render.
     const pollTimeout = process.env.BOT_POLL_TIMEOUT ? parseInt(process.env.BOT_POLL_TIMEOUT) * 1000 : 30000
     let resultsFound = false
+    // Para el corte temprano conservador: exige 2 lecturas consecutivas del mensaje
+    // "no existen causas" en el panel de Familia antes de cortar (evita falso negativo
+    // por un mensaje transitorio mientras el portal aún repinta).
+    let confirmadoSinResultados = false
     const pollStart = Date.now()
     let iter = 0
     while (Date.now() - pollStart < pollTimeout) {
@@ -1089,6 +1093,7 @@ export async function searchByRitExacto(
         return false
       }, { rol: numero, anio: año })
       if (hasRows) { resultsFound = true; break }
+
       iter++
       // Cada 3 iteraciones (~4.5s) reintentamos: re-escribir campos (por si el portal los
       // limpió) + scroll + click en "Buscar".
@@ -1098,6 +1103,43 @@ export async function searchByRitExacto(
         await sleep(200)
         await clickBuscar()
         log('info', `  (Reintentando filtro: scroll + click en "Buscar"...)`)
+      }
+
+      // OPTIMIZACIÓN (corte temprano CONSERVADOR): si tras AL MENOS UN reintento de "Buscar"
+      // (iter > 3) el panel de resultados de FAMILIA muestra explícitamente "no existen
+      // causas por el valor ingresado" en DOS lecturas consecutivas y seguimos sin filas,
+      // la causa no está en este panel/año. Cortamos para no gastar los 30s completos.
+      // Ahorra ~20s por causa NO encontrada (clave con cientos de causas donde varias son
+      // ruido/archivadas). DISEÑO FAIL-SAFE contra falsos negativos (causas de menores):
+      //   - iter > 3  → el mensaje solo se cree DESPUÉS de que el reintento de Buscar de ESTA
+      //     causa forzó un repintado (evita creer texto residual de la causa anterior, ya que
+      //     el SPA reusa el DOM entre causas sin page.goto).
+      //   - se busca SOLO en el panel de Familia (no en todo el body): mismo criterio que
+      //     hasRows (tabla con "Rit"+"Tribunal", NO "Corte"), para no leer mensajes de otra
+      //     competencia/menús.
+      //   - solo el string REAL del portal ("no existen causas ... valor ingresado").
+      //   - exige 2 confirmaciones separadas por el sleep del loop (confirmadoSinResultados).
+      if (iter > 3) {
+        const mensajeNoExiste = await page.evaluate(() => {
+          const tables = Array.from(document.querySelectorAll('table')) as HTMLTableElement[]
+          for (const table of tables) {
+            const ths = Array.from(table.querySelectorAll('th')).map(th => (th.textContent || '').trim().toLowerCase())
+            const esFamilia = ths.some(t => t.includes('rit')) && ths.some(t => t.includes('tribunal'))
+            if (!esFamilia) continue
+            const t = (table.innerText || '').toLowerCase()
+            if (t.includes('no existen causas') && t.includes('valor ingresado')) return true
+          }
+          return false
+        }).catch(() => false)
+        if (mensajeNoExiste) {
+          if (confirmadoSinResultados) {
+            log('info', `  Panel de Familia indica "no existen causas" (confirmado) para ${ritLegible} → corte temprano.`)
+            break
+          }
+          confirmadoSinResultados = true // 1ª lectura; si persiste en la próxima iteración, corta
+        } else {
+          confirmadoSinResultados = false // se reinicia si deja de verse (evita falso positivo transitorio)
+        }
       }
       await sleep(1500)
     }
