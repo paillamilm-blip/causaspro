@@ -6,7 +6,7 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import type { CausaScrapedData, CausaToScrape, BotRunStatus, BotStepMetric } from '../types'
 import type { UrgencyAnalysis } from './detection'
-import { log } from '../utils'
+import { log, TIPOS_RIT_VALIDOS } from '../utils'
 
 let supabase: SupabaseClient | null = null
 
@@ -451,5 +451,68 @@ export async function marcarRevisionLetra(id: string, detalle: string): Promise<
     await sb.from('causas').update({ notas: nuevasNotas, updated_at: new Date().toISOString() }).eq('id', id)
   } catch (e: any) {
     log('warn', `  No se pudo marcar revisión de letra para ${id}: ${e?.message ?? e}`)
+  }
+}
+
+
+/**
+ * Inserta una causa "hermana" descubierta en el portal (ej. la X-4596-2024 que nace
+ * cuando la P-4596-2024 llega a cumplimiento). SOLO inserta si el RIT no existe aún;
+ * si ya existe devuelve su id (no duplica). Devuelve { id, creada } donde `creada`
+ * indica si se insertó ahora. NUNCA pisa una causa existente.
+ * `tipo` debe venir ya validado (inferirTipoRIT) por el llamador.
+ */
+export async function upsertCausaHermana(
+  rit: string,
+  tipo: string | null,
+  caratulado: string | null,
+): Promise<{ id: string | null; creada: boolean }> {
+  const sb = initSupabase()
+  // Defensa propia: solo escribir un tipo que respete el CHECK causas_tipo_check.
+  // Si el tipo recibido no está en la lista blanca, se guarda null (válido) en vez de
+  // hacer fallar el insert en silencio. No dependemos de que el llamador ya lo validara.
+  const tipoSeguro = tipo && (TIPOS_RIT_VALIDOS as readonly string[]).includes(tipo) ? tipo : null
+  try {
+    const { data: existente } = await sb.from('causas').select('id').eq('rit', rit).limit(1)
+    if (existente && existente.length > 0) {
+      return { id: existente[0].id, creada: false }
+    }
+    const { data, error } = await sb
+      .from('causas')
+      .insert({ rit, tipo: tipoSeguro, caratulado: caratulado || null })
+      .select('id')
+      .limit(1)
+    if (error) {
+      log('warn', `  No se pudo crear la causa hermana ${rit}: ${error.message}`)
+      return { id: null, creada: false }
+    }
+    return { id: (data && data[0]?.id) || null, creada: true }
+  } catch (e: any) {
+    log('warn', `  Excepción creando causa hermana ${rit}: ${e?.message ?? e}`)
+    return { id: null, creada: false }
+  }
+}
+
+/**
+ * Deja una señal de VÍNCULO en el campo `notas` de una causa, para indicar que está
+ * relacionada con otra(s) (ej. una protección P con su cumplimiento X). Idempotente:
+ * no duplica la marca de vínculo con el mismo RIT relacionado.
+ */
+export async function vincularCausaEnNotas(id: string, ritRelacionado: string, detalle: string): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { data } = await sb.from('causas').select('notas').eq('id', id).limit(1)
+    const notasActuales: string = (data && data[0]?.notas) || ''
+    // Evitar duplicar el vínculo hacia el MISMO rit relacionado. Comparamos el rit como
+    // TOKEN delimitado (bordes de palabra), NO como substring: así "4596" en "X-4596-2024"
+    // no da falso positivo contra "P-45960-2024" y no se salta un vínculo legítimo.
+    const yaVinculado = notasActuales.includes('[VÍNCULO]') &&
+      new RegExp(`(^|[^\\w-])${ritRelacionado.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}([^\\w-]|$)`).test(notasActuales)
+    if (yaVinculado) return
+    const marca = `[VÍNCULO] ${detalle}`
+    const nuevas = notasActuales ? `${notasActuales}\n${marca}` : marca
+    await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', id)
+  } catch (e: any) {
+    log('warn', `  No se pudo vincular la causa ${id}: ${e?.message ?? e}`)
   }
 }
