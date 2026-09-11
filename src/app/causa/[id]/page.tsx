@@ -32,6 +32,30 @@ export default function CausaDetalle() {
   const [adultos, setAdultos] = useState<Adulto[]>([])
   const [audiencias, setAudiencias] = useState<Audiencia[]>([])
   const [loading, setLoading] = useState(true)
+  // Análisis estratégico IA (bajo demanda, no se carga solo).
+  const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string } | null>(null)
+  const [analizando, setAnalizando] = useState(false)
+  const [analisisError, setAnalisisError] = useState<string | null>(null)
+
+  async function pedirAnalisisIA() {
+    setAnalizando(true)
+    setAnalisisError(null)
+    setAnalisis(null)
+    try {
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const res = await fetch(`/api/analisis/${id}${token ? `?token=${token}` : ''}`)
+      const data = await res.json()
+      if (!res.ok) {
+        setAnalisisError(data?.error || 'No se pudo generar el análisis.')
+      } else {
+        setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo })
+      }
+    } catch {
+      setAnalisisError('Error de conexión al generar el análisis.')
+    } finally {
+      setAnalizando(false)
+    }
+  }
 
   useEffect(() => {
     if (id) loadData()
@@ -90,9 +114,22 @@ export default function CausaDetalle() {
           {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
               Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
               exige autorización — el reporte contiene datos sensibles de la causa. */}
+          {/* Análisis estratégico IA (bajo demanda): llama /api/analisis/[id], que arma un
+              contexto SOLO procesal (sin nombres/RUT ni cuerpo de resoluciones) y lo manda
+              a la IA. Devuelve resumen + próximo paso sugerido + riesgo. */}
+          <button
+            onClick={pedirAnalisisIA}
+            disabled={analizando}
+            className="ml-auto text-sm bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-60"
+          >
+            {analizando ? '🧠 Analizando…' : '🧠 Análisis estratégico IA'}
+          </button>
+          {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
+              Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
+              exige autorización — el reporte contiene datos sensibles de la causa. */}
           <a
             href={`/api/reporte/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
-            className="ml-auto text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
+            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
           >
             📄 Descargar reporte Word
           </a>
@@ -100,6 +137,40 @@ export default function CausaDetalle() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* Análisis estratégico IA (bajo demanda) */}
+        {(analizando || analisis || analisisError) && (
+          <section className="bg-purple-50 rounded-xl border border-purple-200 p-6">
+            <h2 className="font-bold text-purple-800 mb-3">🧠 Análisis estratégico IA</h2>
+            {analizando && (
+              <p className="text-sm text-purple-600">Analizando movimientos y audiencias de la causa…</p>
+            )}
+            {analisisError && (
+              <p className="text-sm text-red-600">{analisisError}</p>
+            )}
+            {analisis && (
+              <div className="space-y-3 text-sm">
+                <div>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Resumen</span>
+                  <p className="text-gray-700 mt-0.5">{analisis.resumen}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Próximo paso sugerido</span>
+                  <p className="text-gray-700 mt-0.5">✅ {analisis.proximoPaso}</p>
+                </div>
+                <div>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Riesgo a vigilar</span>
+                  <p className="text-gray-700 mt-0.5">⚠️ {analisis.riesgo}</p>
+                </div>
+                <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
+                  ⚠️ <strong>Sugerencia generada por IA</strong> a partir de los movimientos del portal.
+                  Es una lectura preliminar orientativa: <strong>revísala con tu criterio profesional</strong> y
+                  NO reemplaza tu decisión legal ni verifica plazos.
+                </p>
+              </div>
+            )}
+          </section>
+        )}
+
         {/* Datos principales */}
         <section className="bg-white rounded-xl border p-6">
           <h2 className="font-bold text-gray-700 mb-3">📌 Información Principal</h2>
