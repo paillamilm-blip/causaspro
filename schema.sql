@@ -22,6 +22,10 @@ DROP TABLE IF EXISTS causas CASCADE;
 CREATE TABLE causas (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     rit TEXT NOT NULL,
+    -- Identidad ESTABLE de la causa: número + año (la letra/tipo puede faltar,
+    -- venir mal o coexistir P↔X). `rit` es el texto de display derivado de estos.
+    rol  INTEGER,   -- número del RIT (ej. 4596), sin ceros a la izquierda
+    anio INTEGER,   -- año del RIT (ej. 2024)
     rit_acumulados TEXT,
     caratulado TEXT,
     -- Prefijo del RIT en tribunales de familia (Chile) — materias reales:
@@ -44,6 +48,8 @@ CREATE TABLE causas (
 );
 
 CREATE INDEX idx_causas_rit ON causas(rit);
+-- Eje de identidad estable (NO único: P y X comparten rol+anio a propósito).
+CREATE INDEX idx_causas_rol_anio ON causas(rol, anio);
 
 -- ============================================================
 -- NNA
@@ -135,12 +141,19 @@ CREATE TABLE medidas_cautelares (
 );
 
 -- ============================================================
--- VISTA: Ranking de causas por urgencia
+-- VISTA: Ranking de causas por urgencia (versión BASE, mínima)
+-- ⚠️ Esta es la vista inicial. La versión VIGENTE y COMPLETA (urgencia
+--    multi-criterio + TRASLADO AL CURADOR desde `movimientos`) la define
+--    schema-bot.sql, que DEBE aplicarse después de este archivo. Y para agregar
+--    rol/anio a la identidad, aplicar además schema-rol-anio.sql.
+--    Orden de setup de BD desde cero: schema.sql → schema-bot.sql → schema-rol-anio.sql
 -- ============================================================
 CREATE OR REPLACE VIEW v_causas_ranking AS
 SELECT 
     c.id,
     c.rit,
+    c.rol,
+    c.anio,
     c.caratulado,
     c.tipo,
     c.estado,

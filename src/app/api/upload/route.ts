@@ -95,6 +95,8 @@ export async function POST(req: NextRequest) {
     if (causasNuevas.length > 0) {
       const insertData = causasNuevas.map(c => ({
         rit: c.rit,
+        rol: c.rol ?? null,   // identidad estable (número), derivada del rit por el parser
+        anio: c.anio ?? null, // identidad estable (año)
         caratulado: c.caratulado || null,
         tipo: c.tipo || null,
         fecha_apertura: isValidDate(c.fecha_apertura) ? c.fecha_apertura : null,

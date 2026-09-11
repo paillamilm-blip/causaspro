@@ -10,6 +10,10 @@ import { LETRAS_VALIDAS } from './materiasFamilia'
 
 export interface CausaRaw {
   rit: string
+  /** Identidad estable: número del RIT (ej. 4596), sin ceros a la izquierda. */
+  rol?: number
+  /** Identidad estable: año del RIT (ej. 2024). */
+  anio?: number
   caratulado?: string
   tipo?: string
   fecha_apertura?: string
@@ -206,6 +210,23 @@ function inferirTipo(rit: string): string | undefined {
   const m = (rit || '').toUpperCase().match(/^([A-Z]{1,3})-\d/)
   if (!m) return undefined
   return TIPOS_TIPO_VALIDOS.includes(m[1]) ? m[1] : undefined
+}
+
+/**
+ * Extrae el ROL (número) y el AÑO de un RIT YA CANÓNICO (ver limpiarRIT), que puede
+ * venir con letra ("P-4596-2024") o sin letra ("4596-2024"). Devuelve el número SIN
+ * ceros a la izquierda (parseInt) y el año como entero. Es la identidad ESTABLE de la
+ * causa (no depende de la letra). Retorna {} si el rit no calza el patrón número-año.
+ */
+function parseRolAnio(rit: string): { rol?: number; anio?: number } {
+  const m = (rit || '').match(/(\d+)-(\d{4})$/)
+  if (!m) return {}
+  const rol = parseInt(m[1], 10)
+  const anio = parseInt(m[2], 10)
+  return {
+    rol: Number.isFinite(rol) ? rol : undefined,
+    anio: Number.isFinite(anio) ? anio : undefined,
+  }
 }
 
 // ============================================================
@@ -409,6 +430,7 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
       
       causas.set(rit, {
         rit,
+        ...parseRolAnio(rit), // rol + anio (identidad estable, derivados del rit canónico)
         caratulado: knownCols.caratulado !== undefined ? limpiarTexto(row[knownCols.caratulado], 200) : undefined,
         tipo: inferirTipo(rit),
         fecha_apertura: undefined,
