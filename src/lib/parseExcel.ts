@@ -117,24 +117,60 @@ function limpiarFecha(val: any): string | undefined {
   return undefined
 }
 
+/**
+ * Normaliza un RIT que puede venir "como sea" desde el Excel del usuario, y lo devuelve
+ * en formato canónico: "LETRA-NUMERO-AÑO" (ej. "P-4596-2024") o, si no trae letra,
+ * "NUMERO-AÑO" (ej. "4596-2024"). Devuelve undefined solo si NO se reconoce un
+ * número + año válidos.
+ *
+ * FILOSOFÍA (importante): NUNCA inventa la letra. Si el Excel no trae letra, se conserva
+ * SIN letra (el bot la confirma después contra el portal, que es la fuente de verdad).
+ * Si trae letra, se respeta tal cual. Así no perdemos causas por formato y no falseamos datos.
+ *
+ * Formatos que ACEPTA (todos → canónico):
+ *   P-4596-2024 | P 4596 2024 | P4596-2024 | p-4596-2024 | FA-123-2024 | RIT-1-2024
+ *   4596-2024 | 4596/2024 | 4596.2024 | 4596 2024 | 4596-24 (año 2 dígitos → 2024)
+ *   con espacios extra, guiones largos (–, —), separadores mezclados.
+ */
 function limpiarRIT(val: any): string | undefined {
-  if (!val) return undefined
+  if (val === null || val === undefined) return undefined
+  // 1) Normalizar: quitar espacios de borde, unificar guiones raros y separadores.
   let t = String(val).trim()
-    .replace(/\s+/g, '')
-    .replace(/–/g, '-')
-    .replace(/—/g, '-')
+    .replace(/[–—]/g, '-')        // guiones largos → guion normal
+    .replace(/\s+/g, ' ')          // colapsar espacios
     .toUpperCase()
-  
-  const match = t.match(/^([A-Z])-(\d{1,6})-(\d{4})$/)
-  if (match) return `${match[1]}-${match[2]}-${match[3]}`
-  
-  const match2 = t.match(/^([A-Z])(\d{1,6})-(\d{4})$/)
-  if (match2) return `${match2[1]}-${match2[2]}-${match2[3]}`
-  
-  const match3 = t.replace(/\s/g, '').match(/^([A-Z])-?(\d{1,6})-?(\d{4})$/)
-  if (match3) return `${match3[1]}-${match3[2]}-${match3[3]}`
-  
-  return undefined
+    .trim()
+  if (!t) return undefined
+
+  // 2) Unificar separadores (/, ., espacios) a un guion. Deja letras y dígitos intactos.
+  //    Ej: "4596/2024" → "4596-2024"; "P 4596 2024" → "P-4596-2024".
+  t = t.replace(/[\s/.]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+
+  // 3) Extraer componentes de forma tolerante:
+  //    - letra opcional (0 a 3 letras): P, FA, RIT, o vacío
+  //    - número (1+ dígitos, sin tope — alineado con parseRIT del bot que usa \d+)
+  //    - año (2 o 4 dígitos)
+  //    Aceptamos con o sin guion entre letra y número.
+  const m = t.match(/^([A-Z]{0,3})-?(\d+)-(\d{2}|\d{4})$/)
+  if (!m) return undefined
+
+  const letra = m[1] || ''
+  const numeroInt = parseInt(m[2], 10)
+  if (!Number.isFinite(numeroInt) || numeroInt < 1) return undefined // no existe rol 0
+  const numero = String(numeroInt) // sin ceros a la izquierda
+  let año = m[3]
+  // 4) Año de 2 dígitos → 4 dígitos. Heurística: 00–79 → 2000s, 80–99 → 1900s.
+  //    (los RIT del PJUD son recientes; 24 → 2024, no 1924.)
+  if (año.length === 2) {
+    const n = parseInt(año, 10)
+    año = (n <= 79 ? 2000 + n : 1900 + n).toString()
+  }
+  // Validación mínima de año razonable (1980–2099).
+  const añoNum = parseInt(año, 10)
+  if (añoNum < 1980 || añoNum > 2099) return undefined
+
+  // 5) Formato canónico. Sin letra → "NUMERO-AÑO"; con letra → "LETRA-NUMERO-AÑO".
+  return letra ? `${letra}-${numero}-${año}` : `${numero}-${año}`
 }
 
 function inferirPrograma(texto?: string): string | undefined {
@@ -147,12 +183,27 @@ function inferirPrograma(texto?: string): string | undefined {
   return undefined
 }
 
+/**
+ * Letras de RIT VÁLIDAS (deben coincidir con el CHECK de la columna causas.tipo:
+ * P/C/F/V/X/Z/T/FA/RIT). Fuente de verdad espejada de TIPOS_RIT_VALIDOS en bot/utils.
+ * Si un RIT trae un prefijo FUERA de esta lista, NO lo usamos como tipo (quedaría null)
+ * para no violar el constraint y perder la causa en silencio.
+ */
+const TIPOS_TIPO_VALIDOS = ['P', 'C', 'F', 'V', 'X', 'Z', 'T', 'FA', 'RIT']
+
+/**
+ * Deriva el "tipo" (letra) de un RIT YA CANÓNICO (ver limpiarRIT).
+ * - Si trae una letra VÁLIDA (P-4596-2024, FA-123-2024) → devuelve esa letra.
+ * - Si NO trae letra (4596-2024) → devuelve undefined (NO se inventa; el bot la
+ *   confirmará contra el portal).
+ * - Si trae un prefijo NO reconocido (RUC-, ABC-, M-...) → devuelve undefined, NO lo
+ *   fuerza como tipo. Escribir un tipo fuera del CHECK causas_tipo_check haría que la
+ *   fila (y sus NNA/adultos) se descarten en silencio. Preferimos tipo=null (válido).
+ */
 function inferirTipo(rit: string): string | undefined {
-  if (rit.startsWith('P')) return 'P'
-  if (rit.startsWith('C')) return 'C'
-  if (rit.startsWith('X')) return 'X'
-  if (rit.startsWith('F')) return 'F'
-  return undefined
+  const m = (rit || '').toUpperCase().match(/^([A-Z]{1,3})-\d/)
+  if (!m) return undefined
+  return TIPOS_TIPO_VALIDOS.includes(m[1]) ? m[1] : undefined
 }
 
 // ============================================================
