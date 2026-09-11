@@ -280,27 +280,45 @@ async function runBusquedaPorRit(
   const envMax = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
   const maxCausas = envMax && envMax > 0 ? envMax : cfg.maxCausasPorSesion
 
-  // OVERRIDE PUNTUAL: BOT_RIT="F-123-2024" fuerza procesar SOLO ese RIT, saltándose la
-  // selección automática (getCausasToScrape). Útil para diagnóstico/pruebas de una causa
-  // concreta (ej. una de Familia real) sin depender de cuál esté "menos actualizada".
-  // Si el RIT existe en la BD usamos su id real y SÍ se persiste normalmente. Si NO existe,
-  // usamos un id temporal "temp-<rit>": la causa se scrapea y diagnostica pero NO se
-  // persiste (el id no es UUID y fallaría la FK). Esa corrida se marca como SOLO
-  // DIAGNÓSTICO (status.solo_diagnostico) y NO se cuenta como exitosa (ver loop abajo).
+  // OVERRIDE PUNTUAL: BOT_RIT fuerza procesar SOLO los RIT indicados, saltándose la
+  // selección automática (getCausasToScrape). Acepta UNO o VARIOS RIT separados por coma
+  // (ej. BOT_RIT="P-7336-2026,P-5218-2025,P-701-2025"). Útil para pruebas controladas de
+  // causas concretas (ej. 3 causas de Familia) sin depender de qué haya en la BD.
+  // Por cada RIT: si existe en la BD usamos su id real y SÍ se persiste normalmente; si NO
+  // existe, usamos un id temporal "temp-<rit>" → la causa se scrapea/diagnostica pero NO se
+  // persiste (el id no es UUID y fallaría la FK), se marca como SOLO DIAGNÓSTICO
+  // (status.solo_diagnostico) y NO se cuenta como exitosa (ver loop abajo).
   let causas: Array<{ id: string; rit: string }>
-  const ritOverride = (process.env.BOT_RIT || '').trim()
-  if (ritOverride) {
-    let id = `temp-${ritOverride}`
-    try {
-      const sb = initSupabase()
-      const { data } = await sb.from('causas').select('id').eq('rit', ritOverride).limit(1)
-      if (data && data.length > 0) id = data[0].id
-      else log('warn', `  BOT_RIT="${ritOverride}" no está en la BD; se usa id temporal (no persiste con FK).`)
-    } catch (e: any) {
-      log('warn', `  No se pudo buscar el id de BOT_RIT en la BD (se usa id temporal): ${e?.message ?? e}`)
+  const ritOverrideRaw = (process.env.BOT_RIT || '').trim()
+  if (ritOverrideRaw) {
+    // Separar por coma (o punto y coma), limpiar espacios y descartar vacíos/duplicados.
+    let rits = Array.from(new Set(
+      ritOverrideRaw.split(/[,;]/).map(r => r.trim()).filter(Boolean)
+    ))
+    // ANTI-CAPTCHA: respetar el mismo límite maxCausas que el flujo automático. Si se
+    // pasaron más RIT que el límite, se recorta y se avisa (el portal PJUD vigila bots).
+    if (rits.length > maxCausas) {
+      log('warn', `  BOT_RIT trae ${rits.length} RIT pero el límite anti-detección es ${maxCausas}; se procesan los primeros ${maxCausas}.`)
+      rits = rits.slice(0, maxCausas)
     }
-    causas = [{ id, rit: ritOverride }]
-    log('info', `🎯 BOT_RIT activo: procesando SOLO ${ritOverride}`)
+    // Cliente Supabase una sola vez (no re-inicializar por cada RIT).
+    let sb: ReturnType<typeof initSupabase> | null = null
+    try { sb = initSupabase() } catch { sb = null }
+    causas = []
+    for (const rit of rits) {
+      let id = `temp-${rit}`
+      try {
+        if (sb) {
+          const { data } = await sb.from('causas').select('id').eq('rit', rit).limit(1)
+          if (data && data.length > 0) id = data[0].id
+          else log('warn', `  BOT_RIT: "${rit}" no está en la BD; se usa id temporal (no persiste con FK).`)
+        }
+      } catch (e: any) {
+        log('warn', `  No se pudo buscar el id de "${rit}" en la BD (se usa id temporal): ${e?.message ?? e}`)
+      }
+      causas.push({ id, rit })
+    }
+    log('info', `🎯 BOT_RIT activo: procesando SOLO ${causas.length} causa(s): ${causas.map(c => c.rit).join(', ')}`)
   } else {
     // Leer las causas cargadas en la BD, priorizando las menos actualizadas.
     causas = await getCausasToScrape(maxCausas, cfg.priorizarUrgentes)
