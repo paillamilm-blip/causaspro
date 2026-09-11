@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
@@ -465,6 +465,19 @@ async function runBusquedaPorRit(
 // NUNCA inventa la letra. NO scrapea movimientos/audiencias (eso es del flujo normal).
 // Respeta el mismo límite anti-CAPTCHA (maxCausas) y los delays humanizados.
 // ============================================================
+/**
+ * Texto legible del vínculo entre dos causas hermanas. Si el par es P↔X, explicita
+ * el significado legal (protección con cumplimiento → hay sentencia). Si no, vínculo genérico.
+ */
+function describeVinculo(ritA: string, ritB: string): string {
+  const letras = [parseRIT(ritA)?.tipo, parseRIT(ritB)?.tipo].map(l => (l || '').toUpperCase())
+  const esPyX = letras.includes('P') && letras.includes('X')
+  const sufijo = esPyX
+    ? ' (protección con cumplimiento — hay sentencia)'
+    : ''
+  return `${ritA} ↔ ${ritB}${sufijo}`
+}
+
 async function runFixLetras(
   page: Page,
   cfg: BotConfig,
@@ -526,7 +539,7 @@ async function runFixLetras(
   }
 
   // Contadores propios del modo, para un resumen honesto al final.
-  let corregidas = 0, confirmadas = 0, ambiguas = 0, noEncontradas = 0, colisiones = 0
+  let corregidas = 0, confirmadas = 0, ambiguas = 0, noEncontradas = 0, colisiones = 0, relacionadas = 0
 
   for (const causa of causas) {
     status.procesadas++
@@ -552,11 +565,55 @@ async function runFixLetras(
       )
 
       if (candidatosAmbiguos !== null) {
-        // Portal ambiguo: varias letras para el mismo número+año. NO adivinar.
-        ambiguas++
-        const detalle = `número ${ritSinLetra} tiene varias letras en el portal: ${(candidatosAmbiguos as string[]).join(', ')}. Confirmar cuál es la causa correcta.`
-        await marcarRevisionLetra(causa.id, detalle)
-        log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${(candidatosAmbiguos as string[]).join(', ')}).`)
+        // El portal devuelve VARIAS letras para el mismo número+año. En Familia esto
+        // NO es necesariamente un error: una protección (P) que llega a cumplimiento
+        // genera un ingreso SEPARADO con letra X, y AMBAS coexisten (la P queda como
+        // antecedente). Regla legal (confirmada): NO pisar una por otra.
+        //
+        // Canonizamos los candidatos del portal y separamos:
+        //   - el que coincide con la letra que YA tiene esta causa en la BD (si está)
+        //   - los "hermanos" (otras letras del mismo número+año)
+        const cands = (candidatosAmbiguos as string[])
+          .map(r => parseRIT(r))
+          .filter((p): p is NonNullable<typeof p> => !!p && !!p.tipo)
+          .map(p => ({ letra: p.tipo, rit: `${p.tipo}-${String(parseInt(p.numero, 10))}-${p.año}` }))
+        // Deduplicar por rit canónico.
+        const canonUnicos = Array.from(new Map(cands.map(c => [c.rit, c])).values())
+        const letraBd = (parseRIT(causa.rit)?.tipo || '').toUpperCase()
+        const propia = canonUnicos.find(c => c.letra === letraBd)
+        const hermanos = canonUnicos.filter(c => c.letra !== letraBd)
+
+        if (propia && hermanos.length > 0) {
+          // Caso típico P↔X: la causa de la BD ES correcta (su letra está en el portal).
+          // NO la tocamos. Creamos las hermanas que falten y vinculamos con una señal.
+          relacionadas++
+          status.exitosas++ // la causa quedó validada (su letra existe en el portal)
+          log('success', `  🔗 ${causa.rit}: correcta. Hermana(s) en el portal: ${hermanos.map(h => h.rit).join(', ')}.`)
+          for (const h of hermanos) {
+            const tipoH = inferirTipoRIT(h.rit)
+            // La hermana se crea sin caratulado (no lo tenemos aquí; el bot normal lo
+            // completará al scrapearla). No inventamos datos.
+            const { id: idH, creada } = await upsertCausaHermana(h.rit, tipoH, null)
+            const rel = describeVinculo(propia.rit, h.rit)
+            await vincularCausaEnNotas(causa.id, h.rit, rel)
+            if (idH) {
+              await vincularCausaEnNotas(idH, propia.rit, rel)
+            } else {
+              // No se pudo crear/ubicar la hermana → el vínculo en la causa BD quedaría
+              // apuntando a un rit inexistente. Marcar para revisión honesta.
+              await marcarRevisionLetra(causa.id, `no se pudo crear/ubicar la hermana ${h.rit}; verificar manualmente.`)
+            }
+            log(creada ? 'success' : 'info', creada ? `     + creada hermana ${h.rit} y vinculada.` : `     ↔ hermana ${h.rit} ya existía; vinculada.`)
+          }
+        } else {
+          // La letra de la BD NO está entre las del portal (o no hay letra propia):
+          // ambiguo de verdad. NO adivinar: marcar para revisión humana.
+          ambiguas++
+          status.fallidas++ // no resuelto automáticamente: queda para revisión humana
+          const detalle = `número ${ritSinLetra} tiene varias letras en el portal: ${canonUnicos.map(c => c.rit).join(', ')}, y ninguna coincide con la letra actual (${letraBd || 'sin letra'}). Confirmar manualmente.`
+          await marcarRevisionLetra(causa.id, detalle)
+          log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${canonUnicos.map(c => c.rit).join(', ')}).`)
+        }
       } else if (encontradas.length === 0) {
         noEncontradas++
         status.fallidas++
@@ -593,6 +650,10 @@ async function runFixLetras(
               ? `${parsedBd.tipo}-${String(parseInt(parsedBd.numero, 10))}-${parsedBd.año}`
               : `${String(parseInt(parsedBd.numero, 10))}-${parsedBd.año}`)
           : causa.rit
+        // "Tiene letra" = el rit trae prefijo O la columna tipo está seteada. Usar AMBAS
+        // fuentes evita reetiquetar una fila que la BD ya consideraba tipada (ej. tipo='P'
+        // con rit sin prefijo): esa causa NO debe entrar a la rama de escritura directa.
+        const letraBd = ((parsedBd?.tipo || '') || (tipoActual || '')).toUpperCase()
         if (ritReal === ritBdCanon && tipoReal === tipoActual) {
           confirmadas++
           // En este modo, "confirmada" (la letra ya era correcta) ES un resultado exitoso:
@@ -601,14 +662,18 @@ async function runFixLetras(
           // del motor de aprendizaje (que promedia bot_runs.tasa_exito).
           status.exitosas++
           log('info', `  ✓ ${causa.rit}: letra confirmada (sin cambios).`)
-        } else {
+        } else if (!letraBd) {
+          // CASO SEGURO: la causa NO tenía letra (tipo null, ej. "4596-2024" del Excel).
+          // El portal devolvió UNA sola letra → se la ASIGNAMOS (no pisamos ninguna letra
+          // previa; solo rellenamos la que faltaba). Este es el uso principal y sin riesgo.
           const res = await updateCausaRitYTipo(causa.id, ritReal, tipoReal)
           if (res === 'actualizado') {
             corregidas++
             status.exitosas++
-            log('success', `  ✏️ ${causa.rit} → ${ritReal} (tipo ${tipoActual ?? 'null'} → ${tipoReal ?? 'null'}).`)
+            log('success', `  ✏️ ${causa.rit} → ${ritReal} (asignada letra ${tipoReal ?? '?'} que faltaba).`)
           } else if (res === 'colision_rit') {
             colisiones++
+            status.fallidas++ // no resuelto automáticamente: queda para revisión humana
             const detalle = `el portal dice que el RIT real es ${ritReal}, pero ese RIT ya existe en otra causa de la BD. Revisar posible duplicado.`
             await marcarRevisionLetra(causa.id, detalle)
             log('warn', `  ⚠️ ${causa.rit}: colisión con ${ritReal} (ya existe) → marcada para revisión.`)
@@ -616,6 +681,21 @@ async function runFixLetras(
             status.fallidas++
             log('warn', `  ${causa.rit}: no se pudo actualizar (error de BD).`)
           }
+        } else {
+          // CASO DELICADO: la causa YA tenía letra (ej. P) y el portal muestra OTRA (ej. X),
+          // pero SIN la letra original en los resultados. NO pisamos: la P podría estar
+          // archivada (no aparece en "Mis Causas") mientras su cumplimiento X sí. Pisar
+          // borraría la protección original (bug real que ya nos pasó). Marcamos para
+          // revisión + creamos la hermana + vinculamos, conservando ambas.
+          relacionadas++
+          status.exitosas++
+          const tipoH = inferirTipoRIT(ritReal)
+          const { id: idH, creada } = await upsertCausaHermana(ritReal, tipoH, null)
+          const rel = describeVinculo(ritBdCanon, ritReal)
+          await vincularCausaEnNotas(causa.id, ritReal, rel)
+          if (idH) await vincularCausaEnNotas(idH, ritBdCanon, rel)
+          await marcarRevisionLetra(causa.id, `el portal muestra ${ritReal} (no ${ritBdCanon}). Se conservó ${ritBdCanon} y se ${creada ? 'creó' : 'vinculó'} ${ritReal}. Verificar relación.`)
+          log('warn', `  🔗 ${causa.rit}: el portal muestra ${ritReal}. Se CONSERVA ${ritBdCanon} y se ${creada ? 'crea' : 'vincula'} ${ritReal} (no se pisa).`)
         }
       }
 
@@ -632,7 +712,7 @@ async function runFixLetras(
     await humanDelay(cfg.delayMin, cfg.delayMax)
   }
 
-  log('info', `━━━ FIX_LETRAS resumen: ${corregidas} corregidas, ${confirmadas} confirmadas, ${ambiguas} ambiguas (marcadas), ${colisiones} colisiones (marcadas), ${noEncontradas} no encontradas ━━━`)
+  log('info', `━━━ FIX_LETRAS resumen: ${corregidas} corregidas, ${confirmadas} confirmadas, ${relacionadas} relacionadas (P↔X), ${ambiguas} ambiguas (marcadas), ${colisiones} colisiones (marcadas), ${noEncontradas} no encontradas ━━━`)
   status.detenido_por = 'completado'
 }
 
