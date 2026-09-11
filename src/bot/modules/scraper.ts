@@ -5,8 +5,7 @@
 
 import type { Page } from 'playwright'
 import type { MovimientoPJUD, AudienciaPJUD, ResolucionPJUD, CausaScrapedData, CausaToScrape } from '../types'
-import { OJV_SELECTORS, DEFAULT_CONFIG } from '../config'
-import { parsePJUDDate, cleanText, detectTrasladoCurador, sleep, log } from '../utils'
+import { parsePJUDDate, cleanText, detectTrasladoCurador, log } from '../utils'
 
 /**
  * Extrae todos los datos de una causa (ya estando en la página de detalle)
@@ -94,87 +93,111 @@ async function extractEstadoActual(page: Page): Promise<string | undefined> {
  */
 async function extractMovimientos(page: Page): Promise<MovimientoPJUD[]> {
   const movimientos: MovimientoPJUD[] = []
-  
+
   try {
-    // Navegar al tab de historial/tramitación si existe
-    const tabClicked = await clickTab(page, [
-      'a:has-text("Historial")',
-      'a:has-text("Tramitación")',
-      'a:has-text("Movimientos")',
-      'li:has-text("Historial") a',
-      'li:has-text("Tramitación") a',
-      '#tabHistorial',
-      'a[href*="historial"]',
-      'a[href*="tramitacion"]',
-    ])
-    
-    if (tabClicked) {
-      await sleep(2000 + Math.random() * 1500)
-    }
-    
-    // Buscar la tabla de movimientos
-    const table = await findTable(page, [
-      'table:has(th:has-text("Trámite"))',
-      'table:has(th:has-text("Tramite"))',
-      'table:has(th:has-text("Actuación"))',
-      '#tablaMovimientos',
-      '.tabla-historial table',
-      'table.movimientos',
-      'table:has(th:has-text("Fecha"))',
-    ])
-    
-    if (!table) {
-      log('warn', 'No se encontró tabla de movimientos')
+    // ESTRUCTURA REAL confirmada con diagnóstico (causa de Familia P-7336-2026):
+    // La tabla de Movimientos NO tiene id ni pestaña separada; es una <table> cuyos
+    // ENCABEZADOS son: Folio | Doc. | Anexos | Etapa | Estado | Trámite | Desc. Trámite |
+    // Fecha Trámite | Georeferencia. La fecha NO es la primera columna (es la 8ª), por eso
+    // el parser viejo (que asumía Fecha|Etapa|Trámite|Desc y buscaba la 1ª fecha) fallaba.
+    //
+    // Estrategia robusta: recorrer TODAS las tablas en el navegador, ubicar la que tenga
+    // encabezados de movimientos (Trámite + Fecha Trámite), y MAPEAR CADA COLUMNA POR SU
+    // ENCABEZADO (no por posición). Así da igual el orden/número de columnas.
+    const filas = await page.evaluate(() => {
+      const __name = (x: any) => x  // ver nota sobre esbuild/keepNames arriba
+      const norm = (s: string) => (s || '').replace(/\s+/g, ' ').trim()
+      const lower = (s: string) => norm(s).toLowerCase()
+
+      const tables = Array.from(document.querySelectorAll('table')) as HTMLTableElement[]
+      // Elegir la tabla de movimientos por sus encabezados: debe tener "trámite" y una
+      // columna de fecha ("fecha trámite" / "fecha"). Excluir la de notificaciones (que
+      // tiene "tipo notif"/"ente notif") y otras.
+      let target: HTMLTableElement | null = null
+      let headers: string[] = []
+      for (const t of tables) {
+        const ths = Array.from(t.querySelectorAll('th')).map(th => lower(th.textContent || ''))
+        if (ths.length === 0) continue
+        const tieneTramite = ths.some(h => h.includes('trámite') || h.includes('tramite'))
+        const tieneFecha = ths.some(h => h.includes('fecha'))
+        const esNotif = ths.some(h => h.includes('notif')) // tabla de Notificaciones
+        const esPlazo = ths.some(h => h.includes('ámbito') || h.includes('ambito') || h.includes('duración') || h.includes('duracion'))
+        if (tieneTramite && tieneFecha && !esNotif && !esPlazo) {
+          target = t
+          headers = ths
+          break
+        }
+      }
+      if (!target) return { headers: [] as string[], rows: [] as string[][] }
+
+      // Índice de cada columna por su encabezado (tolerante a acentos/variantes).
+      const idxDe = (...claves: string[]) =>
+        headers.findIndex(h => claves.some(k => h.includes(k)))
+      const iEtapa = idxDe('etapa')
+      const iEstado = idxDe('estado')
+      // "trámite" a secas (columna del tipo: Actuación/Resolución/Audiencia). Evitar que
+      // matchee "desc. trámite" o "fecha trámite": buscamos el header que sea exactamente
+      // "trámite"/"tramite".
+      let iTramite = headers.findIndex(h => h === 'trámite' || h === 'tramite')
+      if (iTramite === -1) iTramite = idxDe('trámite', 'tramite')
+      const iDesc = idxDe('desc') // "Desc. Trámite"
+      // Fecha: preferir "fecha trámite"; si no, la primera columna con "fecha" (por si otra
+      // vista trae "Fecha Ingreso" antes, no queremos enganchar la equivocada).
+      let iFecha = headers.findIndex(h => h.includes('fecha') && (h.includes('trámite') || h.includes('tramite')))
+      if (iFecha === -1) iFecha = idxDe('fecha')
+
+      const out: string[][] = []
+      const trs = Array.from(target.querySelectorAll('tbody tr, tr'))
+      for (const tr of trs) {
+        const tds = Array.from(tr.querySelectorAll('td'))
+        if (tds.length === 0) continue
+        const celdas = tds.map(td => norm(td.textContent || ''))
+        // Fila válida solo si tiene contenido real (evita filas de paginación/total).
+        const textoFila = celdas.join(' ')
+        if (/total de registros|inicio|anterior/i.test(textoFila) && celdas.length < 4) continue
+        // Empaquetar como [etapa, estado, tramite, desc, fecha] usando los índices reales.
+        const val = (i: number) => (i >= 0 && i < celdas.length ? celdas[i] : '')
+        out.push([val(iEtapa), val(iEstado), val(iTramite), val(iDesc), val(iFecha), textoFila])
+      }
+      // Reportamos iTramite para avisar (afuera) si NO se pudo mapear la columna clave:
+      // sin "Trámite", la clasificación de audiencias/resoluciones quedaría vacía.
+      return { headers, rows: out, tieneColumnaTramite: iTramite >= 0 }
+    })
+
+    if (filas.rows.length === 0) {
+      log('warn', 'No se encontró tabla de movimientos (por encabezados Trámite + Fecha)')
       return movimientos
     }
-    
-    // Extraer filas
-    const rows = await table.$$('tbody tr')
-    
-    for (const row of rows) {
-      try {
-        const cells = await row.$$('td')
-        if (cells.length < 2) continue
-        
-        // La estructura típica es: Fecha | Etapa | Trámite | Descripción
-        // Pero puede variar
-        const textos = await Promise.all(cells.map(async (cell: any) => {
-          const text = await cell.textContent()
-          return cleanText(text)
-        }))
-        
-        // Identificar columnas por contenido
-        const movimiento = parseMovimientoRow(textos)
-        if (movimiento) {
-          movimientos.push(movimiento)
-        }
-      } catch {}
+    if (!filas.tieneColumnaTramite) {
+      // No es fatal (igual guardamos movimientos), pero avisamos: sin columna "Trámite"
+      // la derivación de audiencias/resoluciones no podrá clasificar por tipo.
+      log('warn', 'Tabla de movimientos SIN columna "Trámite" reconocible → audiencias/resoluciones podrían quedar vacías. Revisar encabezados con BOT_DIAG_DETALLE=1.')
     }
-    
-    // Si hay paginación, intentar cargar más
-    await loadAllPages(page)
-    
-    // Extraer filas adicionales si se cargaron más
-    const additionalRows = await table.$$('tbody tr')
-    if (additionalRows.length > rows.length) {
-      for (let i = rows.length; i < additionalRows.length; i++) {
-        try {
-          const cells = await additionalRows[i].$$('td')
-          if (cells.length < 2) continue
-          const textos = await Promise.all(cells.map(async (cell: any) => {
-            const text = await cell.textContent()
-            return cleanText(text)
-          }))
-          const movimiento = parseMovimientoRow(textos)
-          if (movimiento) movimientos.push(movimiento)
-        } catch {}
-      }
+
+    // Convertir cada fila [etapa, estado, tramite, desc, fecha, textoCompleto] a MovimientoPJUD.
+    for (const r of filas.rows) {
+      const [etapa, estado, tramite, desc, fechaRaw, textoFila] = r
+      const fecha = parsePJUDDate(fechaRaw) || extraerFechaDeTexto(fechaRaw) || extraerFechaDeTexto(textoFila)
+      // Sin fecha reconocible → probablemente no es una fila de movimiento real.
+      if (!fecha) continue
+      const tramiteFinal = cleanText(tramite) || cleanText(desc) || 'Movimiento'
+      // Descripción combinada: Desc. Trámite (+ Estado como contexto si aporta).
+      const descripcion = cleanText(desc) || undefined
+      movimientos.push({
+        fecha,
+        etapa: cleanText(etapa) || undefined,
+        tramite: tramiteFinal,
+        descripcion,
+        // Detección de urgencia sobre TODA la fila (no solo trámite/desc), así el patrón
+        // nunca se pierde por estar en otra columna (Estado, Etapa, etc.).
+        es_traslado_curador: detectTrasladoCurador(textoFila),
+      })
     }
-    
+
   } catch (error: any) {
     log('warn', `Error extrayendo movimientos: ${error.message}`)
   }
-  
+
   return movimientos
 }
 
@@ -255,105 +278,10 @@ function derivarResoluciones(movimientos: MovimientoPJUD[]): ResolucionPJUD[] {
 // ============================================================
 // PARSERS DE FILAS
 // ============================================================
-
-function parseMovimientoRow(textos: string[]): MovimientoPJUD | null {
-  if (textos.length < 2) return null
-
-  // Normalizar celdas (sin vacíos) para razonar sobre las columnas reales
-  const celdas = textos.map(t => (t || '').trim())
-
-  // 1. Ubicar la celda que contiene la fecha (puede no ser la primera columna)
-  let fechaIdx = -1
-  let fecha: string | null = null
-  for (let i = 0; i < celdas.length; i++) {
-    const parsed = parsePJUDDate(celdas[i])
-    if (parsed) {
-      fecha = parsed
-      fechaIdx = i
-      break
-    }
-  }
-
-  if (!fecha) return null
-
-  // 2. Las celdas posteriores a la fecha son el contenido del movimiento.
-  //    Estructura típica del OJV: Fecha | Etapa | Trámite | Descripción,
-  //    pero el número y orden de columnas puede variar entre tribunales.
-  const contenido = celdas.slice(fechaIdx + 1).filter(c => c.length > 0)
-
-  if (contenido.length === 0) return null
-
-  // 3. Asignar campos de forma predecible:
-  //    - 1 celda  → es el trámite
-  //    - 2 celdas → etapa + trámite
-  //    - 3+ celdas → etapa + trámite + descripción (resto concatenado)
-  let etapa: string | undefined
-  let tramite: string
-  let descripcion: string | undefined
-
-  if (contenido.length === 1) {
-    tramite = contenido[0]
-  } else if (contenido.length === 2) {
-    etapa = contenido[0]
-    tramite = contenido[1]
-  } else {
-    etapa = contenido[0]
-    tramite = contenido[1]
-    descripcion = contenido.slice(2).join(' — ')
-  }
-
-  // 4. CRÍTICO: la detección de urgencia (TRASLADO AL CURADOR) se hace sobre
-  //    TODAS las celdas de la fila (no solo trámite+descripción, ni solo lo que
-  //    sigue a la fecha). Así el patrón nunca se pierde por haber quedado en una
-  //    columna inesperada (etapa, columna extra, o incluso antes de la fecha).
-  const textoCompleto = celdas.join(' ')
-
-  return {
-    fecha,
-    etapa,
-    tramite,
-    descripcion,
-    es_traslado_curador: detectTrasladoCurador(textoCompleto),
-  }
-}
-
-// (parseAudienciaRow / parseResolucionRow eliminados: audiencias y resoluciones ahora se
-//  DERIVAN de los movimientos, ver derivarAudiencias/derivarResoluciones arriba.)
-
-// ============================================================
-// HELPERS
-// ============================================================
-
-async function clickTab(page: Page, selectors: string[]): Promise<boolean> {
-  for (const sel of selectors) {
-    try {
-      const el = await page.$(sel)
-      if (el && await el.isVisible()) {
-        await el.click()
-        return true
-      }
-    } catch {}
-  }
-  return false
-}
-
-async function findTable(page: Page, selectors: string[]): Promise<any | null> {
-  for (const sel of selectors) {
-    try {
-      const el = await page.$(sel)
-      if (el) return el
-    } catch {}
-  }
-  return null
-}
-
-async function loadAllPages(page: Page): Promise<void> {
-  // Intentar cargar todas las páginas de la tabla (si hay paginación)
-  try {
-    const showAll = await page.$('a:has-text("Todos"), a:has-text("Ver todo"), select option[value="-1"]')
-    if (showAll) {
-      await showAll.click()
-      await sleep(3000)
-    }
-  } catch {}
-}
+// (parseMovimientoRow eliminado: la extracción de movimientos ahora mapea columnas POR
+//  ENCABEZADO dentro de extractMovimientos —ver arriba—, en vez de adivinar por posición.
+//  parseAudienciaRow / parseResolucionRow también se eliminaron: audiencias y resoluciones
+//  se DERIVAN de los movimientos, ver derivarAudiencias/derivarResoluciones.
+//  clickTab / findTable / loadAllPages se eliminaron: buscaban tabs/tablas por selectores
+//  adivinados que no existen en el detalle de Familia; extractMovimientos ya localiza la
+//  tabla por sus encabezados reales en un único page.evaluate.)
