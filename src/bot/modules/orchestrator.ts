@@ -11,8 +11,8 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, categorizarError, capturaPath } from '../utils'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra } from './supabaseSync'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
 
@@ -211,7 +211,13 @@ export async function runBotSession(
     const searchMode = (process.env.BOT_SEARCH_MODE || 'rit').toLowerCase()
     status.search_mode = searchMode
 
-    if (searchMode === 'listado') {
+    // BOT_FIX_LETRAS=1 → modo especial de mantenimiento: corrige la letra/tipo del RIT
+    // de las causas de la BD contra el portal (fuente de verdad). NO scrapea movimientos.
+    // Es OPT-IN y aislado: si la flag no está, el bot corre exactamente como siempre.
+    if (process.env.BOT_FIX_LETRAS === '1') {
+      status.search_mode = 'fix_letras'
+      await runFixLetras(page, cfg, status)
+    } else if (searchMode === 'listado') {
       await runListadoMasivo(page, cfg, status, results)
     } else {
       await runBusquedaPorRit(page, cfg, status, results)
@@ -442,6 +448,191 @@ async function runBusquedaPorRit(
     await humanDelay(cfg.delayMin, cfg.delayMax)
   }
 
+  status.detenido_por = 'completado'
+}
+
+// ============================================================
+// FLUJO FIX LETRAS (BOT_FIX_LETRAS=1) — mantenimiento, OPT-IN
+// ------------------------------------------------------------
+// Corrige la LETRA/TIPO del RIT de las causas de la BD usando el portal PJUD como
+// fuente de verdad. Por cada causa:
+//   1. Busca por NÚMERO+AÑO (sin letra) → el portal devuelve la fila con su letra REAL.
+//   2. Lee la letra real (encontradas[0].rit).
+//   3. Si difiere de la letra/tipo en BD → la corrige (rit + tipo).
+//   4. Si el portal es AMBIGUO (mismo número+año, varias letras) → NO adivina: marca
+//      la causa para revisión humana (campo notas).
+//   5. Si no la encuentra → la deja igual (no borra ni inventa).
+// NUNCA inventa la letra. NO scrapea movimientos/audiencias (eso es del flujo normal).
+// Respeta el mismo límite anti-CAPTCHA (maxCausas) y los delays humanizados.
+// ============================================================
+async function runFixLetras(
+  page: Page,
+  cfg: BotConfig,
+  status: BotRunStatus,
+): Promise<void> {
+  const envMax = process.env.BOT_MAX_CAUSAS ? parseInt(process.env.BOT_MAX_CAUSAS) : undefined
+  const maxCausas = envMax && envMax > 0 ? envMax : cfg.maxCausasPorSesion
+
+  // OVERRIDE opcional: BOT_RIT permite fijar QUÉ causas revisar (por RIT), útil para probar
+  // el fix sobre unas pocas causas concretas antes de correrlo masivo. Si no, se toman de
+  // la BD priorizando las que NO tienen letra (tipo NULL).
+  let causas: Array<{ id: string; rit: string; tipo: string | null }>
+  const ritOverrideRaw = (process.env.BOT_RIT || '').trim()
+  if (ritOverrideRaw) {
+    let rits = Array.from(new Set(ritOverrideRaw.split(/[,;]/).map(r => r.trim()).filter(Boolean)))
+    if (rits.length > maxCausas) {
+      log('warn', `  BOT_RIT trae ${rits.length} RIT pero el límite anti-detección es ${maxCausas}; se revisan los primeros ${maxCausas}.`)
+      rits = rits.slice(0, maxCausas)
+    }
+    let sb: ReturnType<typeof initSupabase> | null = null
+    try { sb = initSupabase() } catch (e: any) { sb = null }
+    // Si no hay conexión a la BD, FIX_LETRAS no puede corregir NADA (necesita leer/escribir
+    // causas). Abortar RUIDOSAMENTE en vez de degradar a "0 causas" (que el operador
+    // confundiría con "no había nada que corregir").
+    if (!sb) {
+      log('error', 'FIX_LETRAS: no se pudo conectar a la BD (revisá SUPABASE_URL/SERVICE_ROLE_KEY). Se aborta el modo.')
+      status.detenido_por = 'error_critico'
+      status.errores.push('FIX_LETRAS: sin conexión a la BD')
+      return
+    }
+    causas = []
+    for (const rit of rits) {
+      let id = `temp-${rit}`
+      let tipo: string | null = null
+      try {
+        if (sb) {
+          const { data } = await sb.from('causas').select('id, tipo').eq('rit', rit).limit(1)
+          if (data && data.length > 0) { id = data[0].id; tipo = data[0].tipo ?? null }
+          else log('warn', `  FIX_LETRAS: "${rit}" no está en la BD; se omite (no hay causa que corregir).`)
+        }
+      } catch (e: any) {
+        log('warn', `  No se pudo buscar "${rit}" en la BD: ${e?.message ?? e}`)
+      }
+      // Solo revisamos causas que existan en la BD (hay algo que corregir).
+      if (!id.startsWith('temp-')) causas.push({ id, rit, tipo })
+    }
+    log('info', `🎯 FIX_LETRAS + BOT_RIT: revisando ${causas.length} causa(s): ${causas.map(c => c.rit).join(', ')}`)
+  } else {
+    causas = await getCausasToFixLetras(maxCausas)
+  }
+
+  status.total_causas = causas.length
+  log('info', `📋 FIX_LETRAS: ${causas.length} causa(s) a revisar (máx ${maxCausas}). NO se scrapean movimientos.`)
+
+  if (causas.length === 0) {
+    log('warn', 'No hay causas para revisar letra. (¿Cargaste causas por Excel?)')
+    status.detenido_por = 'completado'
+    return
+  }
+
+  // Contadores propios del modo, para un resumen honesto al final.
+  let corregidas = 0, confirmadas = 0, ambiguas = 0, noEncontradas = 0, colisiones = 0
+
+  for (const causa of causas) {
+    status.procesadas++
+    const parsed = parseRIT(causa.rit)
+    if (!parsed) {
+      log('warn', `  [${status.procesadas}/${causas.length}] ${causa.rit}: RIT no parseable, se omite.`)
+      status.fallidas++
+      continue
+    }
+    // Buscar SIEMPRE por número+año SIN letra, para que el portal devuelva la letra REAL
+    // sin que nuestro propio prefijo (posiblemente equivocado) filtre el resultado.
+    const ritSinLetra = `${parsed.numero}-${parsed.año}`
+    log('info', `  [${status.procesadas}/${causas.length}] Revisando ${causa.rit} (busco ${ritSinLetra})...`)
+
+    try {
+      let candidatosAmbiguos: string[] | null = null
+      const encontradas = await medirPaso(
+        status.run_id, 'busqueda',
+        () => searchByRitExacto(page, ritSinLetra, (cands) => { candidatosAmbiguos = cands }),
+        causa.rit,
+        (res) => res.length > 0 || candidatosAmbiguos !== null, // ambiguo también es "resuelto"
+        'no_encontrada',
+      )
+
+      if (candidatosAmbiguos !== null) {
+        // Portal ambiguo: varias letras para el mismo número+año. NO adivinar.
+        ambiguas++
+        const detalle = `número ${ritSinLetra} tiene varias letras en el portal: ${(candidatosAmbiguos as string[]).join(', ')}. Confirmar cuál es la causa correcta.`
+        await marcarRevisionLetra(causa.id, detalle)
+        log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${(candidatosAmbiguos as string[]).join(', ')}).`)
+      } else if (encontradas.length === 0) {
+        noEncontradas++
+        status.fallidas++
+        log('warn', `  ${causa.rit}: no encontrada en el portal (se deja igual).`)
+      } else {
+        // Letra REAL del portal. OJO: encontradas[0].rit viene CRUDO de la celda del portal
+        // y puede no estar en forma canónica (ej. "P4596-2024" sin guion, o "P-04596-2024"
+        // con ceros a la izquierda). Si escribiéramos eso tal cual, "corregiríamos" una causa
+        // buena a una forma malformada y inferirTipoRIT devolvería null. Por eso RENORMALIZAMOS
+        // reparseando y recomponiendo a "LETRA-NUMERO-AÑO" antes de comparar/inferir/escribir.
+        const parsedReal = parseRIT(encontradas[0].rit)
+        if (!parsedReal) {
+          noEncontradas++
+          status.fallidas++
+          log('warn', `  ${causa.rit}: el portal devolvió un RIT no parseable ("${encontradas[0].rit}"); se deja igual.`)
+          await navigateToConsulta(page)
+          await sleep(1500)
+          await humanDelay(cfg.delayMin, cfg.delayMax)
+          continue
+        }
+        // Recomponer sin ceros a la izquierda en el número (parseInt), para que
+        // "P-04596-2024" y "P-4596-2024" se traten como el MISMO RIT canónico.
+        const numeroCanon = String(parseInt(parsedReal.numero, 10))
+        const ritReal = parsedReal.tipo
+          ? `${parsedReal.tipo}-${numeroCanon}-${parsedReal.año}`
+          : `${numeroCanon}-${parsedReal.año}`
+        const tipoReal = inferirTipoRIT(ritReal)
+        const tipoActual = causa.tipo
+        // Comparar contra la forma canónica del RIT en BD también (por si viniera con
+        // ceros/guion raros), reparseándolo igual. Si no parsea, comparamos crudo.
+        const parsedBd = parseRIT(causa.rit)
+        const ritBdCanon = parsedBd
+          ? (parsedBd.tipo
+              ? `${parsedBd.tipo}-${String(parseInt(parsedBd.numero, 10))}-${parsedBd.año}`
+              : `${String(parseInt(parsedBd.numero, 10))}-${parsedBd.año}`)
+          : causa.rit
+        if (ritReal === ritBdCanon && tipoReal === tipoActual) {
+          confirmadas++
+          // En este modo, "confirmada" (la letra ya era correcta) ES un resultado exitoso:
+          // el portal validó el dato. Contarlo como éxito evita que una corrida sana de
+          // mantenimiento (todo ya correcto) reporte tasa_exito=0% y contamine el promedio
+          // del motor de aprendizaje (que promedia bot_runs.tasa_exito).
+          status.exitosas++
+          log('info', `  ✓ ${causa.rit}: letra confirmada (sin cambios).`)
+        } else {
+          const res = await updateCausaRitYTipo(causa.id, ritReal, tipoReal)
+          if (res === 'actualizado') {
+            corregidas++
+            status.exitosas++
+            log('success', `  ✏️ ${causa.rit} → ${ritReal} (tipo ${tipoActual ?? 'null'} → ${tipoReal ?? 'null'}).`)
+          } else if (res === 'colision_rit') {
+            colisiones++
+            const detalle = `el portal dice que el RIT real es ${ritReal}, pero ese RIT ya existe en otra causa de la BD. Revisar posible duplicado.`
+            await marcarRevisionLetra(causa.id, detalle)
+            log('warn', `  ⚠️ ${causa.rit}: colisión con ${ritReal} (ya existe) → marcada para revisión.`)
+          } else {
+            status.fallidas++
+            log('warn', `  ${causa.rit}: no se pudo actualizar (error de BD).`)
+          }
+        }
+      }
+
+      await navigateToConsulta(page)
+      await sleep(1500)
+    } catch (err: any) {
+      status.fallidas++
+      status.errores.push(`${causa.rit}: ${err.message}`)
+      log('warn', `  Error revisando ${causa.rit}: ${err.message}`)
+      if (categorizarError(err?.message) === 'captcha') status.bloqueo_detectado = true
+      try { await navigateToConsulta(page); await sleep(1500) } catch {}
+    }
+
+    await humanDelay(cfg.delayMin, cfg.delayMax)
+  }
+
+  log('info', `━━━ FIX_LETRAS resumen: ${corregidas} corregidas, ${confirmadas} confirmadas, ${ambiguas} ambiguas (marcadas), ${colisiones} colisiones (marcadas), ${noEncontradas} no encontradas ━━━`)
   status.detenido_por = 'completado'
 }
 

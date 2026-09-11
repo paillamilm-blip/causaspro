@@ -324,3 +324,132 @@ export async function markCausaScraped(causaId: string): Promise<void> {
     .update({ updated_at: new Date().toISOString() })
     .eq('id', causaId)
 }
+
+
+// ============================================================
+// BOT_FIX_LETRAS — corrección de la letra/tipo del RIT contra el portal
+// ------------------------------------------------------------
+// Estas funciones son EXCLUSIVAS del modo BOT_FIX_LETRAS y NO participan del
+// flujo normal de scraping (rit/listado). Filosofía: NUNCA inventar la letra —
+// la fuente de verdad es lo que el portal PJUD devuelve en la fila de resultados.
+// ============================================================
+
+/** Una causa candidata a revisión de letra: id, su RIT en BD y su tipo actual. */
+export interface CausaParaFixLetra {
+  id: string
+  rit: string
+  tipo: string | null
+}
+
+/**
+ * Trae causas para revisar/corregir su letra, en modo BOT_FIX_LETRAS.
+ * PRIORIZA las causas con tipo NULL (las que el Excel trajo SIN letra, ej. "4596-2024"),
+ * porque son las que más se benefician de que el portal les confirme la letra real.
+ * Trae también el resto (letra posiblemente equivocada) después, hasta `limit`.
+ * A diferencia de getCausasToScrape, este SÍ trae `tipo` (necesario para comparar).
+ */
+export async function getCausasToFixLetras(limit: number): Promise<CausaParaFixLetra[]> {
+  const sb = initSupabase()
+
+  // 1) Primero las que NO tienen tipo (sin letra) — máxima prioridad.
+  const sinTipo = await sb
+    .from('causas')
+    .select('id, rit, tipo')
+    .not('rit', 'is', null)
+    .is('tipo', null)
+    .order('updated_at', { ascending: true })
+    .limit(limit)
+
+  if (sinTipo.error) {
+    log('error', `Error obteniendo causas sin tipo: ${sinTipo.error.message}`)
+    return []
+  }
+
+  const acumuladas: CausaParaFixLetra[] = (sinTipo.data || []).map(c => ({
+    id: c.id, rit: c.rit, tipo: c.tipo ?? null,
+  }))
+
+  // 2) Si aún hay cupo, completar con causas que SÍ tienen tipo (para verificar/corregir).
+  const resto = limit - acumuladas.length
+  if (resto > 0) {
+    const conTipo = await sb
+      .from('causas')
+      .select('id, rit, tipo')
+      .not('rit', 'is', null)
+      .not('tipo', 'is', null)
+      .order('updated_at', { ascending: true })
+      .limit(resto)
+
+    if (!conTipo.error) {
+      for (const c of conTipo.data || []) {
+        acumuladas.push({ id: c.id, rit: c.rit, tipo: c.tipo ?? null })
+      }
+    }
+  }
+
+  return acumuladas.slice(0, limit)
+}
+
+/**
+ * Actualiza el RIT y el tipo de una causa existente (por id) con los valores REALES
+ * leídos del portal. Fail-safe ante colisión de RIT: si el `nuevoRit` YA pertenece a
+ * OTRA causa distinta en la BD, NO pisa nada y devuelve 'colision_rit' (evita fusionar
+ * dos expedientes bajo el mismo RIT). Devuelve el resultado para que el orquestador lo
+ * loguee/cuente honestamente.
+ */
+export async function updateCausaRitYTipo(
+  id: string,
+  nuevoRit: string,
+  nuevoTipo: string | null,
+): Promise<'actualizado' | 'colision_rit' | 'error'> {
+  const sb = initSupabase()
+  try {
+    // ¿El nuevoRit ya lo tiene OTRA causa? (integridad: rit debería ser único por causa)
+    const { data: choque, error: qErr } = await sb
+      .from('causas')
+      .select('id')
+      .eq('rit', nuevoRit)
+      .neq('id', id)
+      .limit(1)
+    if (qErr) {
+      log('warn', `  No se pudo verificar colisión de RIT para ${nuevoRit}: ${qErr.message}`)
+      return 'error'
+    }
+    if (choque && choque.length > 0) {
+      return 'colision_rit'
+    }
+
+    const { error } = await sb
+      .from('causas')
+      .update({ rit: nuevoRit, tipo: nuevoTipo, updated_at: new Date().toISOString() })
+      .eq('id', id)
+    if (error) {
+      log('warn', `  Error actualizando RIT/tipo de la causa ${id}: ${error.message}`)
+      return 'error'
+    }
+    return 'actualizado'
+  } catch (e: any) {
+    log('warn', `  Excepción actualizando RIT/tipo de ${id}: ${e?.message ?? e}`)
+    return 'error'
+  }
+}
+
+/**
+ * Deja una marca de "revisar letra manualmente" en el campo `notas` de la causa, SIN
+ * tocar rit/tipo. Se usa cuando el portal devuelve AMBIGÜEDAD (mismo número+año con
+ * varias letras distintas): no adivinamos, marcamos para revisión humana.
+ * Es idempotente-ish: no duplica la marca si ya está presente.
+ */
+export async function marcarRevisionLetra(id: string, detalle: string): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { data } = await sb.from('causas').select('notas').eq('id', id).limit(1)
+    const notasActuales: string = (data && data[0]?.notas) || ''
+    const marca = `[REVISAR LETRA] ${detalle}`
+    if (notasActuales.includes('[REVISAR LETRA]')) return // ya marcada
+    const nuevasNotas = notasActuales ? `${notasActuales}\n${marca}` : marca
+    await sb.from('causas').update({ notas: nuevasNotas, updated_at: new Date().toISOString() }).eq('id', id)
+  } catch (e: any) {
+    log('warn', `  No se pudo marcar revisión de letra para ${id}: ${e?.message ?? e}`)
+  }
+}
