@@ -7,6 +7,9 @@ inclusion: manual
 Guía de flujos de trabajo para usar con Kiro en CausasPro. Proviene del repo de skills
 `paillamilm-blip/mis-skills` y se adapta acá con ejemplos del proyecto.
 
+> ✅ **Las skills están instaladas y listas para usar** en `.kiro/skills/` (las 29 que usa
+> este Top 9). No hace falta instalar nada: decile a Kiro la frase de ejemplo de cada uno.
+
 > **Combo** = pasos en fila (una sola pasada: A → B → C).
 > **Loop** ⟳ = ciclo que se **repite hasta cumplir una meta** (le decís la condición de salida y Kiro itera solo).
 > Para usar esta guía en una sesión, activala manualmente (es de inclusión `manual`, no carga sola).
