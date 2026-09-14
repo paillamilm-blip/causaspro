@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
@@ -368,12 +368,29 @@ async function runBusquedaPorRit(
       if (encontradas.length === 0) {
         status.fallidas++
         status.errores.push(`${causa.rit}: no encontrada en el portal`)
-        // Marcar [NO EN PORTAL] SOLO si el portal CONFIRMÓ que no existe (no ante un fallo
-        // transitorio). Así la causa deja de reintentarse en cada tanda, pero una causa
-        // real que falló por timeout/flakiness NO se pierde: se reintentará normalmente.
         // (Nunca marcar ids temporales de BOT_RIT.)
-        if (portalConfirmoNoExiste && !causa.id.startsWith('temp-')) {
-          await marcarCausaNoEnPortal(causa.id).catch(() => {})
+        if (!causa.id.startsWith('temp-')) {
+          if (portalConfirmoNoExiste) {
+            // El portal CONFIRMÓ que no existe → marca directa, deja de reintentarse.
+            await marcarCausaNoEnPortal(causa.id).catch(() => {})
+          } else {
+            // Fallo TRANSITORIO (timeout, panel no cargó, resultado vacío sin mensaje
+            // canónico): NO marcamos al primer intento. Contamos el fallo; si llega al tope
+            // (BOT_MAX_INTENTOS_FALLIDOS, default 3) se marca [NO EN PORTAL] igual, para que
+            // no atasque la cola en tandas desatendidas. Una causa real que luego se
+            // encuentre bien limpia su contador (borrón y cuenta nueva).
+            const maxIntentos = process.env.BOT_MAX_INTENTOS_FALLIDOS
+              ? Math.max(1, parseInt(process.env.BOT_MAX_INTENTOS_FALLIDOS, 10) || 3)
+              : 3
+            const marcada = await registrarIntentoFallido(causa.id, maxIntentos).catch(() => false)
+            if (marcada) {
+              // CUARENTENA, no descarte: la causa sale del loop pero queda [REVISAR] para
+              // que alguien la mire (puede ser ruido real o flakiness del portal). Se loguea
+              // fuerte para que quede en el resumen de la corrida.
+              log('warn', `  ⚠️ ${causa.rit}: ${maxIntentos} intentos fallidos consecutivos → CUARENTENA [REVISAR] (no se reintenta; revisar manualmente).`)
+              status.errores.push(`${causa.rit}: EN CUARENTENA tras ${maxIntentos} intentos — revisar manualmente`)
+            }
+          }
         }
         // (La métrica del paso 'busqueda' con exito=false ya la registró medirPaso.)
         // Volver al formulario limpio para la siguiente búsqueda
@@ -422,6 +439,10 @@ async function runBusquedaPorRit(
         } else {
           await saveCausaData(scrapedData, analysis)
           await markCausaScraped(causa.id)
+          // Se encontró y scrapeó bien: limpiar cualquier contador de intentos fallidos
+          // previo (borrón y cuenta nueva), para que un fallo transitorio pasado no la
+          // marque de más en el futuro.
+          await borrarContadorIntentos(causa.id).catch(() => {})
           status.exitosas++
         }
 

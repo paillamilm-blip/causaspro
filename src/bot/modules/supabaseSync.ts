@@ -45,6 +45,10 @@ export function initSupabase(): SupabaseClient {
 /** Marca que se pone en `notas` cuando una causa NO aparece en el portal (ruido/archivada
  *  de otra competencia). Sirve para NO reintentarla en cada tanda. */
 const MARCA_NO_EN_PORTAL = '[NO EN PORTAL]'
+/** Marca de CUARENTENA revisable: el bot no pudo scrapear la causa tras N fallos transitorios
+ *  seguidos. La saca del loop (no atasca tandas) pero, a diferencia de [NO EN PORTAL], NO afirma
+ *  que la causa no exista → queda visible para revisión manual (nunca perder una causa real). */
+const MARCA_REVISAR = '[REVISAR: no scrapeada]'
 
 /**
  * Obtiene las causas a scrapear, PRIORIZANDO las que aún NO tienen datos (movimientos),
@@ -102,7 +106,10 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
       if (lote.length < 1000) break
     }
 
-    const esRuido = (c: { notas: string | null }) => (c.notas || '').includes(MARCA_NO_EN_PORTAL)
+    // Fuera del loop: las confirmadas [NO EN PORTAL] y las puestas en cuarentena [REVISAR]
+    // (fallaron N veces seguidas por motivos transitorios). Ambas dejan de consumir cupo.
+    const esRuido = (c: { notas: string | null }) =>
+      (c.notas || '').includes(MARCA_NO_EN_PORTAL) || (c.notas || '').includes(MARCA_REVISAR)
     const ruido = causas.filter(esRuido).length
 
     // Prioridad 1: sin movimientos y sin marca de ruido.
@@ -138,6 +145,87 @@ export async function marcarCausaNoEnPortal(causaId: string): Promise<void> {
     await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', causaId)
   } catch (e: any) {
     log('warn', `  No se pudo marcar [NO EN PORTAL] la causa ${causaId}: ${e?.message ?? e}`)
+  }
+}
+
+/** Prefijo del contador de intentos fallidos consecutivos, guardado en `notas`. */
+const MARCA_INTENTOS = '[INTENTOS FALLIDOS:'
+/** Regex para leer/quitar la línea del contador. */
+const RE_INTENTOS = /\[INTENTOS FALLIDOS:\s*(\d+)\]/i
+
+/**
+ * BLINDAJE anti-loop para tandas desatendidas.
+ *
+ * Cuando una causa NO se encuentra por un fallo TRANSITORIO (timeout, panel no cargó,
+ * resultado vacío sin el mensaje canónico del portal), NO la sacamos de la cola al primer
+ * intento (podría ser una causa real que falló por flakiness). Pero si falla `maxIntentos`
+ * VECES SEGUIDAS, la ponemos en CUARENTENA [REVISAR] para que deje de consumir cupo tanda
+ * tras tanda. Una causa real que se encuentra bien limpia su contador (borrarContadorIntentos).
+ *
+ * IMPORTANTE: usamos [REVISAR], NO [NO EN PORTAL]. Un fallo transitorio repetido NO prueba
+ * que la causa no exista; puede ser flakiness sostenida del portal. [REVISAR] la saca del
+ * loop pero queda visible para revisión manual (no se pierde silenciosamente).
+ *
+ * Devuelve true si en esta llamada se alcanzó el tope y se puso [REVISAR].
+ */
+export async function registrarIntentoFallido(causaId: string, maxIntentos = 3): Promise<boolean> {
+  const sb = initSupabase()
+  try {
+    const { data } = await sb.from('causas').select('notas').eq('id', causaId).limit(1)
+    const notas: string = (data && data[0]?.notas) || ''
+    // Si ya está fuera del loop (marcada [NO EN PORTAL] o ya en [REVISAR]), no hay nada que contar.
+    if (notas.includes(MARCA_NO_EN_PORTAL) || notas.includes(MARCA_REVISAR)) return false
+
+    const m = notas.match(RE_INTENTOS)
+    const previos = m ? parseInt(m[1], 10) || 0 : 0
+    const actual = previos + 1
+
+    // Quitar la línea vieja del contador (si existía) para reescribirla.
+    const sinContador = notas
+      .split('\n')
+      .filter(l => !l.includes(MARCA_INTENTOS))
+      .join('\n')
+      .trim()
+
+    if (actual >= maxIntentos) {
+      // Se alcanzó el tope: poner en CUARENTENA [REVISAR] (no [NO EN PORTAL]) y limpiar el contador.
+      const nuevas = sinContador
+        ? `${sinContador}\n${MARCA_REVISAR} el bot no la encontró tras ${actual} intentos (revisar manualmente: puede ser ruido/archivada o flakiness del portal).`
+        : `${MARCA_REVISAR} el bot no la encontró tras ${actual} intentos (revisar manualmente: puede ser ruido/archivada o flakiness del portal).`
+      await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', causaId)
+      return true
+    }
+
+    // Aún no llega al tope: solo actualizar el contador.
+    const linea = `${MARCA_INTENTOS} ${actual}]`
+    const nuevas = sinContador ? `${sinContador}\n${linea}` : linea
+    await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', causaId)
+    return false
+  } catch (e: any) {
+    log('warn', `  No se pudo registrar intento fallido de ${causaId}: ${e?.message ?? e}`)
+    return false
+  }
+}
+
+/**
+ * Limpia el contador de intentos fallidos de una causa (cuando SÍ se encontró/scrapeó bien).
+ * Así un fallo transitorio no arrastra el contador para siempre: borrón y cuenta nueva.
+ * Conserva el resto de las notas. No-op si no había contador.
+ */
+export async function borrarContadorIntentos(causaId: string): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { data } = await sb.from('causas').select('notas').eq('id', causaId).limit(1)
+    const notas: string = (data && data[0]?.notas) || ''
+    if (!notas.includes(MARCA_INTENTOS)) return // nada que limpiar
+    const limpio = notas
+      .split('\n')
+      .filter(l => !l.includes(MARCA_INTENTOS))
+      .join('\n')
+      .trim()
+    await sb.from('causas').update({ notas: limpio || null }).eq('id', causaId)
+  } catch {
+    // silencioso: limpiar el contador es best-effort, no debe frenar el scraping.
   }
 }
 
