@@ -133,16 +133,40 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [filtroUrgencia, setFiltroUrgencia] = useState<FiltroUrgencia>('todas')
-  // RIT de la causa cuyo "Asesor IA" se abrió (muestra el aviso "próximamente"). null = cerrado.
-  const [avisoIA, setAvisoIA] = useState<string | null>(null)
+  // Estado del Asesor IA: la causa cuyo análisis se abrió + carga/resultado/error.
+  // null = modal cerrado.
+  const [asesorIA, setAsesorIA] = useState<{
+    rit: string
+    cargando: boolean
+    resultado: { resumen: string; proximoPaso: string; riesgo: string } | null
+    error: string | null
+  } | null>(null)
 
-  // Cerrar el aviso del Asesor IA con la tecla Escape (accesibilidad).
+  // Pide el análisis estratégico a /api/analisis/[id] y lo muestra en el modal.
+  async function abrirAsesorIA(causaId: string, rit: string) {
+    setAsesorIA({ rit, cargando: true, resultado: null, error: null })
+    try {
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+      const res = await fetch(`/api/analisis/${causaId}${qs}`, { cache: 'no-store' })
+      const json = await res.json()
+      if (!res.ok) {
+        setAsesorIA({ rit, cargando: false, resultado: null, error: json?.error || `Error ${res.status}` })
+        return
+      }
+      setAsesorIA({ rit, cargando: false, resultado: json, error: null })
+    } catch (e: any) {
+      setAsesorIA({ rit, cargando: false, resultado: null, error: e?.message || 'No se pudo conectar con el Asesor IA.' })
+    }
+  }
+
+  // Cerrar el Asesor IA con la tecla Escape (accesibilidad).
   useEffect(() => {
-    if (!avisoIA) return
-    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAvisoIA(null) }
+    if (!asesorIA) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAsesorIA(null) }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [avisoIA])
+  }, [asesorIA])
   const [totalCausas, setTotalCausas] = useState(0)
   const [error, setError] = useState<string | null>(null)
   // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
@@ -625,7 +649,7 @@ export default function Dashboard() {
                   </Link>
                   <button
                     type="button"
-                    onClick={() => setAvisoIA(c.rit)}
+                    onClick={() => abrirAsesorIA(c.id, c.rit)}
                     className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
                   >
                     <IconSparkles className="w-3.5 h-3.5" />
@@ -638,26 +662,69 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Aviso "próximamente" del Asesor IA (hasta conectar la IA real del PR #50). */}
-      {avisoIA && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAvisoIA(null)}>
-          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl" onClick={e => e.stopPropagation()}>
-            <div className="flex items-center gap-2 mb-3">
+      {/* Modal del Asesor Estratégico IA: resumen + próximo paso + riesgo por causa. */}
+      {asesorIA && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+          onClick={() => setAsesorIA(null)}
+          role="dialog" aria-modal="true" aria-label={`Asesor IA ${asesorIA.rit}`}
+        >
+          <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-4">
               <span className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 text-violet-700">
                 <IconSparkles className="w-5 h-5" />
               </span>
-              <h3 className="font-bold text-slate-900">Asesor IA — {avisoIA}</h3>
+              <div>
+                <h3 className="font-bold text-slate-900 leading-tight">Asesor Estratégico IA</h3>
+                <span className="font-mono text-xs text-slate-500">{asesorIA.rit}</span>
+              </div>
             </div>
-            <p className="text-sm text-slate-600">
-              El <strong>Asesor Estratégico IA</strong> analizará este traslado al curador y te dará
-              un resumen, el próximo paso recomendado y los riesgos a vigilar.
-            </p>
-            <p className="text-sm text-violet-700 font-medium mt-2">🚧 Próximamente — lo activamos en breve.</p>
+
+            {/* Cargando */}
+            {asesorIA.cargando && (
+              <div className="flex items-center gap-3 py-8 justify-center text-slate-500">
+                <IconRefresh className="w-5 h-5 animate-spin motion-reduce:animate-none" />
+                <span className="text-sm">Analizando la causa…</span>
+              </div>
+            )}
+
+            {/* Error */}
+            {!asesorIA.cargando && asesorIA.error && (
+              <div className="py-4">
+                <div className="flex items-start gap-2 text-red-600 text-sm">
+                  <IconAlert className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>{asesorIA.error}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Resultado */}
+            {!asesorIA.cargando && asesorIA.resultado && (
+              <div className="space-y-4">
+                <div>
+                  <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Resumen</div>
+                  <p className="text-sm text-slate-700">{asesorIA.resultado.resumen}</p>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-violet-500 uppercase tracking-wide mb-1">Próximo paso sugerido</div>
+                  <p className="text-sm text-slate-700">{asesorIA.resultado.proximoPaso}</p>
+                </div>
+                <div>
+                  <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">Riesgo a vigilar</div>
+                  <p className="text-sm text-slate-700">{asesorIA.resultado.riesgo}</p>
+                </div>
+                <p className="text-xs text-slate-400 border-t border-slate-100 pt-3">
+                  ⚠️ Sugerencia generada por IA a partir de datos procesales (sin nombres ni RUT).
+                  Es una lectura preliminar — la decisión profesional es de la abogada.
+                </p>
+              </div>
+            )}
+
             <button
-              onClick={() => setAvisoIA(null)}
-              className="mt-4 w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors"
+              onClick={() => setAsesorIA(null)}
+              className="mt-5 w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors"
             >
-              Entendido
+              Cerrar
             </button>
           </div>
         </div>
