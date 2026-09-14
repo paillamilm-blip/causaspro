@@ -462,7 +462,7 @@ export default function Dashboard() {
           </button>
           {ultimaActualizacion && (
             <span className="text-xs text-slate-400 whitespace-nowrap">
-              Actualizado {haceCuanto(ultimaActualizacion, ahora)} · se actualiza sola
+              Actualizado {haceCuanto(ultimaActualizacion, ahora)}
             </span>
           )}
         </div>
