@@ -6,10 +6,18 @@ import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFa
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
+  IconCheck, IconShield, IconSparkles, IconPause,
 } from './icons'
+import type { ComponentType, SVGProps } from 'react'
+
+type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
+
+// Motivo de urgencia con ÍCONO SVG formal (ligado al color del nivel) + texto.
+// Reemplaza los emoji por iconos de una sola familia (más serio/profesional).
+interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'criticas' | 'atencion' | 'revisar' | 'estables'
+type FiltroUrgencia = 'todas' | 'traslados' | 'criticas' | 'atencion' | 'revisar' | 'estables'
 
 // Color del chip de materia según su grupo práctico.
 const GRUPO_CHIP: Record<GrupoMateria, string> = {
@@ -60,36 +68,37 @@ function getSemaforo(nivel: number | null): { color: string; label: string; bg: 
 
 // Motivo legible de la urgencia, alineado con el semáforo de la vista
 // (schema-semaforo-proteccion.sql). Prioriza la señal más fuerte de la causa.
-function getUrgenciaMotivo(causa: CausaResumen): string {
+// Devuelve un ÍCONO SVG (formal) + el texto; el color lo pone la tarjeta según el nivel.
+function getUrgenciaMotivo(causa: CausaResumen): MotivoUrgencia | null {
   const nivel = causa.nivel_urgencia
-  if (!nivel || nivel >= 10) return ''
+  if (!nivel || nivel >= 10) return null
   const d = causa.dias_para_audiencia
   // Solo consideramos "audiencia inminente" la que el CASE realmente usa para el nivel:
   // ≤2d en nivel 1, ≤7d en nivel 3. Así el mensaje coincide con la señal que disparó el nivel.
-  const audienciaInminente = (limite: number) =>
+  const audienciaInminente = (limite: number): MotivoUrgencia | null =>
     causa.proxima_audiencia != null && d != null && d <= limite
-      ? `📅 Audiencia en ${Math.max(0, Math.round(d))} días`
-      : ''
+      ? { Icono: IconCalendar, texto: `Audiencia en ${Math.max(0, Math.round(d))} días` }
+      : null
   if (nivel === 1) {
     // El CASE llega a nivel 1 por audiencia ≤2d O por traslado curador ≤30d. Priorizamos la
     // audiencia inminente (más urgente en el tiempo); si no hay, es el traslado reciente.
     const aud = audienciaInminente(2)
     if (aud) return aud
-    if (causa.tiene_traslado_curador) return '🔴 Traslado al curador (≤30 días)'
-    return '🔴 Acción inmediata'
+    if (causa.tiene_traslado_curador) return { Icono: IconShield, texto: 'Traslado al curador (≤30 días)' }
+    return { Icono: IconAlert, texto: 'Acción inmediata' }
   }
-  if (nivel === 2) return `⚠️ Medida cautelar vence en ${causa.dias_medida_vence} días`
+  if (nivel === 2) return { Icono: IconAlert, texto: `Medida cautelar vence en ${causa.dias_medida_vence} días` }
   if (nivel === 3) {
     // Nivel 3 = audiencia futura ≤7d O movimiento nuevo ≤7d. Solo mostramos la audiencia
     // si de verdad es ≤7d (si no, el nivel lo disparó el movimiento nuevo).
     const aud = audienciaInminente(7)
     if (aud) return aud
     const mov = causa.ultimo_movimiento ? `: ${causa.ultimo_movimiento}` : ''
-    return `🆕 Movimiento nuevo (últimos 7 días)${mov}`
+    return { Icono: IconClock, texto: `Movimiento nuevo (últimos 7 días)${mov}` }
   }
-  if (nivel === 4) return '🔴 Traslado al curador (revisar)'
-  if (nivel === 6) return `😴 Sin movimiento hace ${Math.round(causa.dias_sin_actividad || 0)} días (estancada)`
-  return ''
+  if (nivel === 4) return { Icono: IconShield, texto: 'Traslado al curador (revisar)' }
+  if (nivel === 6) return { Icono: IconPause, texto: `Sin movimiento hace ${Math.round(causa.dias_sin_actividad || 0)} días (estancada)` }
+  return null
 }
 
 function formatFecha(iso: string | null): string {
@@ -124,6 +133,16 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [filtroUrgencia, setFiltroUrgencia] = useState<FiltroUrgencia>('todas')
+  // RIT de la causa cuyo "Asesor IA" se abrió (muestra el aviso "próximamente"). null = cerrado.
+  const [avisoIA, setAvisoIA] = useState<string | null>(null)
+
+  // Cerrar el aviso del Asesor IA con la tecla Escape (accesibilidad).
+  useEffect(() => {
+    if (!avisoIA) return
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setAvisoIA(null) }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [avisoIA])
   const [totalCausas, setTotalCausas] = useState(0)
   const [error, setError] = useState<string | null>(null)
   // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
@@ -362,9 +381,13 @@ export default function Dashboard() {
   const atencion = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
   const revisar = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
   const estables = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 6)
+  // Traslados al curador: lo más difícil/prioritario para Paula. Tienen su propia tarjeta.
+  // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
+  const traslados = causasPorTexto.filter(c => c.tiene_traslado_curador)
 
   // Filtro rápido por urgencia (clic en tarjeta KPI). No afecta los contadores de arriba.
   const causasFiltradas =
+    filtroUrgencia === 'traslados' ? traslados :
     filtroUrgencia === 'criticas' ? criticas :
     filtroUrgencia === 'atencion' ? atencion :
     filtroUrgencia === 'revisar' ? revisar :
@@ -468,8 +491,10 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPIs clickeables (actúan como filtro rápido por urgencia) */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      {/* KPIs clickeables (actúan como filtro rápido por urgencia). Íconos formales
+          ligados al color del semáforo. La 6ta (Traslados al curador) es el corte
+          transversal más importante para Paula. */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
         <KpiCard
           label="Total causas" value={totalCausas}
           active={filtroUrgencia === 'todas'}
@@ -477,28 +502,34 @@ export default function Dashboard() {
           tone="neutral"
         />
         <KpiCard
+          label="Traslados curador" value={traslados.length}
+          active={filtroUrgencia === 'traslados'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'traslados' ? 'todas' : 'traslados')}
+          tone="purple" Icono={IconShield}
+        />
+        <KpiCard
           label="Críticas" value={criticas.length}
           active={filtroUrgencia === 'criticas'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'criticas' ? 'todas' : 'criticas')}
-          tone="red"
+          tone="red" Icono={IconAlert}
         />
         <KpiCard
           label="Atención" value={atencion.length}
           active={filtroUrgencia === 'atencion'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'atencion' ? 'todas' : 'atencion')}
-          tone="amber"
+          tone="amber" Icono={IconClock}
         />
         <KpiCard
           label="Revisar" value={revisar.length}
           active={filtroUrgencia === 'revisar'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'revisar' ? 'todas' : 'revisar')}
-          tone="orange"
+          tone="orange" Icono={IconPause}
         />
         <KpiCard
           label="Estables" value={estables.length}
           active={filtroUrgencia === 'estables'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'estables' ? 'todas' : 'estables')}
-          tone="green"
+          tone="green" Icono={IconCheck}
         />
       </div>
 
@@ -552,48 +583,82 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* Leyenda del semáforo */}
+      {/* Leyenda del semáforo (íconos formales ligados al color) */}
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
-        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Traslado curador ≤30d / Audiencia ≤2d / Medida por vencer</span>
-        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span> Movimiento nuevo ≤7d / Audiencia ≤7d / Traslado curador</span>
-        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Estancada: sin movimiento &gt;90d</span>
-        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Con actividad reciente</span>
+        <span className="flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5 text-violet-600" /> Traslado al curador (prioritario)</span>
+        <span className="flex items-center gap-1.5"><IconAlert className="w-3.5 h-3.5 text-red-500" /> Crítica: audiencia ≤2d / medida por vencer</span>
+        <span className="flex items-center gap-1.5"><IconClock className="w-3.5 h-3.5 text-amber-500" /> Atención: movimiento o audiencia ≤7d</span>
+        <span className="flex items-center gap-1.5"><IconPause className="w-3.5 h-3.5 text-orange-500" /> Revisar: estancada &gt;90d</span>
+        <span className="flex items-center gap-1.5"><IconCheck className="w-3.5 h-3.5 text-green-500" /> Estable: actividad reciente</span>
       </div>
 
-      {/* ALERTA: TRASLADOS AL CURADOR (la señal más accionable para el curador) */}
-      {causasFiltradas.filter(c => c.tiene_traslado_curador).length > 0 && (
-        <div className="bg-red-50 border border-red-300 rounded-xl p-4">
+      {/* ALERTA: TRASLADOS AL CURADOR — el corte más difícil/prioritario para Paula.
+          Va DEBAJO de los botones de filtro. Cada causa tiene el botón "Estrategias del
+          Asesor IA" (por ahora muestra "próximamente"; se activa al conectar la IA). */}
+      {traslados.length > 0 && (
+        <div className="bg-violet-50 border border-violet-300 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
-            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-red-100 text-red-600">
-              <IconAlert className="w-4 h-4" />
+            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-100 text-violet-700">
+              <IconShield className="w-4 h-4" />
             </span>
-            <h2 className="font-bold text-red-800 text-base">Nuevos traslados al curador</h2>
-            <span className="bg-red-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">
-              {causasFiltradas.filter(c => c.tiene_traslado_curador).length}
+            <h2 className="font-bold text-violet-900 text-base">Traslados al curador</h2>
+            <span className="bg-violet-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">
+              {traslados.length}
             </span>
+            <span className="text-xs text-violet-700/70 ml-1">lo más prioritario</span>
           </div>
           <div className="space-y-2">
-            {causasFiltradas.filter(c => c.tiene_traslado_curador).map(c => (
-              <Link key={c.id} href={`/causa/${c.id}`} className="block group">
-                <div className="bg-white border border-red-200 rounded-lg p-3 transition-shadow group-hover:shadow-md">
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <span className="font-mono font-bold text-red-700">{c.rit}</span>
-                      {c.caratulado && <span className="ml-2 text-slate-700">{c.caratulado}</span>}
+            {traslados.map(c => (
+              <div key={c.id} className="bg-white border border-violet-200 rounded-lg p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <Link href={`/causa/${c.id}`} className="min-w-0 group flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-bold text-violet-700 group-hover:underline">{c.rit}</span>
+                      {c.caratulado && <span className="text-slate-700 truncate">{c.caratulado}</span>}
                     </div>
-                    <div className="text-xs text-red-600 font-medium shrink-0 text-right">
-                      {c.ultimo_movimiento || 'Traslado al curador'}
-                    </div>
-                  </div>
-                  {c.nombres_nna && (
-                    <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                      <IconUsers className="w-3.5 h-3.5 text-slate-400" />
-                      {c.nombres_nna.substring(0, 60)}
-                    </div>
-                  )}
+                    {c.nombres_nna && (
+                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                        <IconUsers className="w-3.5 h-3.5 text-slate-400" />
+                        {c.nombres_nna.substring(0, 60)}
+                      </div>
+                    )}
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={() => setAvisoIA(c.rit)}
+                    className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                  >
+                    <IconSparkles className="w-3.5 h-3.5" />
+                    Estrategias del Asesor IA
+                  </button>
                 </div>
-              </Link>
+              </div>
             ))}
+          </div>
+        </div>
+      )}
+
+      {/* Aviso "próximamente" del Asesor IA (hasta conectar la IA real del PR #50). */}
+      {avisoIA && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setAvisoIA(null)}>
+          <div className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 text-violet-700">
+                <IconSparkles className="w-5 h-5" />
+              </span>
+              <h3 className="font-bold text-slate-900">Asesor IA — {avisoIA}</h3>
+            </div>
+            <p className="text-sm text-slate-600">
+              El <strong>Asesor Estratégico IA</strong> analizará este traslado al curador y te dará
+              un resumen, el próximo paso recomendado y los riesgos a vigilar.
+            </p>
+            <p className="text-sm text-violet-700 font-medium mt-2">🚧 Próximamente — lo activamos en breve.</p>
+            <button
+              onClick={() => setAvisoIA(null)}
+              className="mt-4 w-full py-2 rounded-lg bg-violet-600 text-white text-sm font-medium hover:bg-violet-700 transition-colors"
+            >
+              Entendido
+            </button>
           </div>
         </div>
       )}
@@ -638,20 +703,22 @@ export default function Dashboard() {
 
 // Tarjeta KPI clickeable que actúa como filtro rápido por urgencia.
 function KpiCard({
-  label, value, active, onClick, tone,
+  label, value, active, onClick, tone, Icono,
 }: {
   label: string
   value: number
   active: boolean
   onClick: () => void
-  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green'
+  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green' | 'purple'
+  Icono?: IconoTipo
 }) {
-  const tones: Record<typeof tone, { dot: string; num: string; ring: string; activeBg: string }> = {
-    neutral: { dot: 'bg-slate-400', num: 'text-slate-900', ring: 'focus-visible:ring-slate-400', activeBg: 'bg-slate-100 border-slate-400' },
-    red:     { dot: 'bg-red-500',   num: 'text-red-700',   ring: 'focus-visible:ring-red-400',   activeBg: 'bg-red-50 border-red-400' },
-    amber:   { dot: 'bg-amber-400', num: 'text-amber-700', ring: 'focus-visible:ring-amber-400', activeBg: 'bg-amber-50 border-amber-400' },
-    orange:  { dot: 'bg-orange-400',num: 'text-orange-600',ring: 'focus-visible:ring-orange-400',activeBg: 'bg-orange-50 border-orange-400' },
-    green:   { dot: 'bg-green-500', num: 'text-green-700', ring: 'focus-visible:ring-green-400', activeBg: 'bg-green-50 border-green-400' },
+  const tones: Record<typeof tone, { dot: string; num: string; ring: string; activeBg: string; icon: string }> = {
+    neutral: { dot: 'bg-slate-400', num: 'text-slate-900', ring: 'focus-visible:ring-slate-400', activeBg: 'bg-slate-100 border-slate-400', icon: 'text-slate-400' },
+    red:     { dot: 'bg-red-500',   num: 'text-red-700',   ring: 'focus-visible:ring-red-400',   activeBg: 'bg-red-50 border-red-400',    icon: 'text-red-500' },
+    amber:   { dot: 'bg-amber-400', num: 'text-amber-700', ring: 'focus-visible:ring-amber-400', activeBg: 'bg-amber-50 border-amber-400', icon: 'text-amber-500' },
+    orange:  { dot: 'bg-orange-400',num: 'text-orange-600',ring: 'focus-visible:ring-orange-400',activeBg: 'bg-orange-50 border-orange-400',icon: 'text-orange-500' },
+    green:   { dot: 'bg-green-500', num: 'text-green-700', ring: 'focus-visible:ring-green-400', activeBg: 'bg-green-50 border-green-400',  icon: 'text-green-500' },
+    purple:  { dot: 'bg-violet-500',num: 'text-violet-700',ring: 'focus-visible:ring-violet-400',activeBg: 'bg-violet-50 border-violet-400',icon: 'text-violet-600' },
   }
   const t = tones[tone]
   return (
@@ -664,7 +731,11 @@ function KpiCard({
     >
       <div className={`text-2xl font-bold tabular-nums ${t.num}`}>{value}</div>
       <div className="mt-0.5 text-xs text-slate-500 flex items-center gap-1.5">
-        {tone !== 'neutral' && <span className={`inline-block w-2.5 h-2.5 rounded-full ${t.dot}`} />}
+        {Icono ? (
+          <Icono className={`w-3.5 h-3.5 shrink-0 ${t.icon}`} />
+        ) : (
+          tone !== 'neutral' && <span className={`inline-block w-2.5 h-2.5 rounded-full ${t.dot}`} />
+        )}
         {label}
       </div>
     </button>
@@ -742,10 +813,11 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
               <span className="tabular-nums">{c.total_nna} NNA</span>
               {c.nombres_nna && <span className="text-slate-500 truncate">— {c.nombres_nna.substring(0, 60)}{c.nombres_nna.length > 60 ? '…' : ''}</span>}
             </div>
-            {/* Motivo de urgencia */}
-            {c.nivel_urgencia !== null && c.nivel_urgencia <= 6 && (
-              <div className={`mt-1 text-xs font-medium ${sem.color}`}>
-                {motivo}
+            {/* Motivo de urgencia (ícono formal + texto, color según nivel) */}
+            {motivo && (
+              <div className={`mt-1 inline-flex items-center gap-1.5 text-xs font-medium ${sem.color}`}>
+                <motivo.Icono className="w-3.5 h-3.5 shrink-0" />
+                <span>{motivo.texto}</span>
               </div>
             )}
           </div>
