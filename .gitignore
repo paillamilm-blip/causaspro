@@ -15,3 +15,7 @@ semantic-review/
 
 # Capturas de debug del bot (generadas en cada corrida, no versionar)
 bot-capturas/
+
+# Lock y logs de las tandas del bot (generados, no versionar)
+cargar-tanda.lock
+*-log.txt
