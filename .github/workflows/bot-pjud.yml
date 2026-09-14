@@ -5,6 +5,14 @@
 
 name: 🤖 Bot PJUD - Scraping automático
 
+# Nunca correr dos scrapers a la vez: el bot escribe en `notas` (contador de intentos,
+# marcas [NO EN PORTAL]/[REVISAR]) con un patrón leer-modificar-escribir no atómico. Dos
+# corridas solapadas podrían pisarse. cancel-in-progress: false = si ya hay una corriendo,
+# la nueva ESPERA (no cancela la que está scrapeando en medio de una causa).
+concurrency:
+  group: bot-pjud-scraping
+  cancel-in-progress: false
+
 on:
   # PRIMERA CARGA: cada 2 horas en la noche, descansa 7AM-1:30PM, luego normal
   schedule:
