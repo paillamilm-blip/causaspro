@@ -9,14 +9,16 @@
 // una recomendación a revisar con criterio profesional (disclaimer en la UI).
 // ============================================================
 
-/** Modelos gratuitos de OpenRouter, en orden de preferencia (fallback en cascada).
- *  Solo modelos Google (gemma) y NVIDIA (nemotron): los de meta-llama/qwen/mistral
- *  suelen estar caídos o rate-limited en el tier gratuito. Si uno da 429/error, se
- *  pasa al siguiente. */
+/** Modelos gratuitos VIGENTES de OpenRouter (verificados ago-2026), en orden de
+ *  preferencia (fallback en cascada). Solo Google (gemma) y NVIDIA (nemotron): los
+ *  tiers gratuitos de meta-llama/qwen/mistral fueron retirados. Si uno da 429/error,
+ *  se pasa al siguiente. Son los mismos modelos que ya funcionan en producción. */
 const MODELOS = [
-  'google/gemma-2-9b-it:free',
-  'nvidia/nemotron-nano-9b-v2:free',
-  'google/gemma-3-27b-it:free',
+  'google/gemma-4-31b-it:free',
+  'nvidia/nemotron-3-nano-30b-a3b:free',
+  'google/gemma-4-26b-a4b-it:free',
+  'nvidia/nemotron-3-super-120b-a12b:free',
+  'google/gemma-3n-e4b-it:free',
 ]
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
@@ -67,15 +69,22 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
       })
       clearTimeout(timer)
       if (!res.ok) {
+        // Log del cuerpo del error de OpenRouter (aparece en los logs de Vercel) para
+        // poder diagnosticar: modelo retirado (404), key inválida (401), sin crédito (402),
+        // rate-limit (429). No rompe: probamos el siguiente modelo.
+        const detalle = await res.text().catch(() => '')
+        console.warn(`[IA] ${modelo}: HTTP ${res.status} ${detalle.slice(0, 200)}`)
         ultimoError = new Error(`${modelo}: HTTP ${res.status}`)
         continue // probar siguiente modelo
       }
       const json = await res.json()
       const texto = json?.choices?.[0]?.message?.content
       if (typeof texto === 'string' && texto.trim()) return texto.trim()
+      console.warn(`[IA] ${modelo}: respuesta vacía o sin content`)
       ultimoError = new Error(`${modelo}: respuesta vacía`)
     } catch (e: any) {
       clearTimeout(timer)
+      console.warn(`[IA] ${modelo}: ${e?.name === 'AbortError' ? 'timeout' : e?.message || e}`)
       ultimoError = e
       // AbortError (timeout) o error de red → probar siguiente modelo.
     }
