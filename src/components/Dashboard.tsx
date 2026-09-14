@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
@@ -106,6 +106,18 @@ function formatFechaCorta(iso: string | null): string {
   return d.toLocaleDateString('es-CL', { day: '2-digit', month: 'short' })
 }
 
+// Texto relativo tipo "hace 2 min" para el indicador de última actualización.
+function haceCuanto(desde: Date | null, ahora: number): string {
+  if (!desde) return ''
+  const segs = Math.max(0, Math.round((ahora - desde.getTime()) / 1000))
+  if (segs < 10) return 'recién'
+  if (segs < 60) return `hace ${segs} s`
+  const mins = Math.round(segs / 60)
+  if (mins < 60) return `hace ${mins} min`
+  const horas = Math.round(mins / 60)
+  return `hace ${horas} h`
+}
+
 export default function Dashboard() {
   const [causas, setCausas] = useState<CausaResumen[]>([])
   const [loading, setLoading] = useState(true)
@@ -117,9 +129,64 @@ export default function Dashboard() {
   // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
   // fecha_ultimo_movimiento/ultima_audiencia, así que la barra de progreso no aplica.
   const [modoFallback, setModoFallback] = useState(false)
+  // Marca de tiempo de la última carga exitosa (para el indicador "actualizado hace X").
+  const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null)
+  // Evita recargas encimadas (auto-refresco + clic manual + volver a la pestaña a la vez).
+  const cargandoRef = useRef(false)
+  // Espejo de ultimaActualizacion para leerlo dentro de listeners sin stale closure.
+  const ultimaActualizacionRef = useRef<Date | null>(null)
+  // "Reloj" que refresca solo el TEXTO "hace X min" (no recarga datos). Tick cada 30s.
+  const [ahora, setAhora] = useState<number>(() => Date.now())
+
+  // Cada cuánto se refresca solo el dashboard (ms). 5 minutos.
+  const AUTO_REFRESH_MS = 5 * 60 * 1000
 
   useEffect(() => {
     loadCausas()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Auto-refresco periódico: el panel se recarga solo sin que el usuario apriete nada.
+  // - Solo cuando la pestaña está VISIBLE (no gasta recursos en segundo plano).
+  // - Al volver a la pestaña, refresca SOLO si ya pasó el intervalo (no en cada foco breve).
+  useEffect(() => {
+    let intervalo: ReturnType<typeof setInterval> | null = null
+
+    const arrancar = () => {
+      if (intervalo) return
+      intervalo = setInterval(() => {
+        // El guard cargandoRef dentro de loadCausas evita encimar recargas.
+        if (!document.hidden) loadCausas()
+      }, AUTO_REFRESH_MS)
+    }
+    const parar = () => {
+      if (intervalo) { clearInterval(intervalo); intervalo = null }
+    }
+    const onVisibilityChange = () => {
+      if (document.hidden) {
+        parar()
+      } else {
+        // Al volver a la pestaña: refrescar solo si pasó el intervalo desde la última carga
+        // (evita una consulta completa por cada cambio de foco de pocos segundos).
+        const ult = ultimaActualizacionRef.current
+        if (!ult || Date.now() - ult.getTime() >= AUTO_REFRESH_MS) loadCausas()
+        arrancar()
+      }
+    }
+
+    if (!document.hidden) arrancar()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    return () => {
+      parar()
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Tick del "hace X min": solo actualiza el texto, no recarga datos.
+  useEffect(() => {
+    const t = setInterval(() => setAhora(Date.now()), 30 * 1000)
+    return () => clearInterval(t)
   }, [])
 
   // Trae TODAS las filas de una tabla/vista paginando de a 1000 (límite por request de
@@ -164,13 +231,20 @@ export default function Dashboard() {
   }
 
   async function loadCausas() {
+    // Guard: evitar recargas encimadas (auto-refresco + clic manual + volver a la pestaña).
+    if (cargandoRef.current) return
+    cargandoRef.current = true
     // Si ya hay causas en pantalla, es una recarga manual: no borramos la vista con el
     // skeleton, solo mostramos el spinner en el botón. La primera carga sí usa skeleton.
     if (causas.length > 0) setRefreshing(true)
     else setLoading(true)
     setError(null)
     setModoFallback(false)
-    
+
+    // try/finally: pase lo que pase (incluido un rechazo de red no controlado por fetchAll),
+    // SIEMPRE liberamos el guard y los flags de carga. Sin esto, un fetch rechazado dejaría
+    // cargandoRef en true para siempre y el dashboard no volvería a recargar nunca.
+    try {
     // Intentar con la vista (tiene el semáforo). Traemos TODAS las causas (paginado).
     // Ahora v_causas_ranking lee de una MATERIALIZED VIEW (mv_causas_ranking), así que ya
     // NO hay riesgo de timeout: el .order('id') externo es barato sobre la tabla materializada.
@@ -223,9 +297,7 @@ export default function Dashboard() {
       
       if (directErr) {
         setError(directErr.message)
-        setLoading(false)
-        setRefreshing(false) // no dejar el botón "Actualizando…" colgado si el fallback falla
-        return
+        return // el finally libera guard + loading + refreshing
       }
       
       // Mapear a formato compatible (sin campos de urgencia)
@@ -249,9 +321,20 @@ export default function Dashboard() {
     if (data) {
       setCausas(data)
       setTotalCausas(data.length)
+      const ahoraFecha = new Date()
+      setUltimaActualizacion(ahoraFecha) // registrar hora de la carga exitosa
+      ultimaActualizacionRef.current = ahoraFecha
     }
-    setLoading(false)
-    setRefreshing(false)
+    } catch (e) {
+      // Rechazo inesperado (red caída, etc.). No dejamos el panel roto en silencio:
+      // si aún no hay datos en pantalla, mostramos error; si ya había, se mantienen.
+      console.warn('loadCausas: error inesperado:', e)
+      if (causas.length === 0) setError('No se pudo cargar. Reintentá en un momento.')
+    } finally {
+      setLoading(false)
+      setRefreshing(false)
+      cargandoRef.current = false // SIEMPRE liberar el guard
+    }
   }
 
   // Filtro por TEXTO (buscador). Base para los contadores KPI.
@@ -368,14 +451,21 @@ export default function Dashboard() {
             )}
           </p>
         </div>
-        <button
-          onClick={loadCausas}
-          disabled={refreshing}
-          className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors disabled:opacity-60 disabled:cursor-wait focus:outline-none focus:ring-2 focus:ring-slate-300"
-        >
-          <IconRefresh className={`w-4 h-4 ${refreshing ? 'animate-spin motion-reduce:animate-none' : ''}`} />
-          {refreshing ? 'Actualizando…' : 'Actualizar'}
-        </button>
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={loadCausas}
+            disabled={refreshing}
+            className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors disabled:opacity-60 disabled:cursor-wait focus:outline-none focus:ring-2 focus:ring-slate-300"
+          >
+            <IconRefresh className={`w-4 h-4 ${refreshing ? 'animate-spin motion-reduce:animate-none' : ''}`} />
+            {refreshing ? 'Actualizando…' : 'Actualizar'}
+          </button>
+          {ultimaActualizacion && (
+            <span className="text-xs text-slate-400 whitespace-nowrap">
+              Actualizado {haceCuanto(ultimaActualizacion, ahora)} · se actualiza sola
+            </span>
+          )}
+        </div>
       </div>
 
       {/* KPIs clickeables (actúan como filtro rápido por urgencia) */}
