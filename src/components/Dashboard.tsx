@@ -3,6 +3,13 @@ import { useEffect, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
+import {
+  IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
+  IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
+} from './icons'
+
+// Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
+type FiltroUrgencia = 'todas' | 'criticas' | 'atencion' | 'revisar' | 'estables'
 
 // Color del chip de materia según su grupo práctico.
 const GRUPO_CHIP: Record<GrupoMateria, string> = {
@@ -102,7 +109,9 @@ function formatFechaCorta(iso: string | null): string {
 export default function Dashboard() {
   const [causas, setCausas] = useState<CausaResumen[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [filtro, setFiltro] = useState('')
+  const [filtroUrgencia, setFiltroUrgencia] = useState<FiltroUrgencia>('todas')
   const [totalCausas, setTotalCausas] = useState(0)
   const [error, setError] = useState<string | null>(null)
   // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
@@ -155,7 +164,10 @@ export default function Dashboard() {
   }
 
   async function loadCausas() {
-    setLoading(true)
+    // Si ya hay causas en pantalla, es una recarga manual: no borramos la vista con el
+    // skeleton, solo mostramos el spinner en el botón. La primera carga sí usa skeleton.
+    if (causas.length > 0) setRefreshing(true)
+    else setLoading(true)
     setError(null)
     setModoFallback(false)
     
@@ -184,6 +196,7 @@ export default function Dashboard() {
       if (directErr) {
         setError(directErr.message)
         setLoading(false)
+        setRefreshing(false) // no dejar el botón "Actualizando…" colgado si el fallback falla
         return
       }
       
@@ -210,9 +223,11 @@ export default function Dashboard() {
       setTotalCausas(data.length)
     }
     setLoading(false)
+    setRefreshing(false)
   }
 
-  const causasFiltradas = causas.filter(c => {
+  // Filtro por TEXTO (buscador). Base para los contadores KPI.
+  const causasPorTexto = causas.filter(c => {
     if (!filtro) return true
     const q = filtro.toLowerCase()
     return (
@@ -230,17 +245,51 @@ export default function Dashboard() {
   const conDatos = causas.filter(c => c.fecha_ultimo_movimiento || c.ultima_audiencia).length
   const pctDatos = totalCausas > 0 ? Math.round((conDatos / totalCausas) * 100) : 0
 
-  // Agrupar por nivel de urgencia
-  const criticas = causasFiltradas.filter(c => (c.nivel_urgencia || 10) <= 2)
-  const atencion = causasFiltradas.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
-  const revisar = causasFiltradas.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
-  const estables = causasFiltradas.filter(c => (c.nivel_urgencia || 10) > 6)
+  // Agrupar por nivel de urgencia (sobre el filtro de texto, así los KPI no cambian
+  // cuando el usuario aplica el filtro rápido por urgencia).
+  const criticas = causasPorTexto.filter(c => (c.nivel_urgencia || 10) <= 2)
+  const atencion = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
+  const revisar = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
+  const estables = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 6)
+
+  // Filtro rápido por urgencia (clic en tarjeta KPI). No afecta los contadores de arriba.
+  const causasFiltradas =
+    filtroUrgencia === 'criticas' ? criticas :
+    filtroUrgencia === 'atencion' ? atencion :
+    filtroUrgencia === 'revisar' ? revisar :
+    filtroUrgencia === 'estables' ? estables :
+    causasPorTexto
+
+  // Resumen ejecutivo: la frase que Paula lee primero.
+  const pendientesHoy = criticas.length + atencion.length
+  const saludo = (() => {
+    const h = new Date().getHours()
+    if (h < 12) return 'Buenos días'
+    if (h < 20) return 'Buenas tardes'
+    return 'Buenas noches'
+  })()
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="animate-spin text-3xl">⚙️</div>
-        <span className="ml-3 text-gray-500">Cargando causas...</span>
+      <div className="space-y-6" aria-busy="true" aria-label="Cargando causas">
+        {/* Skeleton del header */}
+        <div className="space-y-2">
+          <div className="h-7 w-56 rounded-lg bg-slate-200 animate-pulse" />
+          <div className="h-4 w-80 rounded bg-slate-100 animate-pulse" />
+        </div>
+        {/* Skeleton de los KPI */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          {Array.from({ length: 5 }).map((_, i) => (
+            <div key={i} className="h-[76px] rounded-xl bg-slate-100 border border-slate-200 animate-pulse" />
+          ))}
+        </div>
+        {/* Skeleton de la barra + tarjetas */}
+        <div className="h-16 rounded-xl bg-slate-100 border border-slate-200 animate-pulse" />
+        <div className="space-y-2">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-[86px] rounded-xl bg-slate-100 border border-slate-200 animate-pulse" />
+          ))}
+        </div>
       </div>
     )
   }
@@ -248,13 +297,19 @@ export default function Dashboard() {
   if (error) {
     return (
       <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-center">
+        <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-red-100 text-red-600 mb-3">
+          <IconAlert className="w-5 h-5" />
+        </div>
         <p className="text-red-700 font-medium">Error al cargar datos</p>
         <p className="text-red-500 text-sm mt-1">{error}</p>
-        <p className="text-gray-500 text-xs mt-3">
+        <p className="text-slate-500 text-xs mt-3">
           Si ves un error sobre la vista, ejecuta el SQL de actualización en Supabase.
         </p>
-        <button onClick={loadCausas} className="mt-4 px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700">
-          Reintentar
+        <button
+          onClick={loadCausas}
+          className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-300"
+        >
+          <IconRefresh className="w-4 h-4" /> Reintentar
         </button>
       </div>
     )
@@ -262,129 +317,161 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      {/* Header con fecha */}
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">Panel de Control</h1>
-          <p className="text-sm text-gray-400">
-            Actualizado: {new Date().toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}
+      {/* Header ejecutivo: saludo + resumen inteligente + actualizar */}
+      <div className="flex flex-wrap justify-between items-start gap-3">
+        <div className="min-w-0">
+          <h1 className="text-2xl font-bold tracking-tight text-slate-900">Panel de Control</h1>
+          <p className="mt-1 text-sm text-slate-500">
+            {saludo}, Paula.{' '}
+            {pendientesHoy > 0 ? (
+              <span className="text-slate-700">
+                Hoy tienes{' '}
+                {criticas.length > 0 && (
+                  <span className="font-semibold text-red-600">{criticas.length} {criticas.length === 1 ? 'causa crítica' : 'causas críticas'}</span>
+                )}
+                {criticas.length > 0 && atencion.length > 0 && ' y '}
+                {atencion.length > 0 && (
+                  <span className="font-semibold text-amber-600">{atencion.length} {atencion.length === 1 ? 'en atención' : 'en atención'}</span>
+                )}
+                {'.'}
+              </span>
+            ) : (
+              <span className="text-slate-700">Sin causas urgentes por ahora. Todo bajo control.</span>
+            )}
           </p>
         </div>
-        <button onClick={loadCausas} className="text-sm px-3 py-1.5 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-600">
-          🔄 Actualizar
+        <button
+          onClick={loadCausas}
+          disabled={refreshing}
+          className="inline-flex items-center gap-2 text-sm px-3 py-2 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors disabled:opacity-60 disabled:cursor-wait focus:outline-none focus:ring-2 focus:ring-slate-300"
+        >
+          <IconRefresh className={`w-4 h-4 ${refreshing ? 'animate-spin motion-reduce:animate-none' : ''}`} />
+          {refreshing ? 'Actualizando…' : 'Actualizar'}
         </button>
       </div>
 
-      {/* Stats */}
+      {/* KPIs clickeables (actúan como filtro rápido por urgencia) */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-        <div className="bg-white rounded-xl p-4 border shadow-sm">
-          <div className="text-2xl font-bold text-gray-800">{totalCausas}</div>
-          <div className="text-xs text-gray-500">Total causas</div>
-        </div>
-        <div className="bg-red-50 rounded-xl p-4 border border-red-200">
-          <div className="text-2xl font-bold text-red-700">{criticas.length}</div>
-          <div className="text-xs text-red-600 flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full bg-red-500"></span> Críticas
-          </div>
-        </div>
-        <div className="bg-yellow-50 rounded-xl p-4 border border-yellow-200">
-          <div className="text-2xl font-bold text-yellow-700">{atencion.length}</div>
-          <div className="text-xs text-yellow-600 flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full bg-yellow-400"></span> Atención
-          </div>
-        </div>
-        <div className="bg-orange-50 rounded-xl p-4 border border-orange-200">
-          <div className="text-2xl font-bold text-orange-600">{revisar.length}</div>
-          <div className="text-xs text-orange-500 flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full bg-orange-400"></span> Revisar
-          </div>
-        </div>
-        <div className="bg-green-50 rounded-xl p-4 border border-green-200">
-          <div className="text-2xl font-bold text-green-700">{estables.length}</div>
-          <div className="text-xs text-green-600 flex items-center gap-1">
-            <span className="inline-block w-3 h-3 rounded-full bg-green-500"></span> Estables
-          </div>
-        </div>
+        <KpiCard
+          label="Total causas" value={totalCausas}
+          active={filtroUrgencia === 'todas'}
+          onClick={() => setFiltroUrgencia('todas')}
+          tone="neutral"
+        />
+        <KpiCard
+          label="Críticas" value={criticas.length}
+          active={filtroUrgencia === 'criticas'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'criticas' ? 'todas' : 'criticas')}
+          tone="red"
+        />
+        <KpiCard
+          label="Atención" value={atencion.length}
+          active={filtroUrgencia === 'atencion'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'atencion' ? 'todas' : 'atencion')}
+          tone="amber"
+        />
+        <KpiCard
+          label="Revisar" value={revisar.length}
+          active={filtroUrgencia === 'revisar'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'revisar' ? 'todas' : 'revisar')}
+          tone="orange"
+        />
+        <KpiCard
+          label="Estables" value={estables.length}
+          active={filtroUrgencia === 'estables'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'estables' ? 'todas' : 'estables')}
+          tone="green"
+        />
       </div>
 
       {/* Progreso de llenado de datos por el bot (solo con la vista; el fallback de
           tabla directa no trae fecha_ultimo_movimiento/ultima_audiencia). */}
       {!modoFallback && (
-      <div className="bg-white rounded-xl p-4 border shadow-sm">
+      <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm font-medium text-gray-700">
-            📥 Datos cargados desde el portal
+          <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
+            <IconDownload className="w-4 h-4 text-slate-400" />
+            Datos cargados desde el portal
           </span>
-          <span className="text-sm font-semibold text-blue-600">
-            {conDatos} de {totalCausas} causas ({pctDatos}%)
+          <span className="text-sm font-semibold text-slate-700 tabular-nums">
+            {conDatos} de {totalCausas} <span className="text-slate-400">({pctDatos}%)</span>
           </span>
         </div>
-        <div className="w-full bg-gray-100 rounded-full h-2.5 overflow-hidden">
+        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
           <div
-            className="bg-blue-500 h-2.5 rounded-full transition-all duration-500"
+            className="bg-slate-800 h-2 rounded-full transition-[width] duration-500 ease-out"
             style={{ width: `${pctDatos}%` }}
           />
         </div>
         {conDatos < totalCausas && (
-          <p className="text-xs text-gray-400 mt-1.5">
+          <p className="text-xs text-slate-400 mt-1.5">
             Faltan {totalCausas - conDatos} causas por revisar con el bot (movimientos/audiencias).
           </p>
         )}
       </div>
       )}
 
-      {/* Buscador */}
-      <div className="relative">
-        <input
-          type="text"
-          placeholder="🔍 Buscar por RIT, caratulado, NNA, programa..."
-          value={filtro}
-          onChange={(e) => setFiltro(e.target.value)}
-          className="w-full px-4 py-3 rounded-xl border bg-white shadow-sm focus:ring-2 focus:ring-blue-200 focus:border-blue-400 outline-none"
-        />
-        {filtro && (
-          <button 
-            onClick={() => setFiltro('')}
-            className="absolute right-3 top-3 text-gray-400 hover:text-gray-600"
-          >
-            ✕
-          </button>
-        )}
+      {/* Buscador (sticky: queda visible al hacer scroll sobre cientos de causas) */}
+      <div className="sticky top-0 z-10 -mx-1 px-1 py-1 bg-slate-50/80 backdrop-blur supports-[backdrop-filter]:bg-slate-50/60">
+        <div className="relative">
+          <IconSearch className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Buscar por RIT, caratulado, NNA, programa…"
+            value={filtro}
+            onChange={(e) => setFiltro(e.target.value)}
+            className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-800 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-300 focus:border-slate-400 outline-none"
+          />
+          {filtro && (
+            <button
+              onClick={() => setFiltro('')}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 rounded p-0.5 focus:outline-none focus:ring-2 focus:ring-slate-300"
+            >
+              <IconX className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Leyenda */}
-      <div className="flex flex-wrap gap-3 text-xs text-gray-500">
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Traslado curador ≤30d / Audiencia ≤2d / Medida por vencer</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-yellow-400"></span> Movimiento nuevo ≤7d / Audiencia ≤7d / Traslado curador</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Estancada: sin movimiento &gt;90d</span>
-        <span className="flex items-center gap-1"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Con actividad reciente</span>
+      {/* Leyenda del semáforo */}
+      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-red-500"></span> Traslado curador ≤30d / Audiencia ≤2d / Medida por vencer</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-amber-400"></span> Movimiento nuevo ≤7d / Audiencia ≤7d / Traslado curador</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-orange-400"></span> Estancada: sin movimiento &gt;90d</span>
+        <span className="flex items-center gap-1.5"><span className="inline-block w-2.5 h-2.5 rounded-full bg-green-500"></span> Con actividad reciente</span>
       </div>
 
-      {/* 🚨 ALERTA: TRASLADOS AL CURADOR */}
+      {/* ALERTA: TRASLADOS AL CURADOR (la señal más accionable para el curador) */}
       {causasFiltradas.filter(c => c.tiene_traslado_curador).length > 0 && (
-        <div className="bg-red-100 border-2 border-red-400 rounded-xl p-4 animate-pulse">
+        <div className="bg-red-50 border border-red-300 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
-            <span className="text-2xl">🚨</span>
-            <h2 className="font-bold text-red-800 text-lg">NUEVOS TRASLADOS AL CURADOR</h2>
-            <span className="bg-red-600 text-white text-xs px-2 py-0.5 rounded-full">
+            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-red-100 text-red-600">
+              <IconAlert className="w-4 h-4" />
+            </span>
+            <h2 className="font-bold text-red-800 text-base">Nuevos traslados al curador</h2>
+            <span className="bg-red-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">
               {causasFiltradas.filter(c => c.tiene_traslado_curador).length}
             </span>
           </div>
           <div className="space-y-2">
             {causasFiltradas.filter(c => c.tiene_traslado_curador).map(c => (
-              <Link key={c.id} href={`/causa/${c.id}`}>
-                <div className="bg-white border border-red-300 rounded-lg p-3 hover:shadow-md transition cursor-pointer">
-                  <div className="flex items-center justify-between">
-                    <div>
+              <Link key={c.id} href={`/causa/${c.id}`} className="block group">
+                <div className="bg-white border border-red-200 rounded-lg p-3 transition-shadow group-hover:shadow-md">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0">
                       <span className="font-mono font-bold text-red-700">{c.rit}</span>
-                      {c.caratulado && <span className="ml-2 text-gray-700">{c.caratulado}</span>}
+                      {c.caratulado && <span className="ml-2 text-slate-700">{c.caratulado}</span>}
                     </div>
-                    <div className="text-xs text-red-600 font-medium">
-                      {c.ultimo_movimiento || 'TRASLADO AL CURADOR'}
+                    <div className="text-xs text-red-600 font-medium shrink-0 text-right">
+                      {c.ultimo_movimiento || 'Traslado al curador'}
                     </div>
                   </div>
                   {c.nombres_nna && (
-                    <div className="text-xs text-gray-500 mt-1">👶 {c.nombres_nna.substring(0, 60)}</div>
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                      <IconUsers className="w-3.5 h-3.5 text-slate-400" />
+                      {c.nombres_nna.substring(0, 60)}
+                    </div>
                   )}
                 </div>
               </Link>
@@ -408,12 +495,61 @@ export default function Dashboard() {
       )}
 
       {causasFiltradas.length === 0 && (
-        <div className="text-center py-12 text-gray-400">
-          <p className="text-4xl mb-2">🔍</p>
-          <p>No se encontraron causas con ese criterio</p>
+        <div className="text-center py-14 px-4">
+          <div className="mx-auto flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 text-slate-400 mb-3">
+            <IconInbox className="w-6 h-6" />
+          </div>
+          <p className="text-slate-600 font-medium">
+            {filtro || filtroUrgencia !== 'todas'
+              ? 'No se encontraron causas con ese criterio'
+              : 'Aún no hay causas cargadas'}
+          </p>
+          {(filtro || filtroUrgencia !== 'todas') && (
+            <button
+              onClick={() => { setFiltro(''); setFiltroUrgencia('todas') }}
+              className="mt-3 text-sm text-slate-500 hover:text-slate-800 underline underline-offset-2"
+            >
+              Quitar filtros
+            </button>
+          )}
         </div>
       )}
     </div>
+  )
+}
+
+// Tarjeta KPI clickeable que actúa como filtro rápido por urgencia.
+function KpiCard({
+  label, value, active, onClick, tone,
+}: {
+  label: string
+  value: number
+  active: boolean
+  onClick: () => void
+  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green'
+}) {
+  const tones: Record<typeof tone, { dot: string; num: string; ring: string; activeBg: string }> = {
+    neutral: { dot: 'bg-slate-400', num: 'text-slate-900', ring: 'focus-visible:ring-slate-400', activeBg: 'bg-slate-100 border-slate-400' },
+    red:     { dot: 'bg-red-500',   num: 'text-red-700',   ring: 'focus-visible:ring-red-400',   activeBg: 'bg-red-50 border-red-400' },
+    amber:   { dot: 'bg-amber-400', num: 'text-amber-700', ring: 'focus-visible:ring-amber-400', activeBg: 'bg-amber-50 border-amber-400' },
+    orange:  { dot: 'bg-orange-400',num: 'text-orange-600',ring: 'focus-visible:ring-orange-400',activeBg: 'bg-orange-50 border-orange-400' },
+    green:   { dot: 'bg-green-500', num: 'text-green-700', ring: 'focus-visible:ring-green-400', activeBg: 'bg-green-50 border-green-400' },
+  }
+  const t = tones[tone]
+  return (
+    <button
+      onClick={onClick}
+      aria-pressed={active}
+      className={`text-left rounded-xl p-4 border shadow-sm transition-colors cursor-pointer outline-none focus-visible:ring-2 ${t.ring} ${
+        active ? t.activeBg : 'bg-white border-slate-200 hover:bg-slate-50'
+      }`}
+    >
+      <div className={`text-2xl font-bold tabular-nums ${t.num}`}>{value}</div>
+      <div className="mt-0.5 text-xs text-slate-500 flex items-center gap-1.5">
+        {tone !== 'neutral' && <span className={`inline-block w-2.5 h-2.5 rounded-full ${t.dot}`} />}
+        {label}
+      </div>
+    </button>
   )
 }
 
@@ -423,13 +559,14 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
 
   return (
     <div>
-      <button 
+      <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm font-bold text-gray-600 uppercase tracking-wide mb-3 hover:text-gray-800"
+        aria-expanded={expanded}
+        className="flex items-center gap-2 text-sm font-bold text-slate-600 uppercase tracking-wide mb-3 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
       >
-        <span>{expanded ? '▼' : '▶'}</span>
+        <IconChevron className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
         <span className={`inline-block w-3 h-3 rounded-full ${dotColor}`}></span>
-        <span>{title} ({causas.length})</span>
+        <span>{title} <span className="text-slate-400 tabular-nums">({causas.length})</span></span>
       </button>
       {showing.length > 0 && (
         <div className="space-y-2">
@@ -437,15 +574,15 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
             <CausaCard key={c.id} causa={c} />
           ))}
           {!expanded && causas.length > 5 && (
-            <button 
+            <button
               onClick={() => setExpanded(true)}
-              className="w-full text-center py-2 text-sm text-blue-500 hover:text-blue-700 bg-blue-50 rounded-lg"
+              className="w-full text-center py-2 text-sm text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
             >
-              Ver {causas.length - 5} más...
+              Ver {causas.length - 5} más
             </button>
           )}
           {expanded && causas.length > 50 && (
-            <p className="text-sm text-gray-400 text-center">Mostrando 50 de {causas.length}</p>
+            <p className="text-sm text-slate-400 text-center">Mostrando 50 de {causas.length}</p>
           )}
         </div>
       )}
@@ -460,13 +597,13 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
   const materia = materiaDeTipo(c.tipo) || materiaDeRit(c.rit)
   
   return (
-    <Link href={`/causa/${c.id}`}>
-      <div className={`border rounded-xl p-4 hover:shadow-md transition cursor-pointer ${sem.bg}`}>
-        <div className="flex items-start justify-between">
+    <Link href={`/causa/${c.id}`} className="block group">
+      <div className={`border rounded-xl p-4 transition-shadow duration-200 group-hover:shadow-md motion-reduce:transition-none ${sem.bg}`}>
+        <div className="flex items-start justify-between gap-3">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={`inline-block w-4 h-4 rounded-full ${sem.dotColor} shadow-sm`}></span>
-              <span className="font-mono font-bold text-sm text-gray-800">{c.rit}</span>
+              <span className={`inline-block w-3 h-3 rounded-full ${sem.dotColor} shadow-sm`}></span>
+              <span className="font-mono font-bold text-sm text-slate-800">{c.rit}</span>
               {materia && (
                 <span
                   title={materia.descripcion}
@@ -476,15 +613,16 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
                 </span>
               )}
               {c.caratulado && (
-                <span className="font-semibold text-gray-700 truncate">{c.caratulado}</span>
+                <span className="font-semibold text-slate-700 truncate">{c.caratulado}</span>
               )}
               {c.programa_vigente && (
-                <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full shrink-0">{c.programa_vigente}</span>
+                <span className="text-xs bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full shrink-0">{c.programa_vigente}</span>
               )}
             </div>
-            <div className="mt-1 text-sm text-gray-600">
-              <span>👶 {c.total_nna} NNA</span>
-              {c.nombres_nna && <span className="ml-1 text-gray-500">- {c.nombres_nna.substring(0, 60)}{c.nombres_nna.length > 60 ? '...' : ''}</span>}
+            <div className="mt-1.5 flex items-center gap-1.5 text-sm text-slate-600">
+              <IconUsers className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+              <span className="tabular-nums">{c.total_nna} NNA</span>
+              {c.nombres_nna && <span className="text-slate-500 truncate">— {c.nombres_nna.substring(0, 60)}{c.nombres_nna.length > 60 ? '…' : ''}</span>}
             </div>
             {/* Motivo de urgencia */}
             {c.nivel_urgencia !== null && c.nivel_urgencia <= 6 && (
@@ -493,30 +631,36 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
               </div>
             )}
           </div>
-          <div className="text-right text-xs text-gray-500 ml-3 whitespace-nowrap shrink-0">
+          <div className="text-right text-xs text-slate-500 whitespace-nowrap shrink-0">
             {c.proxima_audiencia ? (
               <div>
-                <div className="font-medium">📅 {formatFecha(c.proxima_audiencia)}</div>
+                <div className="inline-flex items-center gap-1 font-medium text-slate-600">
+                  <IconCalendar className="w-3.5 h-3.5 text-slate-400" />
+                  {formatFecha(c.proxima_audiencia)}
+                </div>
                 <div className={`font-bold ${sem.color}`}>
-                  {c.dias_para_audiencia !== null && c.dias_para_audiencia <= 0 ? '¡HOY!' : 
-                   c.dias_para_audiencia !== null && c.dias_para_audiencia <= 1 ? '¡Mañana!' : 
+                  {c.dias_para_audiencia !== null && c.dias_para_audiencia <= 0 ? '¡HOY!' :
+                   c.dias_para_audiencia !== null && c.dias_para_audiencia <= 1 ? '¡Mañana!' :
                    c.dias_para_audiencia !== null ? `En ${Math.round(c.dias_para_audiencia)} días` : ''}
                 </div>
               </div>
             ) : c.ultima_audiencia ? (
               <div>
-                <div className="text-gray-400">Última: {formatFechaCorta(c.ultima_audiencia)}</div>
+                <div className="text-slate-400">Última: {formatFechaCorta(c.ultima_audiencia)}</div>
                 {c.dias_sin_actividad && c.dias_sin_actividad > 15 && (
-                  <div className="text-orange-500 font-medium">{Math.round(c.dias_sin_actividad)}d inactiva</div>
+                  <div className="inline-flex items-center gap-1 text-orange-500 font-medium">
+                    <IconClock className="w-3 h-3" />
+                    {Math.round(c.dias_sin_actividad)}d inactiva
+                  </div>
                 )}
               </div>
             ) : (
-              <span className="text-gray-300">Sin audiencia</span>
+              <span className="text-slate-300">Sin audiencia</span>
             )}
           </div>
         </div>
         {c.estado && (
-          <div className="mt-2 text-xs text-gray-400 italic truncate">{c.estado}</div>
+          <div className="mt-2 text-xs text-slate-400 italic truncate">{c.estado}</div>
         )}
       </div>
     </Link>
