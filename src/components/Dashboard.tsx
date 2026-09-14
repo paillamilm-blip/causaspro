@@ -176,14 +176,41 @@ export default function Dashboard() {
     // la haría materializar entera → timeout del rol anon → fallback falso "todo Estable".
     let { data, error: err } = await fetchAll('v_causas_ranking', '*')
 
-    // Si la vista falla, usar tabla directa (sin semáforo pero funciona)
+    // Si la consulta directa (rol anon) falla —típicamente por statement_timeout (57014)
+    // sobre la vista pesada—, NO caemos de inmediato al fallback "todo Estable". Primero
+    // intentamos el endpoint server-side /api/ranking, que corre con service_role (sin ese
+    // timeout) y devuelve el MISMO semáforo real. Así el panel muestra datos correctos aunque
+    // la vista sea lenta para el navegador anónimo.
     if (err) {
-      setModoFallback(true)
-      // Log detallado para diagnóstico: code (ej. 57014 = statement timeout), details y hint.
       console.warn(
-        'Vista v_causas_ranking no disponible, usando tabla directa:',
+        'Vista v_causas_ranking (anon) falló, probando /api/ranking (service_role):',
         JSON.stringify({ message: err.message, code: (err as any).code, details: (err as any).details, hint: (err as any).hint }),
       )
+      try {
+        // El endpoint exige token (sirve PII de menores). Se manda el token público.
+        const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+        const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+        const res = await fetch(`/api/ranking${qs}`, { cache: 'no-store' })
+        if (res.ok) {
+          const json = await res.json()
+          if (Array.isArray(json?.causas)) {
+            data = json.causas
+            err = null // recuperado con el semáforo real: NO es modo fallback
+          } else {
+            console.warn('/api/ranking respondió 200 pero sin arreglo causas:', json)
+          }
+        } else {
+          console.warn('/api/ranking respondió con error:', res.status)
+        }
+      } catch (e) {
+        console.warn('/api/ranking no disponible:', e)
+      }
+    }
+
+    // Si NI la vista (anon) NI el endpoint server-side funcionaron, recién ahí usamos la
+    // tabla directa (sin semáforo pero funciona: al menos muestra las causas).
+    if (err) {
+      setModoFallback(true)
       // Sobre la tabla física sí pedimos desempate por id: es barato (id indexado) y protege
       // la paginación si algún día hay >1000 causas.
       const { data: directData, error: directErr } = await fetchAll(
