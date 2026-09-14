@@ -1,0 +1,58 @@
+@echo off
+REM ============================================================
+REM CausasPro - CARGAR 3 CAUSAS (goteo entre sesiones)
+REM ============================================================
+REM
+REM QUE HACE:
+REM   Carga solo 3 causas del portal PJUD y para. Pensado para
+REM   apretar (doble clic) entre reuniones/sesiones y cargar la
+REM   base de a poco, sin tandas grandes ni riesgo de marca de bot.
+REM
+REM COMO USAR:
+REM   1. Copia este archivo como "cargar-3-causas.bat"
+REM   2. Reemplaza los valores CAMBIAR_* con tus datos reales
+REM   3. Doble clic en "cargar-3-causas.bat" cada vez que quieras
+REM      cargar 3 causas mas.
+REM   4. NUNCA subas el .bat con secretos a git (esta en .gitignore)
+REM
+REM PRIMERA VEZ (instalar dependencias, una sola vez):
+REM   npm install
+REM   npx playwright install chromium
+REM ============================================================
+
+cd /d "%~dp0"
+
+REM --- TUS DATOS (reemplazar) ---
+set PJUD_RUT=CAMBIAR_POR_TU_RUT
+set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
+set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
+set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
+
+REM --- CONFIG DEL GOTEO ---
+REM Cargar exactamente 3 causas (las que no tienen datos todavia, priorizadas).
+set BOT_MAX_CAUSAS=3
+
+REM Ignorar el chequeo de horario laboral (para poder correr cuando quieras).
+REM Si preferis respetar el horario chileno 8-18h, pone REM adelante de la linea:
+set SKIP_HOUR_CHECK=1
+
+REM Si la descarga de Chromium de Playwright falla, usa tu Chrome instalado
+REM (quita el "REM " del inicio de la siguiente linea):
+REM set BOT_USE_SYSTEM_CHROME=1
+
+REM Modo NORMAL (no test): scrapea 3 causas sin datos y para. Invisible.
+REM Deja un log de la corrida en cargar-3-causas-log.txt
+echo [%date% %time%] Iniciando carga de 3 causas... >> cargar-3-causas-log.txt
+call npm run bot >> cargar-3-causas-log.txt 2>&1
+echo [%date% %time%] Carga finalizada. >> cargar-3-causas-log.txt
+echo. >> cargar-3-causas-log.txt
+
+echo.
+echo ============================================================
+echo   Listo. Se cargaron hasta 3 causas.
+echo   Las causas nuevas apareceran en el dashboard en ~15 min
+echo   (el sistema refresca la vista solo).
+echo   Detalle de la corrida en: cargar-3-causas-log.txt
+echo ============================================================
+echo.
+pause

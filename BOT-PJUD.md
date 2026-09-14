@@ -73,6 +73,23 @@ npm run bot:test
 > ⚠️ El `.bat` con tus claves **NO se sube a git** (está en `.gitignore`). Solo se
 > versiona el `.bat.example` sin secretos.
 
+### 💧 Cargar de a poco: "Cargar 3 causas" (goteo entre sesiones)
+
+Para llenar la base de a poco (ideal para apretar entre reuniones sin correr
+tandas grandes ni arriesgar la marca de bot), usa la plantilla dedicada:
+
+1. Copia `cargar-3-causas.bat.example` como `cargar-3-causas.bat`.
+2. Reemplaza los `CAMBIAR_*` con tus datos (igual que los otros `.bat`).
+3. **Doble clic** en `cargar-3-causas.bat` cada vez que quieras cargar 3 causas más.
+
+Carga exactamente **3 causas sin datos** (priorizadas) y para. Usa
+`BOT_MAX_CAUSAS=3` con el modo normal. Las causas nuevas aparecen en el dashboard
+en ~15 min (la vista se refresca sola por cron). Deja un log en
+`cargar-3-causas-log.txt`.
+
+> Para cargar otra cantidad, cambia `set BOT_MAX_CAUSAS=3` por el número que
+> quieras (ej. `5`). Recomendado no pasar de ~25 por corrida.
+
 ### Requisito de base de datos
 Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
 - `schema.sql` (tablas base: causas, audiencias, ...)
