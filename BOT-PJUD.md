@@ -73,6 +73,35 @@ npm run bot:test
 > ⚠️ El `.bat` con tus claves **NO se sube a git** (está en `.gitignore`). Solo se
 > versiona el `.bat.example` sin secretos.
 
+### 🗓️ Dejar tandas programadas (Programador de Tareas de Windows)
+
+Para avanzar fuerte en pocos días (ej. cerrar la base antes de una fecha), usa
+`cargar-tanda.bat` (25 causas por tanda) programado en Windows:
+
+1. Copia `cargar-tanda.bat.example` como `cargar-tanda.bat` y pon tus datos.
+2. Abre el **Programador de tareas** de Windows (buscar "Programador de tareas").
+3. **Crear tarea básica** → nombre: `CausasPro tanda`.
+4. **Desencadenador**: Diariamente → hora de inicio **12:00** → repetir cada
+   **40 minutos** durante **6 horas** (así corre ~9 tandas entre 12:00 y 18:00).
+   - (En "Desencadenadores → Editar → Configuración avanzada": marcar
+     "Repetir cada: 40 minutos" / "durante: 6 horas".)
+5. **Acción**: Iniciar un programa → Programa: la ruta completa a
+   `cargar-tanda.bat` (ej. `C:\Users\srtaj\OneDrive\Escritorio\causaspro\cargar-tanda.bat`).
+6. **Condiciones**: dejar la PC prendida en ese horario (ya no depende de nada más).
+
+**Seguridad incorporada:**
+- El `.bat` tiene un **lock** (`cargar-tanda.lock`): si una tanda aún corre, la
+  siguiente se cancela sola → nunca dos bots del mismo RUT a la vez.
+- **Respeta el horario laboral chileno** (8-18h): fuera de ese horario el bot se
+  auto-cancela (no seteamos `SKIP_HOUR_CHECK`).
+- Cada tanda deja registro en `cargar-tanda-log.txt`.
+
+> ⚠️ Si Paula está usando el **portal del PJUD** (no el dashboard) al mismo tiempo,
+> pueden pisarse la sesión. El dashboard (causaspro.vercel.app) NO toca el PJUD, así
+> que puede usarlo sin problema mientras corren las tandas.
+> Si aparece CAPTCHA o la tasa se desploma: **desactiva la tarea programada** ese día
+> y retoma al siguiente (el descanso "limpia" la marca de bot).
+
 ### Requisito de base de datos
 Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
 - `schema.sql` (tablas base: causas, audiencias, ...)
