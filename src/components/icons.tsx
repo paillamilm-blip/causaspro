@@ -112,3 +112,42 @@ export function IconInbox({ className, ...p }: IconProps) {
     </svg>
   )
 }
+
+export function IconCheck({ className, ...p }: IconProps) {
+  return (
+    <svg {...base} className={className} {...p} aria-hidden="true">
+      <path d="M20 6 9 17l-5-5" />
+    </svg>
+  )
+}
+
+// Escudo con check: representa el traslado al curador (rol de protección/tutela del NNA).
+export function IconShield({ className, ...p }: IconProps) {
+  return (
+    <svg {...base} className={className} {...p} aria-hidden="true">
+      <path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  )
+}
+
+// Chispa/estrella: acción de IA (Asesor estratégico).
+export function IconSparkles({ className, ...p }: IconProps) {
+  return (
+    <svg {...base} className={className} {...p} aria-hidden="true">
+      <path d="M9.94 14.06 8 20l-1.94-5.94L0 12l6.06-2.06L8 4l1.94 5.94L16 12z" />
+      <path d="M18 5.5 17 2l-1 3.5L12.5 6l3.5 1L17 10.5 18 7l3.5-.5z" />
+    </svg>
+  )
+}
+
+// Pausa: causa estancada / en revisión (sin movimiento).
+export function IconPause({ className, ...p }: IconProps) {
+  return (
+    <svg {...base} className={className} {...p} aria-hidden="true">
+      <line x1="10" y1="15" x2="10" y2="9" />
+      <line x1="14" y1="15" x2="14" y2="9" />
+      <circle cx="12" cy="12" r="10" />
+    </svg>
+  )
+}
