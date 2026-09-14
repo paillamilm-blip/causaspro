@@ -117,17 +117,24 @@ export default function Dashboard() {
   // Supabase/PostgREST). Antes se usaba .limit(500), que ocultaba causas: si había 633,
   // el panel solo veía 500 y NO evaluaba alertas de las otras 133 (riesgo real: perder
   // una audiencia urgente). Ahora traemos el 100%.
-  async function fetchAll(tabla: string, columnas: string, ordenar?: string) {
+  //
+  // ordenIdParaPaginar: agrega un desempate ÚNICO por id para que OFFSET/LIMIT sea estable
+  // cuando hay >1000 filas (evita duplicar/saltar filas del borde entre páginas). SOLO se
+  // debe usar sobre tablas físicas (id indexado, barato). NUNCA sobre v_causas_ranking:
+  // esa vista tiene ~20 subqueries correlacionados por fila; un ORDER BY id externo obliga
+  // a Postgres a materializar las 647 filas ANTES del LIMIT, lo que supera el
+  // statement_timeout del rol anon (~8s) y lanza el error 57014 → el panel caía al fallback
+  // (todo "Estable", sin barra de progreso). La vista ya trae su propio ORDER BY con
+  // desempate final por c.id (orden total único), así que paginar sobre ella es estable
+  // sin necesidad de un ORDER BY id externo.
+  async function fetchAll(tabla: string, columnas: string, ordenar?: string, ordenIdParaPaginar = false) {
     const PAGE = 1000
     let desde = 0
     let todo: any[] = []
     for (;;) {
       let q = supabase.from(tabla).select(columnas)
       if (ordenar) q = q.order(ordenar, { ascending: false })
-      // Desempate ÚNICO por id: con >1000 filas, OFFSET/LIMIT solo es estable si el orden
-      // es total. Sin esto, una fila del borde podría duplicarse o saltarse entre páginas
-      // (reintroduciría el bug de "causa invisible"). id es único → orden reproducible.
-      q = q.order('id', { ascending: true })
+      if (ordenIdParaPaginar) q = q.order('id', { ascending: true })
       const { data, error } = await q.range(desde, desde + PAGE - 1)
       if (error) return { data: null as any[] | null, error }
       const lote = data || []
@@ -153,16 +160,25 @@ export default function Dashboard() {
     setModoFallback(false)
     
     // Intentar con la vista (tiene el semáforo). Traemos TODAS las causas (paginado).
+    // NO pasamos ordenIdParaPaginar: la vista ya viene ordenada y un ORDER BY id externo
+    // la haría materializar entera → timeout del rol anon → fallback falso "todo Estable".
     let { data, error: err } = await fetchAll('v_causas_ranking', '*')
 
     // Si la vista falla, usar tabla directa (sin semáforo pero funciona)
     if (err) {
       setModoFallback(true)
-      console.warn('Vista v_causas_ranking no disponible, usando tabla directa:', err.message)
+      // Log detallado para diagnóstico: code (ej. 57014 = statement timeout), details y hint.
+      console.warn(
+        'Vista v_causas_ranking no disponible, usando tabla directa:',
+        JSON.stringify({ message: err.message, code: (err as any).code, details: (err as any).details, hint: (err as any).hint }),
+      )
+      // Sobre la tabla física sí pedimos desempate por id: es barato (id indexado) y protege
+      // la paginación si algún día hay >1000 causas.
       const { data: directData, error: directErr } = await fetchAll(
         'causas',
         'id, rit, caratulado, tipo, estado, programa_vigente, sintesis, notas, updated_at',
         'updated_at',
+        true,
       )
       
       if (directErr) {

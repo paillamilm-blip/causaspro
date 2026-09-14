@@ -109,7 +109,13 @@ ORDER BY
     END ASC,
     -- Desempate: dentro del mismo nivel, la de movimiento más reciente primero.
     (SELECT MAX(m.fecha) FROM movimientos m WHERE m.causa_id = c.id) DESC NULLS LAST,
-    c.updated_at DESC;
+    c.updated_at DESC,
+    -- Desempate FINAL por id (clave única): garantiza un orden total determinista. Sin esto,
+    -- dos causas con igual nivel + igual updated_at podrían reordenarse entre páginas al paginar
+    -- >1000 filas (OFFSET/LIMIT saltaría/duplicaría filas del borde). id es único → orden estable.
+    -- Va DENTRO de la vista (no en el cliente) para NO forzar la materialización que causaba el
+    -- timeout del rol anon cuando el ORDER BY id se aplicaba por fuera desde el frontend.
+    c.id ASC;
 
 -- ✅ Listo. Verificar la distribución con:
 --   SELECT nivel_urgencia, COUNT(*) FROM v_causas_ranking GROUP BY nivel_urgencia ORDER BY nivel_urgencia;
