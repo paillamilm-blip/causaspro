@@ -172,9 +172,10 @@ export default function Dashboard() {
     setModoFallback(false)
     
     // Intentar con la vista (tiene el semáforo). Traemos TODAS las causas (paginado).
-    // NO pasamos ordenIdParaPaginar: la vista ya viene ordenada y un ORDER BY id externo
-    // la haría materializar entera → timeout del rol anon → fallback falso "todo Estable".
-    let { data, error: err } = await fetchAll('v_causas_ranking', '*')
+    // Ahora v_causas_ranking lee de una MATERIALIZED VIEW (mv_causas_ranking), así que ya
+    // NO hay riesgo de timeout: el .order('id') externo es barato sobre la tabla materializada.
+    // Lo pedimos para tener orden total estable en la paginación si algún día hay >1000 causas.
+    let { data, error: err } = await fetchAll('v_causas_ranking', '*', undefined, true)
 
     // Si la consulta directa (rol anon) falla —típicamente por statement_timeout (57014)
     // sobre la vista pesada—, NO caemos de inmediato al fallback "todo Estable". Primero
