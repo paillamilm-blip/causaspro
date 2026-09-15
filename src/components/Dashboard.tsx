@@ -47,10 +47,32 @@ interface CausaResumen {
   dias_medida_vence: number | null
   tiene_medida_vigente: boolean
   tiene_traslado_curador: boolean
+  // Señales de curaduría (de la vista). Opcionales por compatibilidad con el fallback
+  // de tabla directa, que no las trae (quedan undefined → no se muestran chips).
+  tiene_orden_busqueda?: boolean | null
+  tiene_no_adherencia?: boolean | null
+  tiene_citacion_audiencia?: boolean | null
   ultimo_movimiento: string | null
   fecha_ultimo_movimiento: string | null
   adulto_nombre: string | null
   adulto_telefono: string | null
+}
+
+// Chips de señales de curaduría que se muestran en cada tarjeta de causa.
+// Cada uno resume una alerta de cumplimiento en un badge compacto y legible.
+function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
+  const chips: { texto: string; clase: string }[] = []
+  if (c.tiene_orden_busqueda) chips.push({ texto: 'Orden de búsqueda', clase: 'bg-red-100 text-red-700' })
+  if (c.tiene_no_adherencia) chips.push({ texto: 'No adherencia', clase: 'bg-amber-100 text-amber-700' })
+  if (c.tiene_citacion_audiencia) chips.push({ texto: 'Citación audiencia', clase: 'bg-amber-100 text-amber-700' })
+  // Estancamiento: sin movimiento hace más de 6 meses (criterio de Paula).
+  // Solo si NO es nivel 6: en nivel 6 el motivo de urgencia ya dice "Sin movimiento hace N días
+  // (estancada)", así que el chip sería redundante. En otros niveles (ej. una crítica por orden
+  // de búsqueda que además está estancada) el chip sí aporta.
+  if (c.dias_sin_actividad != null && c.dias_sin_actividad > 180 && c.nivel_urgencia !== 6) {
+    chips.push({ texto: `Sin movimiento ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700' })
+  }
+  return chips
 }
 
 // Semáforo basado en nivel_urgencia multi-criterio
@@ -858,6 +880,8 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
   const motivo = getUrgenciaMotivo(c)
   // Materia de la causa (del tipo/letra o del RIT). Nunca se inventa.
   const materia = materiaDeTipo(c.tipo) || materiaDeRit(c.rit)
+  // Chips de señales de cumplimiento (orden de búsqueda, no adherencia, etc.).
+  const senales = chipsSenales(c)
   
   return (
     <Link href={`/causa/${c.id}`} className="block group">
@@ -892,6 +916,16 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
               <div className={`mt-1 inline-flex items-center gap-1.5 text-xs font-medium ${sem.color}`}>
                 <motivo.Icono className="w-3.5 h-3.5 shrink-0" />
                 <span>{motivo.texto}</span>
+              </div>
+            )}
+            {/* Chips de señales de cumplimiento de la medida (curaduría) */}
+            {senales.length > 0 && (
+              <div className="mt-1.5 flex flex-wrap gap-1">
+                {senales.map((s, i) => (
+                  <span key={i} className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${s.clase}`}>
+                    {s.texto}
+                  </span>
+                ))}
               </div>
             )}
           </div>
