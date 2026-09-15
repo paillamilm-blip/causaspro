@@ -21,11 +21,11 @@ type FiltroUrgencia = 'todas' | 'traslados' | 'criticas' | 'atencion' | 'revisar
 
 // Color del chip de materia según su grupo práctico.
 const GRUPO_CHIP: Record<GrupoMateria, string> = {
-  contencioso: 'bg-purple-100 text-purple-700',
+  contencioso: 'bg-violet-100 text-violet-700',
   proteccion: 'bg-rose-100 text-rose-700',
   voluntario: 'bg-teal-100 text-teal-700',
   sin_materia: 'bg-amber-100 text-amber-700',
-  generico: 'bg-gray-100 text-gray-500',
+  generico: 'bg-slate-100 text-slate-500',
 }
 
 interface CausaResumen {
@@ -54,16 +54,18 @@ interface CausaResumen {
 }
 
 // Semáforo basado en nivel_urgencia multi-criterio
-function getSemaforo(nivel: number | null): { color: string; label: string; bg: string; texto: string; dotColor: string } {
-  if (nivel === null || nivel >= 10) 
-    return { color: 'text-green-600', label: '', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
-  if (nivel <= 2) 
-    return { color: 'text-red-600', label: '', bg: 'bg-red-50 border-red-200', texto: 'Crítico', dotColor: 'bg-red-500' }
-  if (nivel <= 4) 
-    return { color: 'text-yellow-600', label: '', bg: 'bg-yellow-50 border-yellow-200', texto: 'Atención', dotColor: 'bg-yellow-400' }
-  if (nivel <= 6) 
-    return { color: 'text-orange-500', label: '', bg: 'bg-orange-50 border-orange-200', texto: 'Revisar', dotColor: 'bg-orange-400' }
-  return { color: 'text-green-600', label: '', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
+function getSemaforo(nivel: number | null): { color: string; bg: string; texto: string; dotColor: string } {
+  // Paleta unificada: Atención usa AMBER en TODO el dashboard (KPI, leyenda, header y aquí).
+  // Antes esta función usaba yellow-* y el resto amber-* → inconsistencia visual. Ya alineado.
+  if (nivel === null || nivel >= 10)
+    return { color: 'text-green-600', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
+  if (nivel <= 2)
+    return { color: 'text-red-600', bg: 'bg-red-50 border-red-200', texto: 'Crítica', dotColor: 'bg-red-500' }
+  if (nivel <= 4)
+    return { color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200', texto: 'Atención', dotColor: 'bg-amber-400' }
+  if (nivel <= 6)
+    return { color: 'text-orange-500', bg: 'bg-orange-50 border-orange-200', texto: 'Revisar', dotColor: 'bg-orange-400' }
+  return { color: 'text-green-600', bg: 'bg-green-50 border-green-200', texto: 'Estable', dotColor: 'bg-green-500' }
 }
 
 // Motivo legible de la urgencia, alineado con el semáforo de la vista
@@ -435,9 +437,9 @@ export default function Dashboard() {
           <div className="h-7 w-56 rounded-lg bg-slate-200 animate-pulse" />
           <div className="h-4 w-80 rounded bg-slate-100 animate-pulse" />
         </div>
-        {/* Skeleton de los KPI */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+        {/* Skeleton de los KPI (6, mismo grid que el real → no salta al cargar) */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => (
             <div key={i} className="h-[76px] rounded-xl bg-slate-100 border border-slate-200 animate-pulse" />
           ))}
         </div>
@@ -458,11 +460,8 @@ export default function Dashboard() {
         <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-red-100 text-red-600 mb-3">
           <IconAlert className="w-5 h-5" />
         </div>
-        <p className="text-red-700 font-medium">Error al cargar datos</p>
-        <p className="text-red-500 text-sm mt-1">{error}</p>
-        <p className="text-slate-500 text-xs mt-3">
-          Si ves un error sobre la vista, ejecuta el SQL de actualización en Supabase.
-        </p>
+        <p className="text-red-700 font-medium">No se pudieron cargar las causas</p>
+        <p className="text-slate-500 text-sm mt-1">Puede ser un problema temporal de conexión. Reintentá en un momento.</p>
         <button
           onClick={loadCausas}
           className="mt-4 inline-flex items-center gap-2 px-4 py-2 bg-red-600 text-white rounded-lg text-sm hover:bg-red-700 transition-colors focus:outline-none focus:ring-2 focus:ring-red-300"
@@ -671,13 +670,20 @@ export default function Dashboard() {
         >
           <div className="bg-white rounded-2xl p-6 max-w-lg w-full shadow-xl max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
             <div className="flex items-center gap-2 mb-4">
-              <span className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 text-violet-700">
+              <span className="flex items-center justify-center w-9 h-9 rounded-full bg-violet-100 text-violet-700 shrink-0">
                 <IconSparkles className="w-5 h-5" />
               </span>
-              <div>
+              <div className="min-w-0">
                 <h3 className="font-bold text-slate-900 leading-tight">Asesor de Curaduría IA</h3>
                 <span className="font-mono text-xs text-slate-500">{asesorIA.rit}</span>
               </div>
+              <button
+                onClick={() => setAsesorIA(null)}
+                aria-label="Cerrar"
+                className="ml-auto shrink-0 text-slate-400 hover:text-slate-700 rounded-lg p-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+              >
+                <IconX className="w-5 h-5" />
+              </button>
             </div>
 
             {/* Cargando */}
@@ -713,10 +719,11 @@ export default function Dashboard() {
                   <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">Alerta de cumplimiento / riesgo del NNA</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.riesgo}</p>
                 </div>
-                <p className="text-xs text-slate-400 border-t border-slate-100 pt-3">
-                  ⚠️ Sugerencia generada por IA con enfoque de curaduría, a partir de datos procesales
-                  (sin nombres ni RUT). Es una lectura preliminar — la decisión profesional es de la curadora.
-                </p>
+                <div className="flex items-start gap-1.5 text-xs text-slate-400 border-t border-slate-100 pt-3">
+                  <IconAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                  <span>Sugerencia generada por IA con enfoque de curaduría, a partir de datos procesales
+                  (sin nombres ni RUT). Es una lectura preliminar — la decisión profesional es de la curadora.</span>
+                </div>
               </div>
             )}
 
@@ -735,7 +742,7 @@ export default function Dashboard() {
         <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
       )}
       {atencion.length > 0 && (
-        <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-yellow-400" />
+        <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-amber-400" />
       )}
       {revisar.length > 0 && (
         <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
@@ -896,8 +903,8 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
                   {formatFecha(c.proxima_audiencia)}
                 </div>
                 <div className={`font-bold ${sem.color}`}>
-                  {c.dias_para_audiencia !== null && c.dias_para_audiencia <= 0 ? '¡HOY!' :
-                   c.dias_para_audiencia !== null && c.dias_para_audiencia <= 1 ? '¡Mañana!' :
+                  {c.dias_para_audiencia !== null && c.dias_para_audiencia <= 0 ? 'Hoy' :
+                   c.dias_para_audiencia !== null && c.dias_para_audiencia <= 1 ? 'Mañana' :
                    c.dias_para_audiencia !== null ? `En ${Math.round(c.dias_para_audiencia)} días` : ''}
                 </div>
               </div>
