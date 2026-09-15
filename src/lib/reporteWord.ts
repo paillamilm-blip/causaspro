@@ -45,12 +45,26 @@ export interface ReporteAudiencia {
   fecha?: string | null; tipo?: string | null
 }
 
+/** Señales de curaduría ya calculadas por la vista v_causas_ranking (flags, no PII).
+ *  `_noDisponible: true` indica que el cálculo de señales FALLÓ (no que la causa esté sana):
+ *  el reporte lo muestra como "seguimiento no disponible", nunca como el verde tranquilizador. */
+export interface ReporteSenales {
+  tiene_traslado_curador?: boolean | null
+  tiene_orden_busqueda?: boolean | null
+  tiene_no_adherencia?: boolean | null
+  tiene_citacion_audiencia?: boolean | null
+  dias_sin_actividad?: number | null
+  _noDisponible?: boolean
+}
+
 export interface ReporteData {
   causa: ReporteCausa
   movimientos: ReporteMovimiento[]
   nna: ReporteNna[]
   adultos: ReporteAdulto[]
   audiencias: ReporteAudiencia[]
+  /** Señales de curaduría (opcional); alimentan la sección de seguimiento de la medida. */
+  senales?: ReporteSenales
   /** Nombre del estudio/curaduría para el membrete (opcional). */
   membrete?: string
 }
@@ -108,7 +122,7 @@ function celda(texto: string, opts: { header?: boolean; width?: number; color?: 
  * Construye el documento Word y lo devuelve como Buffer (.docx).
  */
 export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
-  const { causa, movimientos, nna, adultos, audiencias, membrete } = data
+  const { causa, movimientos, nna, adultos, audiencias, membrete, senales } = data
   const hoy = new Date().toLocaleDateString('es-CL', { day: '2-digit', month: 'long', year: 'numeric' })
   // Materia de la causa (del tipo/letra o del RIT). Nunca se inventa.
   const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
@@ -191,6 +205,42 @@ export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
     ? resoluciones.map(r => campo(fmtFecha(r.fecha), [r.tramite, r.descripcion].filter(Boolean).join(' — ')))
     : [new Paragraph({ children: [new TextRun({ text: 'Sin resoluciones registradas.', italics: true, size: 20, color: GRIS })] })]
 
+  // --- SEGUIMIENTO DE CURADURÍA (enfoque curador ad lítem) ---
+  // Traduce las señales de la vista a un bloque legible para presentar/anotar.
+  const VERDE = '2E7D32'
+  const seguimiento: Paragraph[] = []
+  const s = senales || {}
+  const señalItem = (texto: string, color: string) => new Paragraph({
+    spacing: { after: 40 },
+    bullet: { level: 0 },
+    children: [new TextRun({ text: texto, size: 20, color, bold: color === ROJO })],
+  })
+  if (s.tiene_orden_busqueda) seguimiento.push(señalItem('ORDEN DE BÚSQUEDA vigente: el NNA no está ubicado. Requiere gestión inmediata.', ROJO))
+  if (s.tiene_traslado_curador) seguimiento.push(señalItem('Traslado al curador: hay traslado que requiere ponderación/respuesta.', ROJO))
+  if (s.tiene_no_adherencia) seguimiento.push(señalItem('No adherencia informada por el programa: evaluar reunión técnica o re-derivación.', AZUL))
+  if (s.tiene_citacion_audiencia) seguimiento.push(señalItem('Citación a audiencia reciente: verificar comparecencia y preparar posición.', AZUL))
+  if (s.dias_sin_actividad != null && s.dias_sin_actividad > 180) {
+    seguimiento.push(señalItem(`Sin movimiento hace ${Math.round(s.dias_sin_actividad)} días (más de 6 meses): causa estancada, convendría impulsarla o requerir estado al programa.`, AZUL))
+  }
+  if (seguimiento.length === 0) {
+    if (s._noDisponible) {
+      // El cálculo de señales falló: NO afirmar que la causa esté sana (dominio de menores).
+      seguimiento.push(new Paragraph({ children: [new TextRun({ text: 'Seguimiento de cumplimiento no disponible en este momento — revisar manualmente.', italics: true, size: 20, color: GRIS })] }))
+    } else {
+      seguimiento.push(new Paragraph({ children: [new TextRun({ text: 'Sin señales de alerta de cumplimiento. Mantener seguimiento periódico.', italics: true, size: 20, color: VERDE })] }))
+    }
+  }
+
+  // Bloque de OBSERVACIONES DEL CURADOR (líneas en blanco para completar a mano / editar).
+  const observaciones: Paragraph[] = [
+    new Paragraph({ spacing: { after: 40 }, children: [new TextRun({ text: 'Observaciones y gestiones del curador:', bold: true, size: 20, color: GRIS })] }),
+    ...Array.from({ length: 4 }).map(() => new Paragraph({
+      spacing: { after: 30 },
+      border: { bottom: { color: 'BFBFBF', size: 4, style: BorderStyle.SINGLE, space: 6 } },
+      children: [new TextRun({ text: '', size: 20 })],
+    })),
+  ]
+
   // --- DOCUMENTO ---
   const doc = new Document({
     sections: [{
@@ -202,7 +252,7 @@ export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
           alignment: AlignmentType.CENTER,
           spacing: { after: 40 },
           heading: HeadingLevel.HEADING_1,
-          children: [new TextRun({ text: 'Reporte de Causa', bold: true, size: 36, color: AZUL })],
+          children: [new TextRun({ text: 'Reporte de Curaduría', bold: true, size: 36, color: AZUL })],
         }),
         new Paragraph({
           alignment: AlignmentType.CENTER,
@@ -226,6 +276,10 @@ export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
         seccion('Alertas'),
         ...alertas,
 
+        // Seguimiento de curaduría (señales de cumplimiento de la medida)
+        seccion('Seguimiento de la medida (curaduría)'),
+        ...seguimiento,
+
         // NNA
         seccion(`NNA (${nna.length})`),
         ...bloquesNna,
@@ -237,6 +291,10 @@ export async function generarReporteWord(data: ReporteData): Promise<Buffer> {
         // Resoluciones
         seccion(`Resoluciones (${resoluciones.length})`),
         ...bloquesResol,
+
+        // Observaciones del curador (para completar / firmar)
+        seccion('Observaciones del curador'),
+        ...observaciones,
 
         // Movimientos
         seccion(`Historial de movimientos (${movsOrdenados.length})`),

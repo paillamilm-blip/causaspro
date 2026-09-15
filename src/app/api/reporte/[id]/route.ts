@@ -68,13 +68,15 @@ export async function GET(
     return NextResponse.json({ error: e?.message || 'Supabase no configurado' }, { status: 500 })
   }
 
-  // Traer causa + relaciones en paralelo.
-  const [cRes, movRes, nnaRes, adRes, audRes] = await Promise.all([
+  // Traer causa + relaciones + señales de curaduría en paralelo.
+  const [cRes, movRes, nnaRes, adRes, audRes, senalRes] = await Promise.all([
     sb.from('causas').select('*').eq('id', causaId).single(),
     sb.from('movimientos').select('fecha, etapa, tramite, descripcion, es_traslado_curador').eq('causa_id', causaId).order('fecha', { ascending: false }),
     sb.from('nna').select('nombre, apellido, edad, rut').eq('causa_id', causaId),
     sb.from('adultos').select('nombre, relacion, telefono').eq('causa_id', causaId),
     sb.from('audiencias').select('fecha, tipo').eq('causa_id', causaId).order('fecha', { ascending: true }),
+    // Señales de curaduría ya calculadas por la vista (para la sección de seguimiento).
+    sb.from('v_causas_ranking').select('tiene_traslado_curador, tiene_orden_busqueda, tiene_no_adherencia, tiene_citacion_audiencia, dias_sin_actividad').eq('id', causaId).single(),
   ])
 
   if (cRes.error || !cRes.data) {
@@ -105,7 +107,16 @@ export async function GET(
     nna: (nnaRes.data || []) as ReporteData['nna'],
     adultos: (adRes.data || []) as ReporteData['adultos'],
     audiencias: (audRes.data || []) as ReporteData['audiencias'],
+    // Señales: si la consulta falló (vista sin columnas, timeout, sin fila), marcamos
+    // _noDisponible para que el reporte NO afirme "sin alertas" (fail-open peligroso en
+    // dominio de menores) sino "seguimiento no disponible".
+    senales: senalRes?.error
+      ? { _noDisponible: true }
+      : ((senalRes?.data || { _noDisponible: true }) as ReporteData['senales']),
     membrete: process.env.REPORTE_MEMBRETE || undefined,
+  }
+  if (senalRes?.error) {
+    console.warn('reporte: no se pudieron leer señales de v_causas_ranking:', senalRes.error.message)
   }
 
   try {
