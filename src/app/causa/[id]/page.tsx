@@ -23,6 +23,18 @@ interface Adulto {
 interface Audiencia {
   id: string; fecha: string; tipo: string; notas: string;
 }
+interface Gestion {
+  id: string; fecha: string; tipo: string; contenido: string; created_at: string;
+}
+
+// Tipos de gestión de curaduría (los que Paula registra). El primero es el más frecuente.
+const TIPOS_GESTION = [
+  'Entrevista al NNA',
+  'Coordinación con programa',
+  'Contacto con adulto responsable',
+  'Presentación de escrito',
+  'Otra gestión',
+] as const
 
 export default function CausaDetalle() {
   const params = useParams()
@@ -31,7 +43,14 @@ export default function CausaDetalle() {
   const [nnas, setNnas] = useState<Nna[]>([])
   const [adultos, setAdultos] = useState<Adulto[]>([])
   const [audiencias, setAudiencias] = useState<Audiencia[]>([])
+  const [gestiones, setGestiones] = useState<Gestion[]>([])
   const [loading, setLoading] = useState(true)
+  // Formulario de nueva gestión de curaduría.
+  const [gestionTipo, setGestionTipo] = useState<string>(TIPOS_GESTION[0])
+  const [gestionFecha, setGestionFecha] = useState<string>(() => new Date().toISOString().slice(0, 10))
+  const [gestionNota, setGestionNota] = useState('')
+  const [guardandoGestion, setGuardandoGestion] = useState(false)
+  const [gestionError, setGestionError] = useState<string | null>(null)
   // Análisis estratégico IA (bajo demanda, no se carga solo).
   const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string } | null>(null)
   const [analizando, setAnalizando] = useState(false)
@@ -63,17 +82,41 @@ export default function CausaDetalle() {
 
   async function loadData() {
     setLoading(true)
-    const [c, n, a, au] = await Promise.all([
+    const [c, n, a, au, g] = await Promise.all([
       supabase.from('causas').select('*').eq('id', id).single(),
       supabase.from('nna').select('*').eq('causa_id', id),
       supabase.from('adultos').select('*').eq('causa_id', id),
       supabase.from('audiencias').select('*').eq('causa_id', id).order('fecha', { ascending: true }),
+      supabase.from('gestiones').select('*').eq('causa_id', id).order('fecha', { ascending: false }),
     ])
     if (c.data) setCausa(c.data)
     if (n.data) setNnas(n.data)
     if (a.data) setAdultos(a.data)
     if (au.data) setAudiencias(au.data)
+    if (g.data) setGestiones(g.data as Gestion[])
     setLoading(false)
+  }
+
+  // Registra una gestión de curaduría (entrevista, coordinación, etc.) en la tabla `gestiones`.
+  async function guardarGestion(e: React.FormEvent) {
+    e.preventDefault()
+    if (!gestionNota.trim()) { setGestionError('Escribí una nota para la gestión.'); return }
+    setGuardandoGestion(true)
+    setGestionError(null)
+    const { data, error } = await supabase
+      .from('gestiones')
+      .insert({ causa_id: id, tipo: gestionTipo, fecha: gestionFecha, contenido: gestionNota.trim() })
+      .select()
+      .single()
+    if (error) {
+      setGestionError('No se pudo guardar la gestión. Intentá de nuevo.')
+      console.warn('guardarGestion:', error.message)
+    } else if (data) {
+      setGestiones(prev => [data as Gestion, ...prev]) // insertar arriba (más reciente)
+      setGestionNota('')
+      setGestionFecha(new Date().toISOString().slice(0, 10))
+    }
+    setGuardandoGestion(false)
   }
 
   if (loading) return (
@@ -288,6 +331,71 @@ export default function CausaDetalle() {
           )}
         </section>
 
+        {/* Gestiones de curaduría (bitácora propia de Paula) */}
+        <section className="bg-white rounded-xl border p-6">
+          <h2 className="font-bold text-gray-700 mb-3">🗂️ Gestiones de curaduría</h2>
+
+          {/* Formulario para registrar una gestión */}
+          <form onSubmit={guardarGestion} className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-medium text-slate-500 mb-1">Tipo de gestión</label>
+                <select
+                  value={gestionTipo}
+                  onChange={e => setGestionTipo(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-slate-300 outline-none"
+                >
+                  {TIPOS_GESTION.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Fecha</label>
+                <input
+                  type="date"
+                  value={gestionFecha}
+                  onChange={e => setGestionFecha(e.target.value)}
+                  className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-slate-300 outline-none"
+                />
+              </div>
+            </div>
+            <textarea
+              value={gestionNota}
+              onChange={e => setGestionNota(e.target.value)}
+              placeholder="¿Qué hiciste? Ej: Entrevisté al NNA en el colegio; se observa adaptado. Coordiné con el PPF para informe actualizado."
+              rows={2}
+              className="w-full px-3 py-2 rounded-lg border border-slate-200 bg-white text-sm focus:ring-2 focus:ring-slate-300 outline-none resize-y"
+            />
+            {gestionError && <p className="text-xs text-red-600 mt-1">{gestionError}</p>}
+            <div className="flex justify-end mt-3">
+              <button
+                type="submit"
+                disabled={guardandoGestion}
+                className="text-sm font-medium px-4 py-2 rounded-lg bg-slate-800 text-white hover:bg-slate-900 transition-colors disabled:opacity-60 disabled:cursor-wait"
+              >
+                {guardandoGestion ? 'Guardando…' : 'Registrar gestión'}
+              </button>
+            </div>
+          </form>
+
+          {/* Bitácora de gestiones registradas */}
+          {gestiones.length === 0 ? (
+            <p className="text-slate-400 text-sm">Aún no registraste gestiones en esta causa.</p>
+          ) : (
+            <ol className="relative border-l border-slate-200 ml-2 space-y-4">
+              {gestiones.map(g => (
+                <li key={g.id} className="ml-4">
+                  <span className="absolute -left-1.5 w-3 h-3 rounded-full bg-slate-400 border-2 border-white"></span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-semibold text-slate-700">{g.tipo || 'Gestión'}</span>
+                    <span className="text-xs text-slate-400 font-mono">{formatFecha(g.fecha)}</span>
+                  </div>
+                  {g.contenido && <p className="text-sm text-slate-600 mt-0.5 whitespace-pre-wrap">{g.contenido}</p>}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
         {/* Notas */}
         {causa.notas && (
           <section className="bg-white rounded-xl border p-6">
@@ -316,7 +424,13 @@ function InfoRow({ label, value }: { label: string; value: string }) {
 
 function formatFecha(iso: string | null): string {
   if (!iso) return '-'
-  const d = new Date(iso)
+  // Un DATE puro ("2026-09-15") se parsea como medianoche UTC y en huso de Chile
+  // retrocedería un día. Si el valor es solo fecha (sin hora), lo construimos como
+  // fecha LOCAL para mostrar el día correcto. Si trae hora (timestamptz), va normal.
+  const soloFecha = /^\d{4}-\d{2}-\d{2}$/.test(iso)
+  const d = soloFecha
+    ? (() => { const [y, m, dd] = iso.split('-').map(Number); return new Date(y, m - 1, dd) })()
+    : new Date(iso)
   if (isNaN(d.getTime())) return iso
   return d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
