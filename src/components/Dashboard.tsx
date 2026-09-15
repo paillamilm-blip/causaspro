@@ -132,6 +132,15 @@ function formatFecha(iso: string | null): string {
   return d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })
 }
 
+// Etiqueta temporal de una audiencia según cuántos días faltan. Compartida por el
+// calendario y la tarjeta de causa (antes estaba duplicada en ambos).
+function etiquetaAudiencia(dias: number | null): string {
+  if (dias == null) return ''
+  if (dias <= 0) return 'Hoy'
+  if (dias <= 1) return 'Mañana'
+  return `En ${Math.round(dias)} días`
+}
+
 function formatFechaCorta(iso: string | null): string {
   if (!iso) return '-'
   const d = new Date(iso)
@@ -433,6 +442,12 @@ export default function Dashboard() {
   // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
   const traslados = causasPorTexto.filter(c => c.tiene_traslado_curador)
 
+  // Próximas audiencias: causas con audiencia futura, ordenadas por fecha (la más próxima
+  // primero). Base del calendario de audiencias. Se calcula sobre el filtro de texto.
+  const proximasAudiencias = causasPorTexto
+    .filter(c => c.proxima_audiencia != null)
+    .sort((a, b) => new Date(a.proxima_audiencia!).getTime() - new Date(b.proxima_audiencia!).getTime())
+
   // Filtro rápido por urgencia (clic en tarjeta KPI). No afecta los contadores de arriba.
   const causasFiltradas =
     filtroUrgencia === 'traslados' ? traslados :
@@ -683,6 +698,11 @@ export default function Dashboard() {
         </div>
       )}
 
+      {/* CALENDARIO DE AUDIENCIAS: próximas audiencias ordenadas por fecha. */}
+      {proximasAudiencias.length > 0 && (
+        <CalendarioAudiencias causas={proximasAudiencias} />
+      )}
+
       {/* Modal del Asesor Estratégico IA: resumen + próximo paso + riesgo por causa. */}
       {asesorIA && (
         <div
@@ -875,6 +895,61 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
   )
 }
 
+// Calendario de audiencias: lista las próximas audiencias agrupadas por horizonte temporal
+// (esta semana / este mes / más adelante). Plegable; arranca abierto porque son citas que
+// Paula debe tener presentes. Los datos ya vienen ordenados por fecha desde el padre.
+function CalendarioAudiencias({ causas }: { causas: CausaResumen[] }) {
+  const [abierto, setAbierto] = useState(true)
+
+  // Agrupar por horizonte: <=7 días, <=30 días, resto. dias_para_audiencia ya viene calculado.
+  const dias = (c: CausaResumen) => c.dias_para_audiencia ?? 9999
+  const estaSemana = causas.filter(c => dias(c) <= 7)
+  const esteMes = causas.filter(c => dias(c) > 7 && dias(c) <= 30)
+  const masAdelante = causas.filter(c => dias(c) > 30)
+
+  const grupo = (titulo: string, lista: CausaResumen[], acento: string) => lista.length > 0 && (
+    <div className="mb-3 last:mb-0">
+      <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1.5">{titulo} <span className="tabular-nums">({lista.length})</span></div>
+      <div className="space-y-1.5">
+        {lista.map(c => (
+          <Link key={c.id} href={`/causa/${c.id}`} className="flex items-center justify-between gap-3 bg-white border border-slate-200 rounded-lg px-3 py-2 hover:shadow-sm transition-shadow group">
+            <div className="min-w-0 flex items-center gap-2">
+              <span className="font-mono font-bold text-sm text-slate-800 group-hover:underline shrink-0">{c.rit}</span>
+              {c.caratulado && <span className="text-sm text-slate-600 truncate">{c.caratulado}</span>}
+            </div>
+            <div className="text-right shrink-0">
+              <div className="text-xs font-medium text-slate-700">{formatFecha(c.proxima_audiencia)}</div>
+              <div className={`text-xs font-bold ${acento}`}>{etiquetaAudiencia(c.dias_para_audiencia)}</div>
+            </div>
+          </Link>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+      <button
+        onClick={() => setAbierto(!abierto)}
+        aria-expanded={abierto}
+        className="w-full flex items-center gap-2 mb-1 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
+      >
+        <IconChevron className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${abierto ? 'rotate-90' : ''}`} />
+        <IconCalendar className="w-4 h-4 text-slate-500" />
+        <h2 className="font-bold text-slate-800 text-base">Próximas audiencias</h2>
+        <span className="bg-slate-700 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">{causas.length}</span>
+      </button>
+      {abierto && (
+        <div className="mt-3">
+          {grupo('Esta semana', estaSemana, 'text-red-600')}
+          {grupo('Este mes', esteMes, 'text-amber-600')}
+          {grupo('Más adelante', masAdelante, 'text-slate-500')}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function CausaCard({ causa: c }: { causa: CausaResumen }) {
   const sem = getSemaforo(c.nivel_urgencia)
   const motivo = getUrgenciaMotivo(c)
@@ -937,9 +1012,7 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
                   {formatFecha(c.proxima_audiencia)}
                 </div>
                 <div className={`font-bold ${sem.color}`}>
-                  {c.dias_para_audiencia !== null && c.dias_para_audiencia <= 0 ? 'Hoy' :
-                   c.dias_para_audiencia !== null && c.dias_para_audiencia <= 1 ? 'Mañana' :
-                   c.dias_para_audiencia !== null ? `En ${Math.round(c.dias_para_audiencia)} días` : ''}
+                  {etiquetaAudiencia(c.dias_para_audiencia)}
                 </div>
               </div>
             ) : c.ultima_audiencia ? (
