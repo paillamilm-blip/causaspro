@@ -108,7 +108,7 @@ export async function GET(
     return NextResponse.json({ error: e?.message || 'Supabase no configurado' }, { status: 500 })
   }
 
-  const [cRes, movRes, audRes, nnaRes] = await Promise.all([
+  const [cRes, movRes, audRes, nnaRes, senalRes] = await Promise.all([
     // Solo campos procesales. NO traemos caratulado ni sintesis: el caratulado suele
     // contener el NOMBRE del NNA y no debe salir a un tercero.
     sb.from('causas').select('rit, tipo, estado, programa_vigente, fecha_apertura').eq('id', causaId).single(),
@@ -118,6 +118,8 @@ export async function GET(
     sb.from('movimientos').select('fecha, etapa, tramite, es_traslado_curador').eq('causa_id', causaId).order('fecha', { ascending: false }).limit(40),
     sb.from('audiencias').select('fecha, tipo').eq('causa_id', causaId).order('fecha', { ascending: false }).limit(10),
     sb.from('nna').select('edad').eq('causa_id', causaId),
+    // Señales de curaduría ya calculadas por la vista (flags booleanos, NO son PII).
+    sb.from('v_causas_ranking').select('tiene_orden_busqueda, tiene_no_adherencia, tiene_citacion_audiencia, tiene_traslado_curador, dias_sin_actividad').eq('id', causaId).single(),
   ])
 
   if (cRes.error || !cRes.data) {
@@ -166,6 +168,21 @@ export async function GET(
       const etapa = m.etapa ? ` (${redactarPII(m.etapa)})` : ''
       lineas.push(`- ${fmtFecha(m.fecha)} · ${tramite}${etapa}${tras}`)
     }
+  }
+
+  // Señales de curaduría ya detectadas por la vista (flags, no PII). Ayudan a la IA a
+  // priorizar como curadora sin tener que releer texto libre.
+  const s: any = senalRes?.data || {}
+  const senales: string[] = []
+  if (s.tiene_orden_busqueda) senales.push('ORDEN DE BÚSQUEDA decretada (el NNA no está ubicado)')
+  if (s.tiene_no_adherencia) senales.push('el programa informó NO ADHERENCIA / inasistencia / abandono')
+  if (s.tiene_citacion_audiencia) senales.push('hay CITACIÓN a audiencia reciente')
+  if (s.tiene_traslado_curador) senales.push('hay TRASLADO al curador')
+  if (s.dias_sin_actividad != null && s.dias_sin_actividad > 180) {
+    senales.push(`SIN MOVIMIENTO hace ${Math.round(s.dias_sin_actividad)} días (más de 6 meses)`)
+  }
+  if (senales.length > 0) {
+    lineas.push(`\nSeñales de curaduría detectadas: ${senales.join('; ')}.`)
   }
 
   try {
