@@ -131,7 +131,7 @@ export default function CausaDetalle() {
             href={`/api/reporte/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
             className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
           >
-            📄 Descargar reporte Word
+            📄 Reporte de curaduría (Word)
           </a>
         </div>
       </header>
