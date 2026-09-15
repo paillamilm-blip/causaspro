@@ -44,11 +44,34 @@ SELECT
     (SELECT MIN(mc.fecha_vencimiento) - CURRENT_DATE FROM medidas_cautelares mc WHERE mc.causa_id = c.id AND mc.vigente = TRUE AND mc.fecha_vencimiento >= CURRENT_DATE) AS dias_medida_vence,
     (SELECT COUNT(*) > 0 FROM medidas_cautelares mc WHERE mc.causa_id = c.id AND mc.vigente = TRUE) AS tiene_medida_vigente,
     (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id AND m.es_traslado_curador = TRUE) AS tiene_traslado_curador,
+    -- SEÑALES DE CURADURÍA (criterio de Paula, 14-sep-2026). Se detectan por texto en el
+    -- trámite/descripción del movimiento. Palabras obvias/relacionadas — afinar con causas reales.
+    -- Orden de búsqueda: el NNA no está ubicado → lo más crítico.
+    (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+       AND (m.tramite ILIKE '%orden de busqueda%' OR m.tramite ILIKE '%orden de búsqueda%'
+            OR m.tramite ILIKE '%orden de averigua%' OR m.descripcion ILIKE '%orden de busqueda%'
+            OR m.descripcion ILIKE '%orden de búsqueda%')) AS tiene_orden_busqueda,
+    -- Citación a audiencia (señal fuerte a atender).
+    (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+       AND m.fecha >= CURRENT_DATE - INTERVAL '30 days'
+       AND (m.tramite ILIKE '%citaci%audiencia%' OR m.tramite ILIKE '%cita a audiencia%'
+            OR m.descripcion ILIKE '%cita%a audiencia%')) AS tiene_citacion_audiencia,
+    -- No adherencia / abandono del programa informado por el ejecutor.
+    (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+       AND (m.tramite ILIKE '%no adher%' OR m.tramite ILIKE '%inasisten%' OR m.tramite ILIKE '%abandono%'
+            OR m.descripcion ILIKE '%no adher%' OR m.descripcion ILIKE '%inasisten%'
+            OR m.descripcion ILIKE '%abandono de programa%' OR m.descripcion ILIKE '%no adhiere%')) AS tiene_no_adherencia,
     (SELECT ad.nombre FROM adultos ad WHERE ad.causa_id = c.id LIMIT 1) AS adulto_nombre,
     (SELECT ad.telefono FROM adultos ad WHERE ad.causa_id = c.id LIMIT 1) AS adulto_telefono,
     (SELECT m.tramite FROM movimientos m WHERE m.causa_id = c.id ORDER BY m.fecha DESC LIMIT 1) AS ultimo_movimiento,
     (SELECT m.fecha FROM movimientos m WHERE m.causa_id = c.id ORDER BY m.fecha DESC LIMIT 1) AS fecha_ultimo_movimiento,
     CASE
+        -- 1 CRÍTICA: ORDEN DE BÚSQUEDA decretada (el NNA no está ubicado — lo más grave).
+        WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+              AND (m.tramite ILIKE '%orden de busqueda%' OR m.tramite ILIKE '%orden de búsqueda%'
+                   OR m.tramite ILIKE '%orden de averigua%' OR m.descripcion ILIKE '%orden de busqueda%'
+                   OR m.descripcion ILIKE '%orden de búsqueda%'))
+        THEN 1
         -- 1 CRÍTICA: traslado al curador reciente (≤30 días)
         WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id AND m.es_traslado_curador = TRUE
               AND m.fecha >= CURRENT_DATE - INTERVAL '30 days')
@@ -60,9 +83,21 @@ SELECT
         -- 2 CRÍTICA: medida cautelar por vencer ≤7 días
         WHEN (SELECT MIN(mc.fecha_vencimiento) - CURRENT_DATE FROM medidas_cautelares mc WHERE mc.causa_id = c.id AND mc.vigente = TRUE AND mc.fecha_vencimiento >= CURRENT_DATE) <= 7
         THEN 2
+        -- 3 ATENCIÓN: citación a audiencia reciente (≤30 días).
+        WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+              AND m.fecha >= CURRENT_DATE - INTERVAL '30 days'
+              AND (m.tramite ILIKE '%citaci%audiencia%' OR m.tramite ILIKE '%cita a audiencia%'
+                   OR m.descripcion ILIKE '%cita%a audiencia%'))
+        THEN 3
         -- 3 ATENCIÓN: audiencia futura en ≤7 días
         WHEN (SELECT MIN(a.fecha) FROM audiencias a WHERE a.causa_id = c.id AND a.fecha >= NOW()) IS NOT NULL
              AND EXTRACT(EPOCH FROM ((SELECT MIN(a.fecha) FROM audiencias a WHERE a.causa_id = c.id AND a.fecha >= NOW()) - NOW())) / 86400.0 <= 7
+        THEN 3
+        -- 3 ATENCIÓN: NO ADHERENCIA / abandono del programa informado (curaduría).
+        WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
+              AND (m.tramite ILIKE '%no adher%' OR m.tramite ILIKE '%inasisten%' OR m.tramite ILIKE '%abandono%'
+                   OR m.descripcion ILIKE '%no adher%' OR m.descripcion ILIKE '%inasisten%'
+                   OR m.descripcion ILIKE '%abandono de programa%' OR m.descripcion ILIKE '%no adhiere%'))
         THEN 3
         -- 3 ATENCIÓN: MOVIMIENTO NUEVO en los últimos 7 días (novedad que revisar).
         WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id
@@ -71,9 +106,10 @@ SELECT
         -- 4 ATENCIÓN: traslado al curador antiguo (>30 días, aún relevante)
         WHEN (SELECT COUNT(*) > 0 FROM movimientos m WHERE m.causa_id = c.id AND m.es_traslado_curador = TRUE)
         THEN 4
-        -- 6 REVISAR: causa ACTIVA sin movimiento real hace más de 90 días (estancada).
+        -- 6 REVISAR: causa ACTIVA sin movimiento real hace más de 180 DÍAS (6 MESES, estancada).
+        --   Umbral 6 meses = criterio de Paula (curadora): "sin movimiento en más de 6 meses".
         WHEN (SELECT MAX(m.fecha) FROM movimientos m WHERE m.causa_id = c.id) IS NOT NULL
-             AND (SELECT EXTRACT(EPOCH FROM (NOW() - MAX(m.fecha))) / 86400.0 FROM movimientos m WHERE m.causa_id = c.id) > 90
+             AND (SELECT EXTRACT(EPOCH FROM (NOW() - MAX(m.fecha))) / 86400.0 FROM movimientos m WHERE m.causa_id = c.id) > 180
              AND (c.estado IS NULL OR (c.estado NOT ILIKE '%archiv%' AND c.estado NOT ILIKE '%termin%' AND c.estado NOT ILIKE '%cumpl%' AND c.estado NOT ILIKE '%sobresei%' AND c.estado NOT ILIKE '%fallada%'))
         THEN 6
         ELSE 10
