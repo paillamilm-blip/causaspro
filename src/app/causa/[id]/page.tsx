@@ -122,7 +122,7 @@ export default function CausaDetalle() {
             disabled={analizando}
             className="ml-auto text-sm bg-purple-600 text-white px-3 py-1.5 rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-60"
           >
-            {analizando ? '🧠 Analizando…' : '🧠 Análisis estratégico IA'}
+            {analizando ? '🧠 Analizando…' : '🧠 Asesor de Curaduría IA'}
           </button>
           {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
               Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
@@ -140,9 +140,9 @@ export default function CausaDetalle() {
         {/* Análisis estratégico IA (bajo demanda) */}
         {(analizando || analisis || analisisError) && (
           <section className="bg-purple-50 rounded-xl border border-purple-200 p-6">
-            <h2 className="font-bold text-purple-800 mb-3">🧠 Análisis estratégico IA</h2>
+            <h2 className="font-bold text-purple-800 mb-3">🧠 Asesor de Curaduría IA</h2>
             {analizando && (
-              <p className="text-sm text-purple-600">Analizando movimientos y audiencias de la causa…</p>
+              <p className="text-sm text-purple-600">Analizando la protección del NNA y el cumplimiento de la medida…</p>
             )}
             {analisisError && (
               <p className="text-sm text-red-600">{analisisError}</p>
@@ -150,21 +150,22 @@ export default function CausaDetalle() {
             {analisis && (
               <div className="space-y-3 text-sm">
                 <div>
-                  <span className="text-xs font-semibold text-purple-500 uppercase">Resumen</span>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Estado de la protección</span>
                   <p className="text-gray-700 mt-0.5">{analisis.resumen}</p>
                 </div>
                 <div>
-                  <span className="text-xs font-semibold text-purple-500 uppercase">Próximo paso sugerido</span>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Próxima gestión de curaduría</span>
                   <p className="text-gray-700 mt-0.5">✅ {analisis.proximoPaso}</p>
                 </div>
                 <div>
-                  <span className="text-xs font-semibold text-purple-500 uppercase">Riesgo a vigilar</span>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Alerta de cumplimiento / riesgo del NNA</span>
                   <p className="text-gray-700 mt-0.5">⚠️ {analisis.riesgo}</p>
                 </div>
                 <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
-                  ⚠️ <strong>Sugerencia generada por IA</strong> a partir de los movimientos del portal.
-                  Es una lectura preliminar orientativa: <strong>revísala con tu criterio profesional</strong> y
-                  NO reemplaza tu decisión legal ni verifica plazos.
+                  ⚠️ <strong>Sugerencia generada por IA con enfoque de curaduría</strong> a partir de los
+                  movimientos del portal. Es una lectura preliminar orientativa centrada en el interés
+                  superior del NNA: <strong>revísala con tu criterio profesional</strong>. NO reemplaza tu
+                  decisión ni verifica plazos.
                 </p>
               </div>
             )}

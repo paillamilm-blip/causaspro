@@ -675,7 +675,7 @@ export default function Dashboard() {
                 <IconSparkles className="w-5 h-5" />
               </span>
               <div>
-                <h3 className="font-bold text-slate-900 leading-tight">Asesor Estratégico IA</h3>
+                <h3 className="font-bold text-slate-900 leading-tight">Asesor de Curaduría IA</h3>
                 <span className="font-mono text-xs text-slate-500">{asesorIA.rit}</span>
               </div>
             </div>
@@ -684,7 +684,7 @@ export default function Dashboard() {
             {asesorIA.cargando && (
               <div className="flex items-center gap-3 py-8 justify-center text-slate-500">
                 <IconRefresh className="w-5 h-5 animate-spin motion-reduce:animate-none" />
-                <span className="text-sm">Analizando la causa…</span>
+                <span className="text-sm">Analizando la protección del NNA…</span>
               </div>
             )}
 
@@ -702,20 +702,20 @@ export default function Dashboard() {
             {!asesorIA.cargando && asesorIA.resultado && (
               <div className="space-y-4">
                 <div>
-                  <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Resumen</div>
+                  <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Estado de la protección</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.resumen}</p>
                 </div>
                 <div>
-                  <div className="text-xs font-semibold text-violet-500 uppercase tracking-wide mb-1">Próximo paso sugerido</div>
+                  <div className="text-xs font-semibold text-violet-500 uppercase tracking-wide mb-1">Próxima gestión de curaduría</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.proximoPaso}</p>
                 </div>
                 <div>
-                  <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">Riesgo a vigilar</div>
+                  <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">Alerta de cumplimiento / riesgo del NNA</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.riesgo}</p>
                 </div>
                 <p className="text-xs text-slate-400 border-t border-slate-100 pt-3">
-                  ⚠️ Sugerencia generada por IA a partir de datos procesales (sin nombres ni RUT).
-                  Es una lectura preliminar — la decisión profesional es de la abogada.
+                  ⚠️ Sugerencia generada por IA con enfoque de curaduría, a partir de datos procesales
+                  (sin nombres ni RUT). Es una lectura preliminar — la decisión profesional es de la curadora.
                 </p>
               </div>
             )}
