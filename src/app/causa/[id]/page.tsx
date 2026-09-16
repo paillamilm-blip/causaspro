@@ -182,6 +182,15 @@ export default function CausaDetalle() {
           >
             📄 Reporte de curaduría (Word)
           </a>
+          {/* Minuta de audiencia de revisión: descarga un .docx con el formato estricto
+              de la curaduría (RIT + NNA precargados, el resto en blanco para completar a
+              mano). Salida nueva e independiente del reporte. Mismo token de descarga. */}
+          <a
+            href={`/api/minuta/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
+            className="text-sm bg-emerald-600 text-white px-3 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors"
+          >
+            📝 Minuta de audiencia (Word)
+          </a>
         </div>
       </header>
 
