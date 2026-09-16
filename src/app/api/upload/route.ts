@@ -150,6 +150,26 @@ export async function POST(req: NextRequest) {
       if (!error) causasActualizadas++
     }
 
+    // 3.b Limpiar NNA/adultos/audiencias de las causas QUE YA EXISTÍAN antes de re-insertar.
+    // El Excel es la fuente de verdad y Paula re-sube el archivo completo con frecuencia.
+    // Sin este borrado, cada re-subida VOLVÍA a insertar los mismos NNA/adultos/audiencias
+    // (ritToId incluye las causas existentes), acumulando duplicados en cada carga.
+    // Solo tocamos las causas presentes en ESTE Excel (las existentes); las nuevas no
+    // tienen hijos aún. Las gestiones de curaduría (bitácora de Paula) NO se tocan: son
+    // datos propios que ella registra a mano, no vienen del Excel.
+    const idsExistentes = causasExistentes
+      .map(c => existingRitMap[c.rit])
+      .filter((v): v is string => !!v)
+
+    for (let i = 0; i < idsExistentes.length; i += 100) {
+      const batch = idsExistentes.slice(i, i + 100)
+      await Promise.all([
+        supabase.from('nna').delete().in('causa_id', batch),
+        supabase.from('adultos').delete().in('causa_id', batch),
+        supabase.from('audiencias').delete().in('causa_id', batch),
+      ])
+    }
+
     // 4. NNA
     let nnaCount = 0
     const nnaRecords = nna
