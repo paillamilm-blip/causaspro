@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
+import { estadoSeguimientoNna, textoSeguimientoNna, DIAS_UMBRAL_SEGUIMIENTO } from '@/lib/seguimientoNna'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
@@ -135,6 +136,11 @@ export default function CausaDetalle() {
   // Nunca se inventa — si la letra no está en el catálogo, queda undefined.
   const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
 
+  // Estado del seguimiento del NNA: vencido si pasaron >90 días desde la última
+  // "Entrevista al NNA" o si nunca se registró una. Se calcula sobre las gestiones ya
+  // cargadas (bitácora de curaduría). Alimenta el aviso destacado de más abajo.
+  const segNna = estadoSeguimientoNna(gestiones)
+
   // Campos importantes primero, luego el resto
   const camposImportantes = ['rit', 'caratulado', 'estado', 'programa_vigente', 'sintesis', 'fecha_apertura', 'saj', 'notas']
   const datosExtra = causa.datos_extra || {}
@@ -180,6 +186,29 @@ export default function CausaDetalle() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* AVISO: seguimiento del NNA vencido (Feature 1/5). Se muestra arriba de todo
+            cuando pasaron más de 90 días desde la última "Entrevista al NNA" o cuando
+            nunca se registró una. Es el recordatorio central de la curaduría: ver al NNA. */}
+        {segNna.vencido && (
+          <section className="bg-rose-50 border border-rose-300 rounded-xl p-5" role="alert">
+            <div className="flex items-start gap-3">
+              <span className="flex items-center justify-center w-9 h-9 rounded-full bg-rose-100 text-rose-700 shrink-0 text-lg" aria-hidden="true">👁️</span>
+              <div className="min-w-0">
+                <h2 className="font-bold text-rose-900">Seguimiento del NNA vencido</h2>
+                <p className="text-sm text-rose-800 mt-0.5">
+                  {segNna.nunca
+                    ? 'Todavía no registraste ninguna "Entrevista al NNA" en esta causa.'
+                    : `La última "Entrevista al NNA" fue el ${formatFecha(segNna.ultimaFecha)} (hace ${segNna.diasDesdeUltima} días).`}
+                  {' '}Como curadora conviene ver/entrevistar al NNA al menos cada {DIAS_UMBRAL_SEGUIMIENTO} días.
+                </p>
+                <p className="text-xs text-rose-700/80 mt-2">
+                  Registrá la entrevista en <strong>Gestiones de curaduría</strong> (más abajo) para poner al día el seguimiento.
+                </p>
+              </div>
+            </div>
+          </section>
+        )}
+
         {/* Análisis estratégico IA (bajo demanda) */}
         {(analizando || analisis || analisisError) && (
           <section className="bg-purple-50 rounded-xl border border-purple-200 p-6">
