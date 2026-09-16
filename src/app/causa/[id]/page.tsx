@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
+import { estadoSeguimiento, textoSeguimiento, esEntrevistaNna } from '@/lib/seguimientoNna'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
@@ -134,6 +135,14 @@ export default function CausaDetalle() {
   // Materia de la causa: se deriva del `tipo` (letra) y, si no lo hubiera, del RIT.
   // Nunca se inventa — si la letra no está en el catálogo, queda undefined.
   const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
+
+  // Seguimiento del NNA: fecha de la última "Entrevista al NNA" registrada en la bitácora
+  // (`gestiones` ya viene ordenada por fecha desc, así que la primera que matchee es la más
+  // reciente). Usa el MISMO criterio tolerante (esEntrevistaNna) que el dashboard, para no
+  // mostrar estados contradictorios sobre la misma causa. Si nunca hubo, estadoSeguimiento
+  // lo marca como pendiente (sinRegistro).
+  const ultimaEntrevista = gestiones.find(g => esEntrevistaNna(g.tipo))?.fecha ?? null
+  const seguimiento = estadoSeguimiento(ultimaEntrevista)
 
   // Campos importantes primero, luego el resto
   const camposImportantes = ['rit', 'caratulado', 'estado', 'programa_vigente', 'sintesis', 'fecha_apertura', 'saj', 'notas']
@@ -334,6 +343,31 @@ export default function CausaDetalle() {
         {/* Gestiones de curaduría (bitácora propia de Paula) */}
         <section className="bg-white rounded-xl border p-6">
           <h2 className="font-bold text-gray-700 mb-3">🗂️ Gestiones de curaduría</h2>
+
+          {/* Aviso de seguimiento del NNA: recuerda la periodicidad de la visita/entrevista.
+              Rojo si nunca se registró, teal si está vencida por tiempo, verde si está al día. */}
+          {seguimiento.vencido ? (
+            <div className={`mb-4 rounded-lg border px-4 py-3 text-sm flex items-start gap-2 ${
+              seguimiento.sinRegistro
+                ? 'bg-red-50 border-red-200 text-red-800'
+                : 'bg-teal-50 border-teal-200 text-teal-800'
+            }`}>
+              <span aria-hidden>👶</span>
+              <div>
+                <strong>{textoSeguimiento(seguimiento)}.</strong>{' '}
+                {seguimiento.sinRegistro
+                  ? 'Registrá la primera entrevista/visita al NNA para dejar constancia del seguimiento.'
+                  : seguimiento.fechaFutura
+                    ? 'La última entrevista quedó con fecha futura — revisá la fecha registrada.'
+                    : 'Convendría agendar una nueva visita/entrevista al NNA y registrarla abajo.'}
+              </div>
+            </div>
+          ) : (
+            <div className="mb-4 rounded-lg border border-green-200 bg-green-50 px-4 py-2.5 text-sm text-green-800 flex items-center gap-2">
+              <span aria-hidden>✓</span>
+              <span>Seguimiento del NNA al día — última visita hace {seguimiento.diasDesdeUltima} días.</span>
+            </div>
+          )}
 
           {/* Formulario para registrar una gestión */}
           <form onSubmit={guardarGestion} className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-4">

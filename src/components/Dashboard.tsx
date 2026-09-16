@@ -4,6 +4,10 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
 import {
+  estadoSeguimiento, mapaUltimaEntrevista, textoSeguimiento,
+  type EstadoSeguimiento,
+} from '@/lib/seguimientoNna'
+import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
   IconCheck, IconShield, IconSparkles, IconPause,
@@ -17,7 +21,8 @@ type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'traslados' | 'criticas' | 'atencion' | 'revisar' | 'estables'
+// 'traslados' y 'seguimiento' son cortes TRANSVERSALES (no niveles del semáforo).
+type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables'
 
 // Color del chip de materia según su grupo práctico.
 const GRUPO_CHIP: Record<GrupoMateria, string> = {
@@ -56,6 +61,11 @@ interface CausaResumen {
   fecha_ultimo_movimiento: string | null
   adulto_nombre: string | null
   adulto_telefono: string | null
+  // Estado del seguimiento del NNA (última "Entrevista al NNA" de la bitácora de gestiones).
+  // Se calcula en el cliente tras cargar `gestiones` (NO viene de la vista). La carga de
+  // gestiones corre igual con la vista o en modo fallback (es una tabla física propia). Si esa
+  // carga FALLA, queda undefined → no se muestra alerta (fail-safe: no inventamos "sano").
+  _seguimiento?: EstadoSeguimiento
 }
 
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
@@ -71,6 +81,15 @@ function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
   // de búsqueda que además está estancada) el chip sí aporta.
   if (c.dias_sin_actividad != null && c.dias_sin_actividad > 180 && c.nivel_urgencia !== 6) {
     chips.push({ texto: `Sin movimiento ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700' })
+  }
+  // Seguimiento del NNA vencido: el deber de visita periódica es de la curadora. Si pasó el
+  // umbral desde la última "Entrevista al NNA" (o nunca se registró), lo hacemos visible.
+  // Rojo si nunca hubo visita (más grave), teal si está vencida por tiempo.
+  if (c._seguimiento?.vencido) {
+    chips.push({
+      texto: textoSeguimiento(c._seguimiento),
+      clase: c._seguimiento.sinRegistro ? 'bg-red-100 text-red-700' : 'bg-teal-100 text-teal-700',
+    })
   }
   return chips
 }
@@ -395,6 +414,25 @@ export default function Dashboard() {
     }
     
     if (data) {
+      // Seguimiento del NNA: cargamos las gestiones de tipo "Entrevista al NNA" (bitácora de
+      // Paula) y calculamos, por causa, hace cuántos días fue la última visita. Es una consulta
+      // aparte y LIGERA (solo 3 columnas) porque las gestiones NO están en v_causas_ranking.
+      // Si falla, seguimos sin la señal (no rompemos el panel): _seguimiento queda undefined.
+      try {
+        const { data: gest, error: gErr } = await fetchAll('gestiones', 'causa_id, tipo, fecha')
+        if (!gErr && gest) {
+          const mapa = mapaUltimaEntrevista(gest)
+          data = data.map((c: any) => ({
+            ...c,
+            _seguimiento: estadoSeguimiento(mapa[c.id] ?? null),
+          }))
+        } else if (gErr) {
+          console.warn('No se pudieron cargar las gestiones (seguimiento NNA):', gErr.message)
+        }
+      } catch (e) {
+        console.warn('Seguimiento NNA: error inesperado al cargar gestiones:', e)
+      }
+
       setCausas(data)
       setTotalCausas(data.length)
       const ahoraFecha = new Date()
@@ -442,6 +480,12 @@ export default function Dashboard() {
   // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
   const traslados = causasPorTexto.filter(c => c.tiene_traslado_curador)
 
+  // Seguimiento del NNA vencido: corte transversal (independiente del nivel del semáforo).
+  // Solo cuenta cuando pudimos calcular _seguimiento (la carga de gestiones fue exitosa);
+  // si esa carga falló, queda undefined → no aparece (no inventamos que está al día). Esta
+  // señal funciona también en modo fallback, porque `gestiones` se carga aparte de la vista.
+  const seguimientoVencido = causasPorTexto.filter(c => c._seguimiento?.vencido)
+
   // Próximas audiencias: causas con audiencia futura, ordenadas por fecha (la más próxima
   // primero). Base del calendario de audiencias. Se calcula sobre el filtro de texto.
   const proximasAudiencias = causasPorTexto
@@ -451,6 +495,7 @@ export default function Dashboard() {
   // Filtro rápido por urgencia (clic en tarjeta KPI). No afecta los contadores de arriba.
   const causasFiltradas =
     filtroUrgencia === 'traslados' ? traslados :
+    filtroUrgencia === 'seguimiento' ? seguimientoVencido :
     filtroUrgencia === 'criticas' ? criticas :
     filtroUrgencia === 'atencion' ? atencion :
     filtroUrgencia === 'revisar' ? revisar :
@@ -474,9 +519,9 @@ export default function Dashboard() {
           <div className="h-7 w-56 rounded-lg bg-slate-200 animate-pulse" />
           <div className="h-4 w-80 rounded bg-slate-100 animate-pulse" />
         </div>
-        {/* Skeleton de los KPI (6, mismo grid que el real → no salta al cargar) */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
-          {Array.from({ length: 6 }).map((_, i) => (
+        {/* Skeleton de los KPI (7, mismo grid que el real → no salta al cargar) */}
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+          {Array.from({ length: 7 }).map((_, i) => (
             <div key={i} className="h-[76px] rounded-xl bg-slate-100 border border-slate-200 animate-pulse" />
           ))}
         </div>
@@ -554,7 +599,7 @@ export default function Dashboard() {
       {/* KPIs clickeables (actúan como filtro rápido por urgencia). Íconos formales
           ligados al color del semáforo. La 6ta (Traslados al curador) es el corte
           transversal más importante para Paula. */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         <KpiCard
           label="Total causas" value={totalCausas}
           active={filtroUrgencia === 'todas'}
@@ -566,6 +611,12 @@ export default function Dashboard() {
           active={filtroUrgencia === 'traslados'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'traslados' ? 'todas' : 'traslados')}
           tone="purple" Icono={IconShield}
+        />
+        <KpiCard
+          label="Seguimiento vencido" value={seguimientoVencido.length}
+          active={filtroUrgencia === 'seguimiento'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'seguimiento' ? 'todas' : 'seguimiento')}
+          tone="teal" Icono={IconUsers}
         />
         <KpiCard
           label="Críticas" value={criticas.length}
@@ -650,6 +701,7 @@ export default function Dashboard() {
         <span className="flex items-center gap-1.5"><IconClock className="w-3.5 h-3.5 text-amber-500" /> Atención: movimiento o audiencia ≤7d</span>
         <span className="flex items-center gap-1.5"><IconPause className="w-3.5 h-3.5 text-orange-500" /> Revisar: estancada &gt;90d</span>
         <span className="flex items-center gap-1.5"><IconCheck className="w-3.5 h-3.5 text-green-500" /> Estable: actividad reciente</span>
+        <span className="flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5 text-teal-600" /> Seguimiento vencido: sin visita al NNA &gt;3 meses</span>
       </div>
 
       {/* ALERTA: TRASLADOS AL CURADOR — el corte más difícil/prioritario para Paula.
@@ -825,7 +877,7 @@ function KpiCard({
   value: number
   active: boolean
   onClick: () => void
-  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green' | 'purple'
+  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green' | 'purple' | 'teal'
   Icono?: IconoTipo
 }) {
   const tones: Record<typeof tone, { dot: string; num: string; ring: string; activeBg: string; icon: string }> = {
@@ -835,6 +887,7 @@ function KpiCard({
     orange:  { dot: 'bg-orange-400',num: 'text-orange-600',ring: 'focus-visible:ring-orange-400',activeBg: 'bg-orange-50 border-orange-400',icon: 'text-orange-500' },
     green:   { dot: 'bg-green-500', num: 'text-green-700', ring: 'focus-visible:ring-green-400', activeBg: 'bg-green-50 border-green-400',  icon: 'text-green-500' },
     purple:  { dot: 'bg-violet-500',num: 'text-violet-700',ring: 'focus-visible:ring-violet-400',activeBg: 'bg-violet-50 border-violet-400',icon: 'text-violet-600' },
+    teal:    { dot: 'bg-teal-500',  num: 'text-teal-700',  ring: 'focus-visible:ring-teal-400',  activeBg: 'bg-teal-50 border-teal-400',   icon: 'text-teal-600' },
   }
   const t = tones[tone]
   return (
