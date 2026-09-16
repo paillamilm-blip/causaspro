@@ -20,6 +20,17 @@ interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
 type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables'
 
+// Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
+// activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
+const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; dotColor: string }> = {
+  traslados:   { title: 'TRASLADOS AL CURADOR', dotColor: 'bg-violet-500' },
+  seguimiento: { title: 'SEGUIMIENTO DEL NNA VENCIDO', dotColor: 'bg-rose-500' },
+  criticas:    { title: 'CRÍTICAS - Acción inmediata', dotColor: 'bg-red-500' },
+  atencion:    { title: 'ATENCIÓN - Revisar esta semana', dotColor: 'bg-amber-400' },
+  revisar:     { title: 'REVISAR - Seguimiento pendiente', dotColor: 'bg-orange-400' },
+  estables:    { title: 'ESTABLES - Sin urgencia inmediata', dotColor: 'bg-green-500' },
+}
+
 // Color del chip de materia según su grupo práctico.
 const GRUPO_CHIP: Record<GrupoMateria, string> = {
   contencioso: 'bg-violet-100 text-violet-700',
@@ -690,8 +701,9 @@ export default function Dashboard() {
 
       {/* ALERTA: TRASLADOS AL CURADOR — el corte más difícil/prioritario para Paula.
           Va DEBAJO de los botones de filtro. Cada causa tiene el botón "Estrategias del
-          Asesor IA" (por ahora muestra "próximamente"; se activa al conectar la IA). */}
-      {traslados.length > 0 && (
+          Asesor IA" (por ahora muestra "próximamente"; se activa al conectar la IA).
+          Solo en la vista general: al filtrar por otro KPI, el detalle va en la sección única. */}
+      {traslados.length > 0 && filtroUrgencia === 'todas' && (
         <div className="bg-violet-50 border border-violet-300 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
             <span className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-100 text-violet-700">
@@ -736,9 +748,9 @@ export default function Dashboard() {
 
       {/* ALERTA: SEGUIMIENTO DEL NNA VENCIDO (Feature 3/5). Corte transversal como los
           Traslados: causas donde pasaron >90 días sin "Entrevista al NNA" (o nunca hubo).
-          Solo se muestra cuando el filtro activo es "Seguimiento vencido" (o sin filtro),
-          para no competir con el bloque de Traslados cuando Paula filtra por otra cosa. */}
-      {seguimientoVencido.length > 0 && (filtroUrgencia === 'todas' || filtroUrgencia === 'seguimiento') && (
+          Solo en la vista general (sin filtro): al filtrar por este KPI, el detalle de las
+          causas aparece en la sección única de abajo, así no se duplica el listado. */}
+      {seguimientoVencido.length > 0 && filtroUrgencia === 'todas' && (
         <div className="bg-rose-50 border border-rose-300 rounded-xl p-4">
           <div className="flex items-center gap-2 mb-3">
             <span className="flex items-center justify-center w-8 h-8 rounded-full bg-rose-100 text-rose-700">
@@ -853,18 +865,34 @@ export default function Dashboard() {
         </div>
       )}
 
-      {/* Secciones por urgencia */}
-      {criticas.length > 0 && (
-        <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
-      )}
-      {atencion.length > 0 && (
-        <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-amber-400" />
-      )}
-      {revisar.length > 0 && (
-        <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
-      )}
-      {estables.length > 0 && (
-        <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" />
+      {/* Listado de causas.
+          - SIN filtro ('todas'): se muestran agrupadas por nivel de urgencia (vista clásica).
+          - CON un filtro activo (clic en un KPI): se muestra UNA sola sección con las causas
+            de ese grupo (filtro rápido real). Así el clic en el KPI sí "despliega" solo esas. */}
+      {filtroUrgencia === 'todas' ? (
+        <>
+          {criticas.length > 0 && (
+            <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
+          )}
+          {atencion.length > 0 && (
+            <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-amber-400" />
+          )}
+          {revisar.length > 0 && (
+            <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
+          )}
+          {estables.length > 0 && (
+            <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" />
+          )}
+        </>
+      ) : (
+        causasFiltradas.length > 0 && (
+          <Section
+            title={FILTRO_SECCION[filtroUrgencia].title}
+            causas={causasFiltradas}
+            defaultOpen={true}
+            dotColor={FILTRO_SECCION[filtroUrgencia].dotColor}
+          />
+        )
       )}
 
       {causasFiltradas.length === 0 && (
