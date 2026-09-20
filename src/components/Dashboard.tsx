@@ -18,7 +18,7 @@ type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables'
+type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera'
 
 // Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
 // activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
@@ -29,6 +29,7 @@ const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; 
   atencion:    { title: 'Atención — Revisar esta semana', dotColor: 'bg-amber-400', tono: 'amber', Icono: IconClock },
   revisar:     { title: 'Revisar — Seguimiento pendiente', dotColor: 'bg-orange-400', tono: 'orange', Icono: IconPause },
   estables:    { title: 'Estables — Sin urgencia inmediata', dotColor: 'bg-green-500', tono: 'green', Icono: IconCheck },
+  fuera:       { title: 'Fuera de monitoreo — relevadas / con sentencia de rechazo', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
 }
 
 // Color del chip de materia según su grupo práctico.
@@ -68,16 +69,56 @@ interface CausaResumen {
   fecha_ultimo_movimiento: string | null
   adulto_nombre: string | null
   adulto_telefono: string | null
+  // Notas de la causa. El bot escribe acá la marca [NO EN PORTAL] cuando la causa ya no
+  // aparece en "Mis Causas" del portal (típicamente porque a Paula le relevaron la
+  // curaduría). Se usa para marcarla "fuera de mi lista" y NO generar alarmas sobre ella.
+  notas?: string | null
   // Marca calculada EN EL CLIENTE (no viene de la vista): el seguimiento del NNA está
   // vencido (>180 días sin "Entrevista al NNA", o nunca se registró una). Se completa en
   // loadCausas cruzando las causas con las gestiones. undefined hasta ese cruce.
   seguimiento_vencido?: boolean
 }
 
+// ¿La causa ya NO está en la lista del portal del curador? El bot marca [NO EN PORTAL] en
+// `notas` cuando el portal confirmó que la causa no aparece en "Mis Causas" (normalmente
+// porque le relevaron la curaduría a Paula). Estas causas siguen visibles (por si fue un
+// error), pero NO deben generar alarmas (seguimiento vencido, urgencias): ya no son su
+// responsabilidad. Comparación tolerante a mayúsculas/espacios.
+function fueraDeMiLista(c: CausaResumen): boolean {
+  return (c.notas ?? '').toUpperCase().includes('[NO EN PORTAL]')
+}
+
+// ¿La causa tiene SENTENCIA DE RECHAZO? En ese caso la protección se rechazó: la causa
+// se destaca y sale de seguimiento/urgencias (ya no hay medida que monitorear). Se detecta
+// de forma tolerante en el estado/síntesis/último movimiento (el portal usa textos como
+// "sentencia de rechazo", "rechaza la solicitud", "se rechaza"). Se evita el falso positivo
+// de "rechaza el incidente/recurso" exigiendo que hable de rechazo de la causa/solicitud/
+// protección/demanda, o el patrón claro "sentencia ... rechaz".
+function tieneSentenciaRechazo(c: CausaResumen): boolean {
+  const texto = `${c.estado ?? ''} ${c.sintesis ?? ''} ${c.ultimo_movimiento ?? ''}`.toLowerCase()
+  if (!texto.includes('rechaz')) return false
+  if (/sentencia[^.]*rechaz/.test(texto)) return true
+  return /rechaz\w*\s+(la\s+)?(solicitud|demanda|medida|protecci|causa|denuncia|requerimiento)/.test(texto)
+}
+
+// ¿La causa debe salir del monitoreo activo (no generar alarmas)? Sea porque le relevaron
+// la curaduría (fuera de la lista del portal) o porque hay sentencia de rechazo.
+function fueraDeMonitoreo(c: CausaResumen): boolean {
+  return fueraDeMiLista(c) || tieneSentenciaRechazo(c)
+}
+
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
 // Cada uno resume una alerta de cumplimiento en un badge compacto y legible.
 function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
   const chips: { texto: string; clase: string }[] = []
+  // Si la causa salió del monitoreo (relevaron curaduría o sentencia de rechazo), mostramos
+  // SOLO ese chip: las demás señales (seguimiento, alertas) ya no aplican.
+  if (tieneSentenciaRechazo(c)) {
+    return [{ texto: 'Sentencia de rechazo', clase: 'bg-slate-800 text-white' }]
+  }
+  if (fueraDeMiLista(c)) {
+    return [{ texto: 'Ya no en mi lista PJUD', clase: 'bg-slate-200 text-slate-600' }]
+  }
   // Seguimiento del NNA vencido (>180d sin "Entrevista al NNA" o nunca). Va primero porque
   // es el recordatorio central de la curaduría: ver al NNA. Se calcula en el cliente.
   if (c.seguimiento_vencido) chips.push({ texto: 'Seguimiento NNA vencido', clase: 'bg-rose-100 text-rose-700' })
@@ -468,22 +509,29 @@ export default function Dashboard() {
   const conDatos = causas.filter(c => c.fecha_ultimo_movimiento || c.ultima_audiencia).length
   const pctDatos = totalCausas > 0 ? Math.round((conDatos / totalCausas) * 100) : 0
 
-  // Agrupar por nivel de urgencia (sobre el filtro de texto, así los KPI no cambian
-  // cuando el usuario aplica el filtro rápido por urgencia).
-  const criticas = causasPorTexto.filter(c => (c.nivel_urgencia || 10) <= 2)
-  const atencion = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
-  const revisar = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
-  const estables = causasPorTexto.filter(c => (c.nivel_urgencia || 10) > 6)
+  // FUERA DE MONITOREO: causas donde relevaron la curaduría ([NO EN PORTAL]) o con
+  // sentencia de rechazo. Se destacan aparte y NO generan alarmas (no cuentan en urgencias
+  // ni en seguimiento vencido). Se separan ANTES de agrupar por urgencia.
+  const fueraMonitoreo = causasPorTexto.filter(fueraDeMonitoreo)
+  // Causas activas = las que Paula sí tiene que monitorear (base de urgencias/seguimiento).
+  const causasActivas = causasPorTexto.filter(c => !fueraDeMonitoreo(c))
+
+  // Agrupar por nivel de urgencia (solo causas ACTIVAS). Sobre el filtro de texto, así los
+  // KPI no cambian cuando el usuario aplica el filtro rápido por urgencia.
+  const criticas = causasActivas.filter(c => (c.nivel_urgencia || 10) <= 2)
+  const atencion = causasActivas.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
+  const revisar = causasActivas.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
+  const estables = causasActivas.filter(c => (c.nivel_urgencia || 10) > 6)
   // Traslados al curador: lo más difícil/prioritario para Paula. Tienen su propia tarjeta.
   // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
-  const traslados = causasPorTexto.filter(c => c.tiene_traslado_curador)
+  const traslados = causasActivas.filter(c => c.tiene_traslado_curador)
   // Seguimiento del NNA vencido: corte transversal (como Traslados) — una causa acá puede
   // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 180 días.
-  const seguimientoVencido = causasPorTexto.filter(c => c.seguimiento_vencido)
+  const seguimientoVencido = causasActivas.filter(c => c.seguimiento_vencido)
 
-  // Próximas audiencias: causas con audiencia futura, ordenadas por fecha (la más próxima
-  // primero). Base del calendario de audiencias. Se calcula sobre el filtro de texto.
-  const proximasAudiencias = causasPorTexto
+  // Próximas audiencias: causas ACTIVAS con audiencia futura, ordenadas por fecha (la más
+  // próxima primero). Base del calendario de audiencias. Se calcula sobre el filtro de texto.
+  const proximasAudiencias = causasActivas
     .filter(c => c.proxima_audiencia != null)
     .sort((a, b) => new Date(a.proxima_audiencia!).getTime() - new Date(b.proxima_audiencia!).getTime())
 
@@ -495,6 +543,7 @@ export default function Dashboard() {
     filtroUrgencia === 'atencion' ? atencion :
     filtroUrgencia === 'revisar' ? revisar :
     filtroUrgencia === 'estables' ? estables :
+    filtroUrgencia === 'fuera' ? fueraMonitoreo :
     causasPorTexto
 
   // Resumen ejecutivo: la frase que Paula lee primero.
@@ -618,7 +667,7 @@ export default function Dashboard() {
       {/* KPIs clickeables (actúan como filtro rápido por urgencia). Íconos formales
           ligados al color del semáforo. "Traslados al curador" y "Seguimiento vencido"
           son cortes transversales (una causa puede caer en ellos con cualquier nivel). */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
         <KpiCard
           label="Total causas" value={totalCausas}
           active={filtroUrgencia === 'todas'}
@@ -661,6 +710,16 @@ export default function Dashboard() {
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'estables' ? 'todas' : 'estables')}
           tone="green" Icono={IconCheck}
         />
+        {/* Solo aparece si hay causas fuera de monitoreo (relevadas o con sentencia de
+            rechazo). No suma a las urgencias; es un corte aparte para revisar. */}
+        {fueraMonitoreo.length > 0 && (
+          <KpiCard
+            label="Fuera de monitoreo" value={fueraMonitoreo.length}
+            active={filtroUrgencia === 'fuera'}
+            onClick={() => setFiltroUrgencia(filtroUrgencia === 'fuera' ? 'todas' : 'fuera')}
+            tone="neutral" Icono={IconInbox}
+          />
+        )}
       </div>
 
       {/* RESULTADO DEL FILTRO: aparece JUSTO debajo de los KPI cuando Paula aprieta uno.
