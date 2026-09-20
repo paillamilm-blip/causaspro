@@ -22,13 +22,13 @@ type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'aten
 
 // Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
 // activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
-const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; dotColor: string }> = {
-  traslados:   { title: 'TRASLADOS AL CURADOR', dotColor: 'bg-violet-500' },
-  seguimiento: { title: 'SEGUIMIENTO DEL NNA VENCIDO', dotColor: 'bg-rose-500' },
-  criticas:    { title: 'CRÍTICAS - Acción inmediata', dotColor: 'bg-red-500' },
-  atencion:    { title: 'ATENCIÓN - Revisar esta semana', dotColor: 'bg-amber-400' },
-  revisar:     { title: 'REVISAR - Seguimiento pendiente', dotColor: 'bg-orange-400' },
-  estables:    { title: 'ESTABLES - Sin urgencia inmediata', dotColor: 'bg-green-500' },
+const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; dotColor: string; tono: TonoBloque; Icono: IconoTipo }> = {
+  traslados:   { title: 'Traslados al curador', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconShield },
+  seguimiento: { title: 'Seguimiento del NNA vencido', dotColor: 'bg-rose-500', tono: 'rose', Icono: IconUsers },
+  criticas:    { title: 'Críticas — Acción inmediata', dotColor: 'bg-red-500', tono: 'red', Icono: IconAlert },
+  atencion:    { title: 'Atención — Revisar esta semana', dotColor: 'bg-amber-400', tono: 'amber', Icono: IconClock },
+  revisar:     { title: 'Revisar — Seguimiento pendiente', dotColor: 'bg-orange-400', tono: 'orange', Icono: IconPause },
+  estables:    { title: 'Estables — Sin urgencia inmediata', dotColor: 'bg-green-500', tono: 'green', Icono: IconCheck },
 }
 
 // Color del chip de materia según su grupo práctico.
@@ -669,14 +669,8 @@ export default function Dashboard() {
           está mostrando y un botón para quitar el filtro. */}
       {filtroUrgencia !== 'todas' && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2">
-              <span className={`inline-block w-3 h-3 rounded-full ${FILTRO_SECCION[filtroUrgencia].dotColor}`} />
-              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">
-                {FILTRO_SECCION[filtroUrgencia].title}
-                <span className="text-slate-400 tabular-nums"> ({causasFiltradas.length})</span>
-              </h2>
-            </div>
+          {/* Botón para salir del filtro (el título/color va dentro del bloque unificado). */}
+          <div className="flex justify-end">
             <button
               onClick={() => setFiltroUrgencia('todas')}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
@@ -685,14 +679,17 @@ export default function Dashboard() {
             </button>
           </div>
           {causasFiltradas.length > 0 ? (
-            <div className="space-y-2">
-              {causasFiltradas.slice(0, 50).map(c => (
-                <CausaCard key={c.id} causa={c} />
-              ))}
-              {causasFiltradas.length > 50 && (
-                <p className="text-sm text-slate-400 text-center pt-1">Mostrando 50 de {causasFiltradas.length}. Afiná con el buscador.</p>
-              )}
-            </div>
+            // Diseño LIMPIO y COHERENTE: todo el resultado pintado con el color del KPI
+            // filtrado (mismo componente que los bloques destacados), en vez del CausaCard
+            // multicolor que mezclaba los colores del semáforo y confundía.
+            <BloqueCausasColapsable
+              titulo={FILTRO_SECCION[filtroUrgencia].title}
+              causas={causasFiltradas}
+              tono={FILTRO_SECCION[filtroUrgencia].tono}
+              Icono={FILTRO_SECCION[filtroUrgencia].Icono}
+              defaultOpen={true}
+              onAsesorIA={filtroUrgencia === 'traslados' ? abrirAsesorIA : undefined}
+            />
           ) : (
             <div className="text-center py-10 px-4 bg-white border border-slate-200 rounded-xl">
               <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 text-slate-400 mb-2">
@@ -979,22 +976,37 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
 // conteo, y el listado se puede plegar/desplegar. Antes estos bloques mostraban TODAS las
 // causas de una, sin poder cerrarlos: Paula pedía un botón para agruparlos como el calendario.
 // Cada fila enlaza al detalle de la causa; opcionalmente muestra el botón del Asesor IA.
+type TonoBloque = 'violet' | 'rose' | 'red' | 'amber' | 'orange' | 'green' | 'slate'
+
+// Paleta por tono: cada grupo/urgencia se pinta con UN solo color en todo el bloque
+// (fondo, borde, ícono, título, badge, RIT). Así el resultado de un filtro es coherente
+// con el color del KPI que lo abrió, en vez de mezclar los colores del semáforo.
+const PALETA_BLOQUE: Record<TonoBloque, {
+  bg: string; border: string; chip: string; chipTxt: string; title: string; badge: string; sub: string; rit: string; card: string
+}> = {
+  violet: { bg: 'bg-violet-50', border: 'border-violet-300', chip: 'bg-violet-100', chipTxt: 'text-violet-700', title: 'text-violet-900', badge: 'bg-violet-600', sub: 'text-violet-700/70', rit: 'text-violet-700', card: 'border-violet-200' },
+  rose:   { bg: 'bg-rose-50',   border: 'border-rose-300',   chip: 'bg-rose-100',   chipTxt: 'text-rose-700',   title: 'text-rose-900',   badge: 'bg-rose-600',   sub: 'text-rose-700/70',   rit: 'text-rose-700',   card: 'border-rose-200' },
+  red:    { bg: 'bg-red-50',    border: 'border-red-300',    chip: 'bg-red-100',    chipTxt: 'text-red-700',    title: 'text-red-900',    badge: 'bg-red-600',    sub: 'text-red-700/70',    rit: 'text-red-700',    card: 'border-red-200' },
+  amber:  { bg: 'bg-amber-50',  border: 'border-amber-300',  chip: 'bg-amber-100',  chipTxt: 'text-amber-700',  title: 'text-amber-900',  badge: 'bg-amber-600',  sub: 'text-amber-700/70',  rit: 'text-amber-700',  card: 'border-amber-200' },
+  orange: { bg: 'bg-orange-50', border: 'border-orange-300', chip: 'bg-orange-100', chipTxt: 'text-orange-700', title: 'text-orange-900', badge: 'bg-orange-600', sub: 'text-orange-700/70', rit: 'text-orange-700', card: 'border-orange-200' },
+  green:  { bg: 'bg-green-50',  border: 'border-green-300',  chip: 'bg-green-100',  chipTxt: 'text-green-700',  title: 'text-green-900',  badge: 'bg-green-600',  sub: 'text-green-700/70',  rit: 'text-green-700',  card: 'border-green-200' },
+  slate:  { bg: 'bg-slate-50',  border: 'border-slate-300',  chip: 'bg-slate-200', chipTxt: 'text-slate-700',  title: 'text-slate-900',  badge: 'bg-slate-600',  sub: 'text-slate-600/70',  rit: 'text-slate-800',  card: 'border-slate-200' },
+}
+
 function BloqueCausasColapsable({
   titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, maximo = 50,
 }: {
   titulo: string
   subtitulo?: string
   causas: CausaResumen[]
-  tono: 'violet' | 'rose'
+  tono: TonoBloque
   Icono: IconoTipo
   defaultOpen?: boolean
   onAsesorIA?: (causaId: string, rit: string) => void
   maximo?: number
 }) {
   const [abierto, setAbierto] = useState(defaultOpen)
-  const t = tono === 'violet'
-    ? { bg: 'bg-violet-50', border: 'border-violet-300', chip: 'bg-violet-100', chipTxt: 'text-violet-700', title: 'text-violet-900', badge: 'bg-violet-600', sub: 'text-violet-700/70', rit: 'text-violet-700', card: 'border-violet-200' }
-    : { bg: 'bg-rose-50', border: 'border-rose-300', chip: 'bg-rose-100', chipTxt: 'text-rose-700', title: 'text-rose-900', badge: 'bg-rose-600', sub: 'text-rose-700/70', rit: 'text-rose-700', card: 'border-rose-200' }
+  const t = PALETA_BLOQUE[tono]
   const mostradas = causas.slice(0, maximo)
 
   return (
