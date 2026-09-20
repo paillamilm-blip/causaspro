@@ -859,10 +859,10 @@ export default function Dashboard() {
       {filtroUrgencia === 'todas' && (
         <>
           {criticas.length > 0 && (
-            <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
+            <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={false} dotColor="bg-red-500" />
           )}
           {atencion.length > 0 && (
-            <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={true} dotColor="bg-amber-400" />
+            <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={false} dotColor="bg-amber-400" />
           )}
           {revisar.length > 0 && (
             <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
@@ -944,34 +944,29 @@ function KpiCard({
 
 function Section({ title, causas, defaultOpen, dotColor }: { title: string; causas: CausaResumen[]; defaultOpen: boolean; dotColor: string }) {
   const [expanded, setExpanded] = useState(defaultOpen)
-  const showing = expanded ? causas.slice(0, 50) : causas.slice(0, 5)
+  // Colapsa de VERDAD: cerrado oculta toda la lista (como el calendario y los bloques
+  // destacados). Antes, "cerrado" igual mostraba 5 causas, así que en secciones con ≤5
+  // el botón parecía no hacer nada. Abierto muestra hasta 50 (con aviso si hay más).
+  const showing = causas.slice(0, 50)
 
   return (
     <div>
       <button
         onClick={() => setExpanded(!expanded)}
         aria-expanded={expanded}
-        className="flex items-center gap-2 text-sm font-bold text-slate-600 uppercase tracking-wide mb-3 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
+        className="w-full flex items-center gap-2 text-sm font-bold text-slate-600 uppercase tracking-wide mb-3 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
       >
         <IconChevron className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${expanded ? 'rotate-90' : ''}`} />
         <span className={`inline-block w-3 h-3 rounded-full ${dotColor}`}></span>
         <span>{title} <span className="text-slate-400 tabular-nums">({causas.length})</span></span>
       </button>
-      {showing.length > 0 && (
+      {expanded && showing.length > 0 && (
         <div className="space-y-2">
           {showing.map((c) => (
             <CausaCard key={c.id} causa={c} />
           ))}
-          {!expanded && causas.length > 5 && (
-            <button
-              onClick={() => setExpanded(true)}
-              className="w-full text-center py-2 text-sm text-slate-600 hover:text-slate-900 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors"
-            >
-              Ver {causas.length - 5} más
-            </button>
-          )}
-          {expanded && causas.length > 50 && (
-            <p className="text-sm text-slate-400 text-center">Mostrando 50 de {causas.length}</p>
+          {causas.length > 50 && (
+            <p className="text-sm text-slate-400 text-center">Mostrando 50 de {causas.length}. Afiná con el buscador.</p>
           )}
         </div>
       )}
