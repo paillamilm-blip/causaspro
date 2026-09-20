@@ -4,7 +4,7 @@ REM CausasPro - BOT PJUD: 100 causas en tandas de 33 (Playwright)
 REM ============================================================
 REM
 REM QUE HACE:
-REM   Corre el bot en 4 tandas de 33 causas, con 30 minutos de
+REM   Corre el bot en 4 tandas de 33 causas, con 15 minutos de
 REM   descanso entre cada tanda. En total procesa hasta ~132 causas
 REM   (4 x 33), tomando cada vez las causas que todavia no tienen
 REM   datos. Con esto cubris las 100 que necesitas.
@@ -54,7 +54,7 @@ REM Si la descarga de Chromium falla, usa tu Chrome instalado:
 REM set BOT_USE_SYSTEM_CHROME=1
 
 echo ============================================================
-echo   CausasPro - 100 causas en tandas de 33 (descanso 30 min)
+echo   CausasPro - 100 causas en tandas de 33 (descanso 15 min)
 echo   NO CIERRES ESTA VENTANA
 echo ============================================================
 echo.
@@ -62,20 +62,20 @@ echo.
 REM ==================== TANDA 1 ====================
 echo [%date% %time%] Iniciando TANDA 1 de 4 (33 causas)...
 call npm run bot
-echo [%date% %time%] TANDA 1 terminada. Descanso de 30 minutos...
-timeout /t 1800 /nobreak
+echo [%date% %time%] TANDA 1 terminada. Descanso de 15 minutos...
+timeout /t 900 /nobreak
 
 REM ==================== TANDA 2 ====================
 echo [%date% %time%] Iniciando TANDA 2 de 4 (33 causas)...
 call npm run bot
-echo [%date% %time%] TANDA 2 terminada. Descanso de 30 minutos...
-timeout /t 1800 /nobreak
+echo [%date% %time%] TANDA 2 terminada. Descanso de 15 minutos...
+timeout /t 900 /nobreak
 
 REM ==================== TANDA 3 ====================
 echo [%date% %time%] Iniciando TANDA 3 de 4 (33 causas)...
 call npm run bot
-echo [%date% %time%] TANDA 3 terminada. Descanso de 30 minutos...
-timeout /t 1800 /nobreak
+echo [%date% %time%] TANDA 3 terminada. Descanso de 15 minutos...
+timeout /t 900 /nobreak
 
 REM ==================== TANDA 4 ====================
 echo [%date% %time%] Iniciando TANDA 4 de 4 (33 causas)...
