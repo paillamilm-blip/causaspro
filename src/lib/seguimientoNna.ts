@@ -2,9 +2,9 @@
 // SEGUIMIENTO DEL NNA — alerta de "seguimiento vencido"
 // ============================================================
 // Regla de curaduría (criterio de Paula): la curadora debe entrevistar/ver al NNA
-// con cierta periodicidad. Si pasaron MÁS de 90 días desde la última gestión del
-// tipo "Entrevista al NNA" —o si NUNCA se registró una— el seguimiento del NNA se
-// considera VENCIDO y hay que priorizarlo.
+// con cierta periodicidad. Si pasaron MÁS de 180 días (6 meses) desde la última
+// gestión del tipo "Entrevista al NNA" —o si NUNCA se registró una— el seguimiento
+// del NNA se considera VENCIDO y hay que priorizarlo.
 //
 // Este módulo es PURO (sin dependencias de React ni de Supabase): recibe las
 // gestiones ya cargadas y devuelve el estado. Así lo pueden usar tanto el detalle
@@ -15,7 +15,8 @@
 export const TIPO_ENTREVISTA_NNA = 'Entrevista al NNA'
 
 // Umbral en días: pasado este límite sin una entrevista, el seguimiento está vencido.
-export const DIAS_UMBRAL_SEGUIMIENTO = 90
+// Criterio de Paula: 180 días (6 meses).
+export const DIAS_UMBRAL_SEGUIMIENTO = 180
 
 // Forma mínima de una gestión que necesita este módulo. La tabla `gestiones` tiene
 // más columnas (id, causa_id, contenido, created_at); acá solo importan tipo y fecha.
@@ -27,7 +28,7 @@ export interface GestionSeguimiento {
 
 // Estado del seguimiento del NNA para una causa.
 export interface EstadoSeguimientoNna {
-  // true si el seguimiento está vencido (nunca se entrevistó, o >90 días desde la última).
+  // true si el seguimiento está vencido (nunca se entrevistó, o >180 días desde la última).
   vencido: boolean
   // true si NUNCA se registró una "Entrevista al NNA" en la causa.
   nunca: boolean

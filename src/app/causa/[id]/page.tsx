@@ -27,6 +27,13 @@ interface Audiencia {
 interface Gestion {
   id: string; fecha: string; tipo: string; contenido: string; created_at: string;
 }
+// Movimiento del expediente (lo captura el bot desde el portal). Permite a Paula leer
+// qué pasó en cada trámite/resolución SIN entrar a la OJV. `descripcion` es el detalle
+// que trae el portal (una línea), no el documento/PDF completo de la resolución.
+interface Movimiento {
+  id: string; fecha: string | null; etapa: string | null; tramite: string;
+  descripcion: string | null; es_traslado_curador: boolean | null;
+}
 
 // Tipos de gestión de curaduría (los que Paula registra). El primero es el más frecuente.
 const TIPOS_GESTION = [
@@ -45,6 +52,7 @@ export default function CausaDetalle() {
   const [adultos, setAdultos] = useState<Adulto[]>([])
   const [audiencias, setAudiencias] = useState<Audiencia[]>([])
   const [gestiones, setGestiones] = useState<Gestion[]>([])
+  const [movimientos, setMovimientos] = useState<Movimiento[]>([])
   const [loading, setLoading] = useState(true)
   // Formulario de nueva gestión de curaduría.
   const [gestionTipo, setGestionTipo] = useState<string>(TIPOS_GESTION[0])
@@ -83,18 +91,23 @@ export default function CausaDetalle() {
 
   async function loadData() {
     setLoading(true)
-    const [c, n, a, au, g] = await Promise.all([
+    const [c, n, a, au, g, m] = await Promise.all([
       supabase.from('causas').select('*').eq('id', id).single(),
       supabase.from('nna').select('*').eq('causa_id', id),
       supabase.from('adultos').select('*').eq('causa_id', id),
       supabase.from('audiencias').select('*').eq('causa_id', id).order('fecha', { ascending: true }),
       supabase.from('gestiones').select('*').eq('causa_id', id).order('fecha', { ascending: false }),
+      // Movimientos del expediente (los captura el bot): fecha/etapa/trámite/descripción.
+      // Más reciente primero. Si la tabla no existe o falla, se ignora (m.error) y la
+      // sección muestra "sin movimientos" — no rompe el resto del detalle.
+      supabase.from('movimientos').select('id, fecha, etapa, tramite, descripcion, es_traslado_curador').eq('causa_id', id).order('fecha', { ascending: false }),
     ])
     if (c.data) setCausa(c.data)
     if (n.data) setNnas(n.data)
     if (a.data) setAdultos(a.data)
     if (au.data) setAudiencias(au.data)
     if (g.data) setGestiones(g.data as Gestion[])
+    if (m.data) setMovimientos(m.data as Movimiento[])
     setLoading(false)
   }
 
@@ -136,7 +149,7 @@ export default function CausaDetalle() {
   // Nunca se inventa — si la letra no está en el catálogo, queda undefined.
   const materiaCausa = materiaDeTipo(causa.tipo) || materiaDeRit(causa.rit)
 
-  // Estado del seguimiento del NNA: vencido si pasaron >90 días desde la última
+  // Estado del seguimiento del NNA: vencido si pasaron >180 días desde la última
   // "Entrevista al NNA" o si nunca se registró una. Se calcula sobre las gestiones ya
   // cargadas (bitácora de curaduría). Alimenta el aviso destacado de más abajo.
   const segNna = estadoSeguimientoNna(gestiones)
@@ -160,9 +173,6 @@ export default function CausaDetalle() {
           {causa.programa_vigente && (
             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{causa.programa_vigente}</span>
           )}
-          {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
-              Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
-              exige autorización — el reporte contiene datos sensibles de la causa. */}
           {/* Análisis estratégico IA (bajo demanda): llama /api/analisis/[id], que arma un
               contexto SOLO procesal (sin nombres/RUT ni cuerpo de resoluciones) y lo manda
               a la IA. Devuelve resumen + próximo paso sugerido + riesgo. */}
@@ -173,15 +183,6 @@ export default function CausaDetalle() {
           >
             {analizando ? '🧠 Analizando…' : '🧠 Asesor de Curaduría IA'}
           </button>
-          {/* Descarga el reporte Word de la causa (ruta API que arma el .docx).
-              Se pasa el token público (NEXT_PUBLIC_REPORTE_TOKEN) porque el endpoint
-              exige autorización — el reporte contiene datos sensibles de la causa. */}
-          <a
-            href={`/api/reporte/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
-            className="text-sm bg-blue-600 text-white px-3 py-1.5 rounded-lg hover:bg-blue-700 transition-colors"
-          >
-            📄 Reporte de curaduría (Word)
-          </a>
           {/* Minuta de audiencia de revisión: descarga un .docx con el formato estricto
               de la curaduría (RIT + NNA precargados, el resto en blanco para completar a
               mano). Salida nueva e independiente del reporte. Mismo token de descarga. */}
@@ -196,7 +197,7 @@ export default function CausaDetalle() {
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {/* AVISO: seguimiento del NNA vencido (Feature 1/5). Se muestra arriba de todo
-            cuando pasaron más de 90 días desde la última "Entrevista al NNA" o cuando
+            cuando pasaron más de 180 días desde la última "Entrevista al NNA" o cuando
             nunca se registró una. Es el recordatorio central de la curaduría: ver al NNA. */}
         {segNna.vencido && (
           <section className="bg-rose-50 border border-rose-300 rounded-xl p-5" role="alert">
@@ -367,6 +368,41 @@ export default function CausaDetalle() {
               })}
             </div>
           )}
+        </section>
+
+        {/* Movimientos del expediente (los captura el bot desde el portal). Permite leer
+            qué pasó en cada trámite/resolución SIN entrar a la OJV. Muestra la descripción
+            que trae el portal (no el documento/PDF completo). Más reciente primero. */}
+        <section className="bg-white rounded-xl border p-6">
+          <h2 className="font-bold text-gray-700 mb-3">📜 Movimientos del expediente ({movimientos.length})</h2>
+          {movimientos.length === 0 ? (
+            <p className="text-gray-400 text-sm">
+              Sin movimientos cargados todavía. El bot los completa al revisar la causa en el portal.
+            </p>
+          ) : (
+            <ol className="relative border-l border-gray-200 ml-2 space-y-4">
+              {movimientos.map(m => (
+                <li key={m.id} className="ml-4">
+                  <span className={`absolute -left-1.5 w-3 h-3 rounded-full border-2 border-white ${m.es_traslado_curador ? 'bg-red-500' : 'bg-gray-400'}`}></span>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-xs font-mono text-gray-500">{formatFecha(m.fecha)}</span>
+                    {m.etapa && <span className="text-xs text-gray-400">{m.etapa}</span>}
+                    <span className="text-sm font-semibold text-gray-700">{m.tramite}</span>
+                    {m.es_traslado_curador && (
+                      <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Traslado al curador</span>
+                    )}
+                  </div>
+                  {m.descripcion && (
+                    <p className="text-sm text-gray-600 mt-0.5 whitespace-pre-wrap">{m.descripcion}</p>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+          <p className="text-xs text-gray-400 mt-4 border-t border-gray-100 pt-3">
+            Se muestra el detalle que registra el portal en cada movimiento. Para el documento
+            completo de una resolución, todavía hay que abrirla en la Oficina Judicial Virtual.
+          </p>
         </section>
 
         {/* Gestiones de curaduría (bitácora propia de Paula) */}
