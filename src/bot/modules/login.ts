@@ -127,9 +127,10 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     await sleep(2000)
     
     // Paso 2c: Click en "Clave Única"
-    log('info', '  Clickeando "Clave Única"...')
-    
-    const clicked = await page.evaluate(() => {
+    // Se extrae a función porque a veces el PRIMER click no "prende" (el portal está
+    // lento o el botón aún no era interactivo) → causa el error histórico "No se redirigió
+    // a Clave Única". Ahora se puede reintentar el click a mitad de la espera.
+    const clickClaveUnica = () => page.evaluate(() => {
       const allElements = document.querySelectorAll('a, span, div, button, li, p')
       for (const el of allElements) {
         const text = (el.textContent || '').trim()
@@ -138,18 +139,15 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
             (el as HTMLElement).click()
             return 'clicked-a'
           }
-          // Si no es <a>, buscar el <a> padre
           const parentLink = el.closest('a')
           if (parentLink) {
             (parentLink as HTMLElement).click()
             return 'clicked-parent-a'
           }
-          // Click directo
           (el as HTMLElement).click()
           return 'clicked-direct'
         }
       }
-      // Buscar por href
       const links = document.querySelectorAll('a[href]')
       for (const link of links) {
         const href = link.getAttribute('href') || ''
@@ -160,7 +158,10 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
       }
       return null
     })
-    
+
+    log('info', '  Clickeando "Clave Única"...')
+    const clicked = await clickClaveUnica()
+
     if (!clicked) {
       log('error', 'No se encontró "Clave Única" después de "Todos los servicios"')
       await page.screenshot({ path: capturaPath('bot_error_no_claveunica.png') }).catch(() => {})
@@ -172,14 +173,23 @@ export async function loginOJV(page: Page, credentials: OJVCredentials): Promise
     // PASO 3: Esperar redirección a accounts.claveunica.gob.cl
     log('info', '  Esperando redirección a Clave Única...')
     
-    // Esperar hasta 30 segundos a que la URL cambie
+    // Esperar hasta 45 segundos a que la URL cambie (el portal a veces tarda,
+    // sobre todo en tandas seguidas). A los ~16s, si todavía no redirigió, se
+    // REINTENTA el click una vez (el primero pudo no registrarse).
     let redirected = false
-    for (let i = 0; i < 15; i++) {
+    let reintentoClick = false
+    for (let i = 0; i < 22; i++) {
       await sleep(2000)
       const currentUrl = page.url()
       if (currentUrl.includes('claveunica')) {
         redirected = true
         break
+      }
+      // A mitad de camino, si seguimos en el portal (no redirigió), reintentar el click.
+      if (!reintentoClick && i === 8 && !currentUrl.includes('claveunica')) {
+        reintentoClick = true
+        log('warn', '  Aún no redirigió → reintentando click en "Clave Única"...')
+        await clickClaveUnica().catch(() => null)
       }
     }
     
