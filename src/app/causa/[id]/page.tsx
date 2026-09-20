@@ -61,7 +61,7 @@ export default function CausaDetalle() {
   const [guardandoGestion, setGuardandoGestion] = useState(false)
   const [gestionError, setGestionError] = useState<string | null>(null)
   // Análisis estratégico IA (bajo demanda, no se carga solo).
-  const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string } | null>(null)
+  const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[] } | null>(null)
   const [analizando, setAnalizando] = useState(false)
   const [analisisError, setAnalisisError] = useState<string | null>(null)
 
@@ -76,7 +76,7 @@ export default function CausaDetalle() {
       if (!res.ok) {
         setAnalisisError(data?.error || 'No se pudo generar el análisis.')
       } else {
-        setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo })
+        setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo, acciones: data.acciones, preguntasPrograma: data.preguntasPrograma })
       }
     } catch {
       setAnalisisError('Error de conexión al generar el análisis.')
@@ -236,13 +236,31 @@ export default function CausaDetalle() {
                   <p className="text-gray-700 mt-0.5">{analisis.resumen}</p>
                 </div>
                 <div>
-                  <span className="text-xs font-semibold text-purple-500 uppercase">Próxima gestión de curaduría</span>
-                  <p className="text-gray-700 mt-0.5">✅ {analisis.proximoPaso}</p>
+                  <span className="text-xs font-semibold text-purple-500 uppercase">Gestiones de curaduría sugeridas</span>
+                  {analisis.acciones && analisis.acciones.length > 0 ? (
+                    <ol className="mt-1 space-y-1 list-decimal list-inside text-gray-700">
+                      {analisis.acciones.map((a, i) => (
+                        <li key={i}>{a}</li>
+                      ))}
+                    </ol>
+                  ) : (
+                    <p className="text-gray-700 mt-0.5">✅ {analisis.proximoPaso}</p>
+                  )}
                 </div>
                 <div>
                   <span className="text-xs font-semibold text-purple-500 uppercase">Alerta de cumplimiento / riesgo del NNA</span>
                   <p className="text-gray-700 mt-0.5">⚠️ {analisis.riesgo}</p>
                 </div>
+                {analisis.preguntasPrograma && analisis.preguntasPrograma.length > 0 && (
+                  <div>
+                    <span className="text-xs font-semibold text-purple-500 uppercase">Preguntas para el programa</span>
+                    <ul className="mt-1 space-y-1 list-disc list-inside text-gray-700">
+                      {analisis.preguntasPrograma.map((q, i) => (
+                        <li key={i}>{q}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
                 <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mt-3">
                   ⚠️ <strong>Sugerencia generada por IA con enfoque de curaduría</strong> a partir de los
                   movimientos del portal. Es una lectura preliminar orientativa centrada en el interés

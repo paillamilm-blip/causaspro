@@ -24,11 +24,16 @@ const MODELOS = [
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const TIMEOUT_MS = 25000
 
-/** Resultado estructurado del análisis estratégico de una causa. */
+/** Resultado estructurado del análisis estratégico de una causa.
+ *  `resumen`, `proximoPaso` y `riesgo` se mantienen por compatibilidad con el frontend.
+ *  `acciones` y `preguntasPrograma` son los campos nuevos que hacen el análisis accionable:
+ *  el frontend los muestra si vienen; si no, cae al proximoPaso clásico (degradación). */
 export interface AnalisisCausa {
-  resumen: string        // 2-3 líneas: en qué estado está la causa
-  proximoPaso: string    // acción concreta sugerida
-  riesgo: string         // riesgo/urgencia principal a vigilar
+  resumen: string              // 2-3 líneas: estado de la protección y del cumplimiento
+  proximoPaso: string          // acción principal sugerida (compat; = acciones[0] si hay)
+  riesgo: string               // riesgo/plazo principal a vigilar
+  acciones?: string[]          // 2-3 gestiones de curaduría priorizadas (la 1ª es la más urgente)
+  preguntasPrograma?: string[] // preguntas clave que la curadora podría hacerle al programa
 }
 
 /** ¿Hay key de OpenRouter configurada? (para fail-safe honesto). */
@@ -63,7 +68,7 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
             { role: 'user', content: user },
           ],
           temperature: 0.3,
-          max_tokens: 700,
+          max_tokens: 1000,
         }),
         signal: controller.signal,
       })
@@ -98,14 +103,28 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
  * Si no se puede parsear, se usa el texto crudo como resumen (degradación elegante).
  */
 function parsearAnalisis(texto: string): AnalisisCausa {
+  // Normaliza a lista de strings limpios (acepta array o string suelto), sin vacíos.
+  const aLista = (v: any): string[] => {
+    if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean).slice(0, 4)
+    if (typeof v === 'string' && v.trim()) return [v.trim()]
+    return []
+  }
   try {
     const match = texto.match(/\{[\s\S]*\}/)
     if (match) {
       const obj = JSON.parse(match[0])
+      const acciones = aLista(obj.acciones)
+      const preguntasPrograma = aLista(obj.preguntasPrograma || obj.preguntas_programa || obj.preguntas)
+      // proximoPaso (compat): explícito, o la primera acción priorizada, o fallback.
+      const proximoPaso = String(obj.proximoPaso || obj.proximo_paso || '').trim()
+        || acciones[0]
+        || 'Revisar el estado de la medida y el cumplimiento del programa.'
       return {
         resumen: String(obj.resumen || '').trim() || 'Sin información suficiente sobre el estado de la protección.',
-        proximoPaso: String(obj.proximoPaso || obj.proximo_paso || '').trim() || 'Revisar el estado de la medida y el cumplimiento del programa.',
+        proximoPaso,
         riesgo: String(obj.riesgo || '').trim() || 'Sin alerta de cumplimiento identificada.',
+        acciones: acciones.length ? acciones : undefined,
+        preguntasPrograma: preguntasPrograma.length ? preguntasPrograma : undefined,
       }
     }
   } catch {
@@ -139,8 +158,14 @@ export async function analizarCausaIA(contexto: string): Promise<AnalisisCausa> 
     '- Prioriza gestiones propias de la CURADURÍA (informe del programa, reunión técnica, entrevista de seguimiento con el NNA, verificación de cumplimiento, revisión de la medida) por sobre gestiones puramente procesales de abogado litigante.',
     '- NO inventes datos que no estén en el contexto. Si falta información (ej. no consta informe reciente), dilo como observación.',
     '- La curadora es quien decide; tú aportas una lectura preliminar centrada en el NNA.',
-    'Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional, con exactamente estas claves:',
-    '{"resumen": "2-3 frases sobre el estado de la protección del NNA y el cumplimiento de la medida, según los movimientos", "proximoPaso": "una gestión de CURADURÍA que la curadora PODRÍA evaluar (informe de programa, reunión técnica, entrevista de seguimiento, verificación de cumplimiento, revisión de medida), en tono tentativo", "riesgo": "el principal riesgo para el NNA o punto de cumplimiento/plazo a vigilar, como posibilidad"}',
+    'SÉ ESPECÍFICO: apóyate en los movimientos y su DESCRIPCIÓN concretos del contexto (fechas, programa, qué informó, qué se resolvió). NO des consejos genéricos que servirían para cualquier causa; menciona el dato puntual que motiva cada sugerencia. Si el contexto no alcanza para ser específico, dilo.',
+    'Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional, con EXACTAMENTE estas claves:',
+    '{',
+    '"resumen": "2-3 frases concretas sobre el estado de la protección del NNA y el cumplimiento de la medida, citando el dato que lo respalda",',
+    '"acciones": ["2 a 3 gestiones de CURADURÍA priorizadas (la primera = la más urgente), concretas y ancladas a un dato de la causa, en tono tentativo (\'convendría…\', \'sería recomendable evaluar…\')"],',
+    '"riesgo": "el principal riesgo para el NNA o punto de cumplimiento/plazo a vigilar, como posibilidad",',
+    '"preguntasPrograma": ["1 a 3 preguntas clave que la curadora podría hacerle al programa ejecutor para verificar el cumplimiento; [] si no aplica"]',
+    '}',
   ].join(' ')
 
   const user = `Analiza esta causa de protección desde el rol de CURADORA AD LÍTEM (velar por el NNA y el cumplimiento de la medida) y devuelve el JSON pedido:\n\n${contexto}`

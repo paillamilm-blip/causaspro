@@ -12,6 +12,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
 import { analizarCausaIA, iaDisponible } from '@/lib/aiClient'
+import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
+import { estadoSeguimientoNna, textoSeguimientoNna } from '@/lib/seguimientoNna'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -62,11 +64,13 @@ function fmtFecha(iso: string | null): string {
 }
 
 /**
- * Red de seguridad anti-PII: aunque solo mandamos campos de trámite (etiquetas de tipo
- * de trámite, no el cuerpo de la resolución), estos pueden ocasionalmente traer un RUT o
- * un nombre embebido. Redactamos RUT chilenos y secuencias de nombres propios antes de
- * armar el prompt que sale a un tercero. Es defensa en profundidad, no la protección
- * principal (la principal es NO traer `descripcion` ni `caratulado`).
+ * Red de seguridad anti-PII. Mandamos el trámite Y su descripción (el "qué pasó") para que
+ * el análisis sea específico, pero la descripción de causas de protección puede traer
+ * nombres/RUT de NNA y progenitores embebidos. Por eso TODO lo que sale al modelo
+ * (trámite, etapa y descripción) pasa OBLIGATORIAMENTE por esta función, que redacta RUT
+ * chilenos y secuencias de nombres propios. Además seguimos SIN mandar `caratulado` ni
+ * `sintesis` (que suelen contener el nombre del NNA en claro). La redacción es la defensa
+ * principal sobre la descripción; la omisión lo es sobre caratulado/síntesis.
  */
 function redactarPII(texto: string): string {
   if (!texto) return ''
@@ -108,18 +112,21 @@ export async function GET(
     return NextResponse.json({ error: e?.message || 'Supabase no configurado' }, { status: 500 })
   }
 
-  const [cRes, movRes, audRes, nnaRes, senalRes] = await Promise.all([
+  const [cRes, movRes, audRes, nnaRes, senalRes, gestRes] = await Promise.all([
     // Solo campos procesales. NO traemos caratulado ni sintesis: el caratulado suele
     // contener el NOMBRE del NNA y no debe salir a un tercero.
     sb.from('causas').select('rit, tipo, estado, programa_vigente, fecha_apertura').eq('id', causaId).single(),
-    // De los movimientos NO traemos `descripcion` (texto libre de la resolución, que en
-    // causas de protección suele traer nombres/RUT de NNA y progenitores embebidos).
-    // Solo etapa/tramite (tipo de trámite) + fecha + flag de traslado.
-    sb.from('movimientos').select('fecha, etapa, tramite, es_traslado_curador').eq('causa_id', causaId).order('fecha', { ascending: false }).limit(40),
+    // Traemos también `descripcion` (el "qué pasó" de cada trámite/resolución) para que la
+    // IA no opine a ciegas. La descripción puede traer nombres/RUT embebidos, por eso SIEMPRE
+    // se pasa por redactarPII() antes de armar el prompt (defensa anti-PII: ver más abajo).
+    sb.from('movimientos').select('fecha, etapa, tramite, descripcion, es_traslado_curador').eq('causa_id', causaId).order('fecha', { ascending: false }).limit(40),
     sb.from('audiencias').select('fecha, tipo').eq('causa_id', causaId).order('fecha', { ascending: false }).limit(10),
     sb.from('nna').select('edad').eq('causa_id', causaId),
     // Señales de curaduría ya calculadas por la vista (flags booleanos, NO son PII).
     sb.from('v_causas_ranking').select('tiene_orden_busqueda, tiene_no_adherencia, tiene_citacion_audiencia, tiene_traslado_curador, dias_sin_actividad').eq('id', causaId).single(),
+    // Gestiones propias de la curadora (tipo + fecha, NO el contenido/PII) para saber si
+    // el seguimiento del NNA está al día (última "Entrevista al NNA").
+    sb.from('gestiones').select('tipo, fecha').eq('causa_id', causaId),
   ])
 
   if (cRes.error || !cRes.data) {
@@ -144,10 +151,23 @@ export async function GET(
   // Solo datos procesales + cantidad/edades de NNA (agregado, no identificable).
   const lineas: string[] = []
   lineas.push(`RIT: ${c.rit}`)
-  if (c.tipo) lineas.push(`Tipo/materia (letra): ${c.tipo}`)
+  // Materia LEGIBLE (no solo la letra): ayuda a la IA a entender de qué trata la causa.
+  const materia = materiaDeTipo(c.tipo) || materiaDeRit(c.rit)
+  if (materia) {
+    lineas.push(`Materia: ${materia.materia} (${GRUPO_LABEL[materia.grupo]}) — ${materia.descripcion}`)
+  } else if (c.tipo) {
+    lineas.push(`Tipo/materia (letra): ${c.tipo}`)
+  }
   if (c.estado) lineas.push(`Estado actual: ${c.estado}`)
   if (c.programa_vigente) lineas.push(`Programa vigente: ${c.programa_vigente}`)
   if (c.fecha_apertura) lineas.push(`Fecha de apertura: ${fmtFecha(c.fecha_apertura)}`)
+
+  // Estado del seguimiento del NNA (última "Entrevista al NNA"). Solo tipo+fecha de las
+  // gestiones (no el contenido), así la IA sabe si Paula tiene el seguimiento al día sin
+  // exponer notas privadas. textoSeguimientoNna ya devuelve una frase lista.
+  const gestiones = (gestRes?.data || []) as { tipo: string | null; fecha: string | null }[]
+  const segNna = estadoSeguimientoNna(gestiones)
+  lineas.push(`Seguimiento del NNA: ${textoSeguimientoNna(segNna)}${segNna.vencido ? ' (VENCIDO)' : ''}.`)
   if (nna.length > 0) {
     // Edad en RANGO (no exacta): reduce el riesgo de reidentificación en causas de
     // protección con hermanos. Rangos: primera infancia / niñez / adolescencia.
@@ -163,10 +183,15 @@ export async function GET(
     lineas.push(`\nÚltimos movimientos (más reciente primero):`)
     for (const m of movimientos.slice(0, 25)) {
       const tras = m.es_traslado_curador ? ' [TRASLADO AL CURADOR]' : ''
-      // Solo tipo de trámite + etapa (etiquetas), redactados por si traen PII embebida.
+      // Trámite + etapa + DESCRIPCIÓN (el "qué pasó"), TODO redactado por si trae PII
+      // embebida (nombres/RUT). La descripción es lo que hace el análisis específico:
+      // ej. "cita a audiencia preparatoria", "informe del programa por inasistencia".
       const tramite = redactarPII(m.tramite || '')
       const etapa = m.etapa ? ` (${redactarPII(m.etapa)})` : ''
-      lineas.push(`- ${fmtFecha(m.fecha)} · ${tramite}${etapa}${tras}`)
+      const descRaw = redactarPII(m.descripcion || '').trim()
+      // Recortar descripciones muy largas para no inflar el prompt (y su costo).
+      const desc = descRaw ? `: ${descRaw.slice(0, 180)}` : ''
+      lineas.push(`- ${fmtFecha(m.fecha)} · ${tramite}${etapa}${desc}${tras}`)
     }
   }
 
