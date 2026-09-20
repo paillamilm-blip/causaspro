@@ -10,15 +10,17 @@ import type { ImapConfig, ParsedEmail } from '../types'
  * Obtiene configuración IMAP desde variables de entorno
  */
 export function getImapConfig(): ImapConfig {
-  const host = process.env.IMAP_HOST
+  // Microsoft 365 por defecto (outlook.office365.com). Se puede sobrescribir
+  // con IMAP_HOST si el servidor de correo es otro.
+  const host = process.env.IMAP_HOST || process.env.EMAIL_HOST || 'outlook.office365.com'
   const port = parseInt(process.env.IMAP_PORT || '993')
   const user = process.env.IMAP_USER || process.env.EMAIL_USER
   const password = process.env.IMAP_PASSWORD || process.env.EMAIL_PASSWORD
   
-  if (!host || !user || !password) {
+  if (!user || !password) {
     throw new Error(
       'Configuración IMAP incompleta. Variables requeridas:\n' +
-      '  IMAP_HOST (ej: mail.cajmetro.cl)\n' +
+      '  IMAP_HOST (opcional, por defecto outlook.office365.com para Microsoft 365)\n' +
       '  IMAP_USER (ej: pvargas@cajmetro.cl)\n' +
       '  IMAP_PASSWORD (contraseña del correo)'
     )
@@ -162,11 +164,24 @@ export async function fetchAsignacionEmails(
 /**
  * Versión simplificada: busca emails usando búsqueda básica
  * Compatible con más servidores IMAP
+ *
+ * Opciones:
+ *  - historico: si es true, lee TODO el buzón desde el inicio (leídos y no
+ *    leídos) y NO marca como leído. Ideal para la carga inicial de todas las
+ *    asignaciones que ya te enviaron. Si es false (default), solo lee los
+ *    correos NO leídos de los últimos 7 días y los marca como leídos.
  */
-export async function fetchAsignacionEmailsSimple(config: ImapConfig): Promise<ParsedEmail[]> {
+export async function fetchAsignacionEmailsSimple(
+  config: ImapConfig,
+  options: { historico?: boolean } = {}
+): Promise<ParsedEmail[]> {
+  const { historico = false } = options
   const emails: ParsedEmail[] = []
   
   console.log(`📧 Conectando a ${config.host}:${config.port}...`)
+  if (historico) {
+    console.log('🕰️  MODO HISTÓRICO: leyendo TODO el buzón desde el inicio (leídos y no leídos)')
+  }
   
   const client = new ImapFlow({
     host: config.host,
@@ -185,12 +200,20 @@ export async function fetchAsignacionEmailsSimple(config: ImapConfig): Promise<P
     
     await client.mailboxOpen('INBOX')
     
-    // Buscar últimos 7 días, no leídos, con subject ASIGNACION
-    const since = new Date()
-    since.setDate(since.getDate() - 7)
+    // Criterio de búsqueda:
+    //  - Modo normal: últimos 7 días + solo NO leídos
+    //  - Modo histórico: TODO el buzón (sin filtro de fecha ni de leído)
+    let searchCriteria: Record<string, unknown>
+    if (historico) {
+      searchCriteria = { all: true }
+    } else {
+      const since = new Date()
+      since.setDate(since.getDate() - 7)
+      searchCriteria = { since, seen: false }
+    }
     
     for await (const msg of client.fetch(
-      { since, seen: false },
+      searchCriteria,
       { uid: true, envelope: true, source: true }
     )) {
       try {
@@ -214,8 +237,11 @@ export async function fetchAsignacionEmailsSimple(config: ImapConfig): Promise<P
             html,
           })
           
-          // Marcar como leído
-          await client.messageFlagsAdd(msg.uid!.toString(), ['\\Seen'], { uid: true })
+          // En modo histórico NO tocamos el estado leído/no leído.
+          // En modo normal, marcar como leído para no reprocesar.
+          if (!historico) {
+            await client.messageFlagsAdd(msg.uid!.toString(), ['\\Seen'], { uid: true })
+          }
         }
       } catch {}
     }
@@ -227,6 +253,7 @@ export async function fetchAsignacionEmailsSimple(config: ImapConfig): Promise<P
     throw error
   }
   
+  console.log(`📧 ${emails.length} emails de ASIGNACIONES encontrados`)
   return emails
 }
 

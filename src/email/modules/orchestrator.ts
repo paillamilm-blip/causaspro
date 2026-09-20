@@ -10,8 +10,14 @@ import { syncAsignaciones } from './syncAsignaciones'
 
 /**
  * Ejecuta una revisión completa de emails de ASIGNACIONES
+ *
+ * @param options.historico  Si es true, procesa TODO el buzón desde el inicio
+ *   (leídos y no leídos) sin marcarlos como leídos. Útil para la carga inicial.
  */
-export async function runEmailCheck(): Promise<EmailRunStatus> {
+export async function runEmailCheck(
+  options: { historico?: boolean } = {}
+): Promise<EmailRunStatus> {
+  const { historico = false } = options
   const runId = `email_${Date.now().toString(36)}`
   
   const status: EmailRunStatus = {
@@ -35,8 +41,8 @@ export async function runEmailCheck(): Promise<EmailRunStatus> {
     console.log(`👤 Usuario: ${config.user}`)
     
     // 2. Buscar emails de ASIGNACIONES
-    console.log('\n🔍 Buscando emails de ASIGNACIONES...')
-    const emails = await fetchAsignacionEmailsSimple(config)
+    console.log(`\n🔍 Buscando emails de ASIGNACIONES${historico ? ' (TODO el historial)' : ' (últimos 7 días, no leídos)'}...`)
+    const emails = await fetchAsignacionEmailsSimple(config, { historico })
     status.emails_revisados = emails.length
     
     if (emails.length === 0) {

@@ -41,10 +41,19 @@ async function main() {
     process.env.IMAP_PASSWORD = process.env.EMAIL_PASSWORD
   }
   
+  // Modo histórico: EMAIL_MODE=historico (o pasar --historico como argumento).
+  // Lee TODO el buzón desde el inicio (leídos y no leídos) para la carga inicial.
+  const historico =
+    process.env.EMAIL_MODE === 'historico' ||
+    process.argv.includes('--historico')
+  
   console.log('🚀 Iniciando interceptor de correos...')
+  if (historico) {
+    console.log('🕰️  Modo HISTÓRICO activado: se procesará todo el historial de asignaciones.')
+  }
   console.log('')
   
-  const result = await runEmailCheck()
+  const result = await runEmailCheck({ historico })
   
   process.exit(result.errores.length > 0 ? 1 : 0)
 }
