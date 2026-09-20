@@ -34,6 +34,8 @@ export interface AnalisisCausa {
   riesgo: string               // riesgo/plazo principal a vigilar
   acciones?: string[]          // 2-3 gestiones de curaduría priorizadas (la 1ª es la más urgente)
   preguntasPrograma?: string[] // preguntas clave que la curadora podría hacerle al programa
+  resumenCausa?: string        // dónde está parada la causa HOY (recorrido/estado actual)
+  resumenProgramas?: string    // qué han dicho/pedido los programas, según los movimientos
 }
 
 /** ¿Hay key de OpenRouter configurada? (para fail-safe honesto). */
@@ -125,6 +127,8 @@ function parsearAnalisis(texto: string): AnalisisCausa {
         riesgo: String(obj.riesgo || '').trim() || 'Sin alerta de cumplimiento identificada.',
         acciones: acciones.length ? acciones : undefined,
         preguntasPrograma: preguntasPrograma.length ? preguntasPrograma : undefined,
+        resumenCausa: String(obj.resumenCausa || obj.resumen_causa || '').trim() || undefined,
+        resumenProgramas: String(obj.resumenProgramas || obj.resumen_programas || '').trim() || undefined,
       }
     }
   } catch {
@@ -159,8 +163,11 @@ export async function analizarCausaIA(contexto: string): Promise<AnalisisCausa> 
     '- NO inventes datos que no estén en el contexto. Si falta información (ej. no consta informe reciente), dilo como observación.',
     '- La curadora es quien decide; tú aportas una lectura preliminar centrada en el NNA.',
     'SÉ ESPECÍFICO: apóyate en los movimientos y su DESCRIPCIÓN concretos del contexto (fechas, programa, qué informó, qué se resolvió). NO des consejos genéricos que servirían para cualquier causa; menciona el dato puntual que motiva cada sugerencia. Si el contexto no alcanza para ser específico, dilo.',
+    'Sobre "resumenProgramas": resume qué han informado o SOLICITADO los programas ejecutores (OPD, PPF, PIE, PRM, DAM, etc.) SEGÚN LO QUE DIGAN LAS DESCRIPCIONES de los movimientos. Si las descripciones no detallan el contenido de los informes, dilo explícitamente (ej. "consta ingreso de informes del PPF pero sin detalle en el sistema"). NO inventes lo que diría un informe que no está en el contexto.',
     'Responde ÚNICAMENTE con un objeto JSON válido, sin texto adicional, con EXACTAMENTE estas claves:',
     '{',
+    '"resumenCausa": "2-3 frases sobre DÓNDE ESTÁ PARADA LA CAUSA HOY: su recorrido resumido y el estado actual, según los movimientos y el estado",',
+    '"resumenProgramas": "qué han dicho o pedido los PROGRAMAS ejecutores según las descripciones de los movimientos; si no hay detalle, indícalo; \'\' si no consta intervención de programas",',
     '"resumen": "2-3 frases concretas sobre el estado de la protección del NNA y el cumplimiento de la medida, citando el dato que lo respalda",',
     '"acciones": ["2 a 3 gestiones de CURADURÍA priorizadas (la primera = la más urgente), concretas y ancladas a un dato de la causa, en tono tentativo (\'convendría…\', \'sería recomendable evaluar…\')"],',
     '"riesgo": "el principal riesgo para el NNA o punto de cumplimiento/plazo a vigilar, como posibilidad",',

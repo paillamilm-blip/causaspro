@@ -231,7 +231,7 @@ export default function Dashboard() {
   const [asesorIA, setAsesorIA] = useState<{
     rit: string
     cargando: boolean
-    resultado: { resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[] } | null
+    resultado: { resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[]; resumenCausa?: string; resumenProgramas?: string } | null
     error: string | null
   } | null>(null)
 
@@ -876,6 +876,18 @@ export default function Dashboard() {
             {/* Resultado */}
             {!asesorIA.cargando && asesorIA.resultado && (
               <div className="space-y-4">
+                {asesorIA.resultado.resumenCausa && (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Resumen actual de la causa</div>
+                    <p className="text-sm text-slate-700">{asesorIA.resultado.resumenCausa}</p>
+                  </div>
+                )}
+                {asesorIA.resultado.resumenProgramas && (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Qué dicen / piden los programas</div>
+                    <p className="text-sm text-slate-700">{asesorIA.resultado.resumenProgramas}</p>
+                  </div>
+                )}
                 <div>
                   <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Estado de la protección</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.resumen}</p>

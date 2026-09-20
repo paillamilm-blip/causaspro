@@ -61,7 +61,7 @@ export default function CausaDetalle() {
   const [guardandoGestion, setGuardandoGestion] = useState(false)
   const [gestionError, setGestionError] = useState<string | null>(null)
   // Análisis estratégico IA (bajo demanda, no se carga solo).
-  const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[] } | null>(null)
+  const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[]; resumenCausa?: string; resumenProgramas?: string } | null>(null)
   const [analizando, setAnalizando] = useState(false)
   const [analisisError, setAnalisisError] = useState<string | null>(null)
 
@@ -76,7 +76,7 @@ export default function CausaDetalle() {
       if (!res.ok) {
         setAnalisisError(data?.error || 'No se pudo generar el análisis.')
       } else {
-        setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo, acciones: data.acciones, preguntasPrograma: data.preguntasPrograma })
+        setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo, acciones: data.acciones, preguntasPrograma: data.preguntasPrograma, resumenCausa: data.resumenCausa, resumenProgramas: data.resumenProgramas })
       }
     } catch {
       setAnalisisError('Error de conexión al generar el análisis.')
@@ -231,6 +231,18 @@ export default function CausaDetalle() {
             )}
             {analisis && (
               <div className="space-y-3 text-sm">
+                {analisis.resumenCausa && (
+                  <div>
+                    <span className="text-xs font-semibold text-purple-500 uppercase">Resumen actual de la causa</span>
+                    <p className="text-gray-700 mt-0.5">{analisis.resumenCausa}</p>
+                  </div>
+                )}
+                {analisis.resumenProgramas && (
+                  <div>
+                    <span className="text-xs font-semibold text-purple-500 uppercase">Qué dicen / piden los programas</span>
+                    <p className="text-gray-700 mt-0.5">{analisis.resumenProgramas}</p>
+                  </div>
+                )}
                 <div>
                   <span className="text-xs font-semibold text-purple-500 uppercase">Estado de la protección</span>
                   <p className="text-gray-700 mt-0.5">{analisis.resumen}</p>
