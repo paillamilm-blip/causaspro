@@ -54,53 +54,43 @@ npm run bot:test
    ```
 2. **Crear tu archivo de credenciales** a partir de la plantilla:
    ```cmd
-   copy correr-bot-playwright.bat.example correr-bot-playwright.bat
+   copy bot-100-causas.bat.example bot-100-causas.bat
    ```
-3. Abre `correr-bot-playwright.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
+3. Abre `bot-100-causas.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
    - `PJUD_RUT` → tu RUT (ej: `17692174-9`)
    - `PJUD_PASSWORD` → tu contraseña de Clave Única
    - `SUPABASE_SERVICE_ROLE_KEY` → tu service role key (Supabase → Settings → API)
-4. **Doble clic** en `correr-bot-playwright.bat` → arranca en modo prueba (5 causas,
-   navegador visible). Verás el navegador hacer login, buscar y scrapear.
+4. **Doble clic** en `bot-100-causas.bat` → corre **100 causas en 4 tandas de 33**,
+   con **30 minutos de descanso** entre tandas. **No cierres la ventana negra** hasta
+   que diga `PROCESO COMPLETO`. Para detener antes: `Ctrl + C`.
 
-> ⚠️ **Requisito para que el modo prueba scrapee algo:** el bot revisa las causas
-> que YA tienes cargadas en la base de datos (tabla `causas`). Si la BD está vacía,
-> el bot hará login pero terminará sin scrapear (logueará "No hay causas cargadas").
-> Primero sube tu Excel de causas desde la app. (Alternativa para probar contra todo
-> el portal sin causas cargadas: agrega `set BOT_SEARCH_MODE=listado` al `.bat`, pero
-> ojo que el listado masivo puede disparar el CAPTCHA — ver bitácora de errores.)
+> ⚠️ **Requisito:** el bot revisa las causas que YA tienes cargadas en la base de
+> datos (tabla `causas`). Si la BD está vacía, hará login pero terminará sin scrapear
+> ("No hay causas cargadas"). Primero sube tu Excel de causas desde la app.
 
 > ⚠️ El `.bat` con tus claves **NO se sube a git** (está en `.gitignore`). Solo se
-> versiona el `.bat.example` sin secretos.
+> versiona `bot-100-causas.bat.example` (sin secretos).
 
-### 🗓️ Dejar tandas programadas (Programador de Tareas de Windows)
+### ⚙️ Ajustes del `.bat` (opcional)
 
-Para avanzar fuerte en pocos días (ej. cerrar la base antes de una fecha), usa
-`cargar-tanda.bat` (25 causas por tanda) programado en Windows:
-
-1. Copia `cargar-tanda.bat.example` como `cargar-tanda.bat` y pon tus datos.
-2. Abre el **Programador de tareas** de Windows (buscar "Programador de tareas").
-3. **Crear tarea básica** → nombre: `CausasPro tanda`.
-4. **Desencadenador**: Diariamente → hora de inicio **12:00** → repetir cada
-   **40 minutos** durante **6 horas** (así corre ~9 tandas entre 12:00 y 18:00).
-   - (En "Desencadenadores → Editar → Configuración avanzada": marcar
-     "Repetir cada: 40 minutos" / "durante: 6 horas".)
-5. **Acción**: Iniciar un programa → Programa: la ruta completa a
-   `cargar-tanda.bat` (ej. `C:\Users\srtaj\OneDrive\Escritorio\causaspro\cargar-tanda.bat`).
-6. **Condiciones**: dejar la PC prendida en ese horario (ya no depende de nada más).
+- **Cambiar el tamaño de tanda:** editá `set BOT_MAX_CAUSAS=33`.
+- **Cambiar el descanso:** editá los `timeout /t 1800` (1800 s = 30 min).
+- **Más/menos tandas:** copiá o borrá un bloque `==== TANDA N ====`.
+- **Modo seguro por horario:** el `.bat` trae `set SKIP_HOUR_CHECK=1` para correr a
+  cualquier hora (estamos atrasados). Si preferís que solo corra en horario laboral
+  chileno (8–18h), poné `REM ` adelante de esa línea.
+- **Si falla la descarga de Chromium:** descomentá `set BOT_USE_SYSTEM_CHROME=1`.
 
 **Seguridad incorporada:**
-- El `.bat` tiene un **lock** (`cargar-tanda.lock`): si una tanda aún corre, la
-  siguiente se cancela sola → nunca dos bots del mismo RUT a la vez.
-- **Respeta el horario laboral chileno** (8-18h): fuera de ese horario el bot se
-  auto-cancela (no seteamos `SKIP_HOUR_CHECK`).
-- Cada tanda deja registro en `cargar-tanda-log.txt`.
+- **Lock anti-solape** (`bot-100-causas.lock`): si una tanda aún corre, no arranca otra
+  → nunca dos bots del mismo RUT a la vez.
+- Los descansos de 30 min entre tandas espacian la actividad (menos marca de bot).
 
 > ⚠️ Si Paula está usando el **portal del PJUD** (no el dashboard) al mismo tiempo,
 > pueden pisarse la sesión. El dashboard (causaspro.vercel.app) NO toca el PJUD, así
 > que puede usarlo sin problema mientras corren las tandas.
-> Si aparece CAPTCHA o la tasa se desploma: **desactiva la tarea programada** ese día
-> y retoma al siguiente (el descanso "limpia" la marca de bot).
+> Si aparece CAPTCHA o la tasa se desploma: **cerrá el bot** ese día y retomá al
+> siguiente (el descanso "limpia" la marca de bot).
 
 ### Requisito de base de datos
 Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
@@ -111,7 +101,7 @@ Antes de la primera corrida, ejecuta en el SQL Editor de Supabase:
 Si `npx playwright install chromium` da timeout o "Download failure", puedes usar el
 **Google Chrome que ya tienes instalado** en vez de descargar el de Playwright:
 
-1. Abre tu `correr-bot-playwright.bat` con el Bloc de notas.
+1. Abre tu `bot-100-causas.bat` con el Bloc de notas.
 2. Descomenta (quita el `REM `) esta línea:
    ```
    set BOT_USE_SYSTEM_CHROME=1
