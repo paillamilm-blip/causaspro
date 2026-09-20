@@ -44,11 +44,31 @@ export function iaDisponible(): boolean {
 }
 
 /**
- * Llama a OpenRouter con un prompt y devuelve el texto de la respuesta.
- * Prueba los modelos en orden; si uno falla (error de red, 429, 5xx) pasa al
- * siguiente. Lanza si TODOS fallan.
+ * Extrae el primer objeto JSON con un `resumen` no vacío de un texto. Devuelve null si no
+ * hay JSON válido con contenido útil. Sirve para VALIDAR la respuesta de un modelo: algunos
+ * modelos "piensan en voz alta" (texto en inglés) o no respetan el formato → esos NO deben
+ * aceptarse, hay que probar el siguiente modelo.
  */
-async function llamarOpenRouter(system: string, user: string): Promise<string> {
+function extraerJsonAnalisis(texto: string): any | null {
+  const match = texto.match(/\{[\s\S]*\}/)
+  if (!match) return null
+  try {
+    const obj = JSON.parse(match[0])
+    // Consideramos válida solo si trae al menos un `resumen` con algo de texto real.
+    if (obj && typeof obj === 'object' && String(obj.resumen || '').trim().length > 0) return obj
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Llama a OpenRouter y devuelve el OBJETO JSON del análisis (ya parseado y validado).
+ * Prueba los modelos en orden; pasa al siguiente si: falla la red/HTTP, la respuesta viene
+ * vacía, o —clave— NO es un JSON válido con `resumen` (evita que un modelo que "razona en
+ * voz alta" o responde en inglés contamine el resultado). Lanza si TODOS fallan.
+ */
+async function llamarOpenRouter(system: string, user: string): Promise<any> {
   const key = process.env.OPENROUTER_KEY
   if (!key) throw new Error('OPENROUTER_KEY no configurada')
 
@@ -69,8 +89,10 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
             { role: 'system', content: system },
             { role: 'user', content: user },
           ],
-          temperature: 0.3,
+          temperature: 0.2,
           max_tokens: 1000,
+          // Forzar salida JSON: reduce que el modelo devuelva texto/razonamiento libre.
+          response_format: { type: 'json_object' },
         }),
         signal: controller.signal,
       })
@@ -86,9 +108,20 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
       }
       const json = await res.json()
       const texto = json?.choices?.[0]?.message?.content
-      if (typeof texto === 'string' && texto.trim()) return texto.trim()
-      console.warn(`[IA] ${modelo}: respuesta vacía o sin content`)
-      ultimoError = new Error(`${modelo}: respuesta vacía`)
+      if (typeof texto !== 'string' || !texto.trim()) {
+        console.warn(`[IA] ${modelo}: respuesta vacía o sin content`)
+        ultimoError = new Error(`${modelo}: respuesta vacía`)
+        continue
+      }
+      // VALIDAR que sea JSON útil. Si el modelo respondió con razonamiento/inglés/sin JSON,
+      // NO lo aceptamos: probamos el siguiente modelo (evita el "genérico" del fallback).
+      const obj = extraerJsonAnalisis(texto)
+      if (!obj) {
+        console.warn(`[IA] ${modelo}: respuesta sin JSON válido (posible razonamiento libre). Probando siguiente modelo.`)
+        ultimoError = new Error(`${modelo}: sin JSON válido`)
+        continue
+      }
+      return obj
     } catch (e: any) {
       clearTimeout(timer)
       console.warn(`[IA] ${modelo}: ${e?.name === 'AbortError' ? 'timeout' : e?.message || e}`)
@@ -100,41 +133,32 @@ async function llamarOpenRouter(system: string, user: string): Promise<string> {
 }
 
 /**
- * Extrae un JSON {resumen, proximoPaso, riesgo} del texto del modelo. Los modelos a veces
- * envuelven el JSON en ```json ... ``` o agregan texto; se extrae el primer objeto {...}.
- * Si no se puede parsear, se usa el texto crudo como resumen (degradación elegante).
+ * Convierte el OBJETO JSON ya validado (que devuelve llamarOpenRouter) al AnalisisCausa
+ * tipado, con defaults seguros. La validación de "es JSON con resumen" ya la hizo
+ * llamarOpenRouter; acá solo normalizamos campos.
  */
-function parsearAnalisis(texto: string): AnalisisCausa {
+function parsearAnalisis(obj: any): AnalisisCausa {
   // Normaliza a lista de strings limpios (acepta array o string suelto), sin vacíos.
   const aLista = (v: any): string[] => {
     if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean).slice(0, 4)
     if (typeof v === 'string' && v.trim()) return [v.trim()]
     return []
   }
-  try {
-    const match = texto.match(/\{[\s\S]*\}/)
-    if (match) {
-      const obj = JSON.parse(match[0])
-      const acciones = aLista(obj.acciones)
-      const preguntasPrograma = aLista(obj.preguntasPrograma || obj.preguntas_programa || obj.preguntas)
-      // proximoPaso (compat): explícito, o la primera acción priorizada, o fallback.
-      const proximoPaso = String(obj.proximoPaso || obj.proximo_paso || '').trim()
-        || acciones[0]
-        || 'Revisar el estado de la medida y el cumplimiento del programa.'
-      return {
-        resumen: String(obj.resumen || '').trim() || 'Sin información suficiente sobre el estado de la protección.',
-        proximoPaso,
-        riesgo: String(obj.riesgo || '').trim() || 'Sin alerta de cumplimiento identificada.',
-        acciones: acciones.length ? acciones : undefined,
-        preguntasPrograma: preguntasPrograma.length ? preguntasPrograma : undefined,
-        resumenCausa: String(obj.resumenCausa || obj.resumen_causa || '').trim() || undefined,
-        resumenProgramas: String(obj.resumenProgramas || obj.resumen_programas || '').trim() || undefined,
-      }
-    }
-  } catch {
-    // cae al fallback de abajo
+  const acciones = aLista(obj.acciones)
+  const preguntasPrograma = aLista(obj.preguntasPrograma || obj.preguntas_programa || obj.preguntas)
+  // proximoPaso (compat): explícito, o la primera acción priorizada, o fallback.
+  const proximoPaso = String(obj.proximoPaso || obj.proximo_paso || '').trim()
+    || acciones[0]
+    || 'Revisar el estado de la medida y el cumplimiento del programa.'
+  return {
+    resumen: String(obj.resumen || '').trim() || 'Sin información suficiente sobre el estado de la protección.',
+    proximoPaso,
+    riesgo: String(obj.riesgo || '').trim() || 'Sin alerta de cumplimiento identificada.',
+    acciones: acciones.length ? acciones : undefined,
+    preguntasPrograma: preguntasPrograma.length ? preguntasPrograma : undefined,
+    resumenCausa: String(obj.resumenCausa || obj.resumen_causa || '').trim() || undefined,
+    resumenProgramas: String(obj.resumenProgramas || obj.resumen_programas || '').trim() || undefined,
   }
-  return { resumen: texto.slice(0, 500), proximoPaso: 'Revisar el estado de la medida y el cumplimiento del programa.', riesgo: 'No determinado.' }
 }
 
 /**
@@ -144,6 +168,7 @@ function parsearAnalisis(texto: string): AnalisisCausa {
  */
 export async function analizarCausaIA(contexto: string): Promise<AnalisisCausa> {
   const system = [
+    'IMPORTANTE: responde SIEMPRE en ESPAÑOL y ÚNICAMENTE con el objeto JSON pedido. NO escribas tu razonamiento, NO expliques tus pasos, NO uses inglés, NO agregues texto antes ni después del JSON. Empieza directamente con "{".',
     'Eres el asesor de una CURADORA AD LÍTEM de causas de PROTECCIÓN de niños, niñas y adolescentes (NNA) en Tribunales de Familia de Chile.',
     'Tu marco es el INTERÉS SUPERIOR DEL NIÑO. NO piensas como abogado litigante: no te enfocas en escritos, demandas ni estrategia procesal contenciosa.',
     'Piensas como CURADORA: tu trabajo es REPRESENTAR y VELAR por el NNA. Eso significa vigilar que se CUMPLAN las medidas de protección decretadas, coordinar con los PROGRAMAS que las ejecutan (OPD, PPF, PIE, PRM, DAM, residencias, programas ambulatorios), hacer SEGUIMIENTO del bienestar real del NNA (entrevistas/visitas) y alertar al tribunal si algo no se cumple o el NNA está en riesgo.',
@@ -177,6 +202,6 @@ export async function analizarCausaIA(contexto: string): Promise<AnalisisCausa> 
 
   const user = `Analiza esta causa de protección desde el rol de CURADORA AD LÍTEM (velar por el NNA y el cumplimiento de la medida) y devuelve el JSON pedido:\n\n${contexto}`
 
-  const texto = await llamarOpenRouter(system, user)
-  return parsearAnalisis(texto)
+  const obj = await llamarOpenRouter(system, user)
+  return parsearAnalisis(obj)
 }
