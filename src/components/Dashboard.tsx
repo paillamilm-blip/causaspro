@@ -591,6 +591,30 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* Buscador: JUSTO debajo del título (lo primero después del encabezado), para poder
+          buscar de inmediato sin scrollear. Sticky para que quede visible al recorrer causas. */}
+      <div className="sticky top-0 z-10 -mx-1 px-1 py-1 bg-slate-50/80 backdrop-blur supports-[backdrop-filter]:bg-slate-50/60">
+        <div className="relative">
+          <IconSearch className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            placeholder="Buscar por RIT, caratulado, NNA, programa…"
+            value={filtro}
+            onChange={(e) => setFiltro(e.target.value)}
+            className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-800 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-300 focus:border-slate-400 outline-none"
+          />
+          {filtro && (
+            <button
+              onClick={() => setFiltro('')}
+              aria-label="Limpiar búsqueda"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 rounded p-0.5 focus:outline-none focus:ring-2 focus:ring-slate-300"
+            >
+              <IconX className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+      </div>
+
       {/* KPIs clickeables (actúan como filtro rápido por urgencia). Íconos formales
           ligados al color del semáforo. "Traslados al curador" y "Seguimiento vencido"
           son cortes transversales (una causa puede caer en ellos con cualquier nivel). */}
@@ -639,6 +663,47 @@ export default function Dashboard() {
         />
       </div>
 
+      {/* RESULTADO DEL FILTRO: aparece JUSTO debajo de los KPI cuando Paula aprieta uno.
+          Antes el resultado se renderizaba al fondo y "no pasaba nada" visible: había que
+          scrollear mucho. Ahora aparece acá arriba, con un encabezado que confirma qué se
+          está mostrando y un botón para quitar el filtro. */}
+      {filtroUrgencia !== 'todas' && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className={`inline-block w-3 h-3 rounded-full ${FILTRO_SECCION[filtroUrgencia].dotColor}`} />
+              <h2 className="text-sm font-bold text-slate-700 uppercase tracking-wide">
+                {FILTRO_SECCION[filtroUrgencia].title}
+                <span className="text-slate-400 tabular-nums"> ({causasFiltradas.length})</span>
+              </h2>
+            </div>
+            <button
+              onClick={() => setFiltroUrgencia('todas')}
+              className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            >
+              <IconX className="w-3.5 h-3.5" /> Quitar filtro
+            </button>
+          </div>
+          {causasFiltradas.length > 0 ? (
+            <div className="space-y-2">
+              {causasFiltradas.slice(0, 50).map(c => (
+                <CausaCard key={c.id} causa={c} />
+              ))}
+              {causasFiltradas.length > 50 && (
+                <p className="text-sm text-slate-400 text-center pt-1">Mostrando 50 de {causasFiltradas.length}. Afiná con el buscador.</p>
+              )}
+            </div>
+          ) : (
+            <div className="text-center py-10 px-4 bg-white border border-slate-200 rounded-xl">
+              <div className="mx-auto flex items-center justify-center w-12 h-12 rounded-full bg-slate-100 text-slate-400 mb-2">
+                <IconInbox className="w-5 h-5" />
+              </div>
+              <p className="text-slate-600 font-medium">No hay causas en este grupo{filtro ? ' con ese texto' : ''}.</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Progreso de llenado de datos por el bot (solo con la vista; el fallback de
           tabla directa no trae fecha_ultimo_movimiento/ultima_audiencia). */}
       {!modoFallback && (
@@ -666,30 +731,10 @@ export default function Dashboard() {
       </div>
       )}
 
-      {/* Buscador (sticky: queda visible al hacer scroll sobre cientos de causas) */}
-      <div className="sticky top-0 z-10 -mx-1 px-1 py-1 bg-slate-50/80 backdrop-blur supports-[backdrop-filter]:bg-slate-50/60">
-        <div className="relative">
-          <IconSearch className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" />
-          <input
-            type="text"
-            placeholder="Buscar por RIT, caratulado, NNA, programa…"
-            value={filtro}
-            onChange={(e) => setFiltro(e.target.value)}
-            className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-800 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-300 focus:border-slate-400 outline-none"
-          />
-          {filtro && (
-            <button
-              onClick={() => setFiltro('')}
-              aria-label="Limpiar búsqueda"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 rounded p-0.5 focus:outline-none focus:ring-2 focus:ring-slate-300"
-            >
-              <IconX className="w-4 h-4" />
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Leyenda del semáforo (íconos formales ligados al color) */}
+      {/* Leyenda del semáforo (íconos formales ligados al color). Solo en la vista general:
+          cuando Paula filtra por un KPI, el encabezado del resultado ya dice qué está viendo,
+          así que la leyenda sería ruido. */}
+      {filtroUrgencia === 'todas' && (
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5 text-violet-600" /> Traslado al curador (prioritario)</span>
         <span className="flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5 text-rose-600" /> Seguimiento del NNA vencido (&gt;90d)</span>
@@ -698,94 +743,34 @@ export default function Dashboard() {
         <span className="flex items-center gap-1.5"><IconPause className="w-3.5 h-3.5 text-orange-500" /> Revisar: estancada &gt;90d</span>
         <span className="flex items-center gap-1.5"><IconCheck className="w-3.5 h-3.5 text-green-500" /> Estable: actividad reciente</span>
       </div>
-
-      {/* ALERTA: TRASLADOS AL CURADOR — el corte más difícil/prioritario para Paula.
-          Va DEBAJO de los botones de filtro. Cada causa tiene el botón "Estrategias del
-          Asesor IA" (por ahora muestra "próximamente"; se activa al conectar la IA).
-          Solo en la vista general: al filtrar por otro KPI, el detalle va en la sección única. */}
-      {traslados.length > 0 && filtroUrgencia === 'todas' && (
-        <div className="bg-violet-50 border border-violet-300 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-violet-100 text-violet-700">
-              <IconShield className="w-4 h-4" />
-            </span>
-            <h2 className="font-bold text-violet-900 text-base">Traslados al curador</h2>
-            <span className="bg-violet-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">
-              {traslados.length}
-            </span>
-            <span className="text-xs text-violet-700/70 ml-1">lo más prioritario</span>
-          </div>
-          <div className="space-y-2">
-            {traslados.map(c => (
-              <div key={c.id} className="bg-white border border-violet-200 rounded-lg p-3">
-                <div className="flex items-center justify-between gap-3">
-                  <Link href={`/causa/${c.id}`} className="min-w-0 group flex-1">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-mono font-bold text-violet-700 group-hover:underline">{c.rit}</span>
-                      {c.caratulado && <span className="text-slate-700 truncate">{c.caratulado}</span>}
-                    </div>
-                    {c.nombres_nna && (
-                      <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                        <IconUsers className="w-3.5 h-3.5 text-slate-400" />
-                        {c.nombres_nna.substring(0, 60)}
-                      </div>
-                    )}
-                  </Link>
-                  <button
-                    type="button"
-                    onClick={() => abrirAsesorIA(c.id, c.rit)}
-                    className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
-                  >
-                    <IconSparkles className="w-3.5 h-3.5" />
-                    Estrategias del Asesor IA
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       )}
 
-      {/* ALERTA: SEGUIMIENTO DEL NNA VENCIDO (Feature 3/5). Corte transversal como los
-          Traslados: causas donde pasaron >90 días sin "Entrevista al NNA" (o nunca hubo).
-          Solo en la vista general (sin filtro): al filtrar por este KPI, el detalle de las
-          causas aparece en la sección única de abajo, así no se duplica el listado. */}
+      {/* Bloques destacados transversales (Traslados / Seguimiento vencido). Ahora son
+          COLAPSABLES (patrón del calendario) y solo se muestran en la vista general: al
+          filtrar por un KPI, el detalle aparece arriba en la sección de resultado. */}
+      {traslados.length > 0 && filtroUrgencia === 'todas' && (
+        <BloqueCausasColapsable
+          titulo="Traslados al curador"
+          subtitulo="lo más prioritario"
+          causas={traslados}
+          tono="violet"
+          Icono={IconShield}
+          onAsesorIA={abrirAsesorIA}
+        />
+      )}
+
       {seguimientoVencido.length > 0 && filtroUrgencia === 'todas' && (
-        <div className="bg-rose-50 border border-rose-300 rounded-xl p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <span className="flex items-center justify-center w-8 h-8 rounded-full bg-rose-100 text-rose-700">
-              <IconUsers className="w-4 h-4" />
-            </span>
-            <h2 className="font-bold text-rose-900 text-base">Seguimiento del NNA vencido</h2>
-            <span className="bg-rose-600 text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums">
-              {seguimientoVencido.length}
-            </span>
-            <span className="text-xs text-rose-700/70 ml-1">más de 90 días sin ver al NNA</span>
-          </div>
-          <div className="space-y-2">
-            {seguimientoVencido.slice(0, 50).map(c => (
-              <Link key={c.id} href={`/causa/${c.id}`} className="block bg-white border border-rose-200 rounded-lg p-3 hover:shadow-sm transition-shadow group">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-mono font-bold text-rose-700 group-hover:underline">{c.rit}</span>
-                  {c.caratulado && <span className="text-slate-700 truncate">{c.caratulado}</span>}
-                </div>
-                {c.nombres_nna && (
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
-                    <IconUsers className="w-3.5 h-3.5 text-slate-400" />
-                    {c.nombres_nna.substring(0, 60)}
-                  </div>
-                )}
-              </Link>
-            ))}
-            {seguimientoVencido.length > 50 && (
-              <p className="text-xs text-rose-700/70 text-center pt-1">Mostrando 50 de {seguimientoVencido.length}. Usá el filtro para verlas todas.</p>
-            )}
-          </div>
-        </div>
+        <BloqueCausasColapsable
+          titulo="Seguimiento del NNA vencido"
+          subtitulo="más de 90 días sin ver al NNA"
+          causas={seguimientoVencido}
+          tono="rose"
+          Icono={IconUsers}
+        />
       )}
 
       {/* CALENDARIO DE AUDIENCIAS: próximas audiencias ordenadas por fecha. */}
-      {proximasAudiencias.length > 0 && (
+      {proximasAudiencias.length > 0 && filtroUrgencia === 'todas' && (
         <CalendarioAudiencias causas={proximasAudiencias} />
       )}
 
@@ -869,7 +854,9 @@ export default function Dashboard() {
           - SIN filtro ('todas'): se muestran agrupadas por nivel de urgencia (vista clásica).
           - CON un filtro activo (clic en un KPI): se muestra UNA sola sección con las causas
             de ese grupo (filtro rápido real). Así el clic en el KPI sí "despliega" solo esas. */}
-      {filtroUrgencia === 'todas' ? (
+      {/* Vista general (sin filtro): causas agrupadas por nivel de urgencia. El resultado
+          de un filtro por KPI ya se muestra arriba, justo debajo de los KPI. */}
+      {filtroUrgencia === 'todas' && (
         <>
           {criticas.length > 0 && (
             <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={true} dotColor="bg-red-500" />
@@ -884,33 +871,24 @@ export default function Dashboard() {
             <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" />
           )}
         </>
-      ) : (
-        causasFiltradas.length > 0 && (
-          <Section
-            title={FILTRO_SECCION[filtroUrgencia].title}
-            causas={causasFiltradas}
-            defaultOpen={true}
-            dotColor={FILTRO_SECCION[filtroUrgencia].dotColor}
-          />
-        )
       )}
 
-      {causasFiltradas.length === 0 && (
+      {/* Vacío total (sin causas cargadas o el texto del buscador no encontró nada en la
+          vista general). El caso "filtro por KPI sin resultados" ya se maneja arriba. */}
+      {filtroUrgencia === 'todas' && causasPorTexto.length === 0 && (
         <div className="text-center py-14 px-4">
           <div className="mx-auto flex items-center justify-center w-14 h-14 rounded-full bg-slate-100 text-slate-400 mb-3">
             <IconInbox className="w-6 h-6" />
           </div>
           <p className="text-slate-600 font-medium">
-            {filtro || filtroUrgencia !== 'todas'
-              ? 'No se encontraron causas con ese criterio'
-              : 'Aún no hay causas cargadas'}
+            {filtro ? 'No se encontraron causas con ese criterio' : 'Aún no hay causas cargadas'}
           </p>
-          {(filtro || filtroUrgencia !== 'todas') && (
+          {filtro && (
             <button
-              onClick={() => { setFiltro(''); setFiltroUrgencia('todas') }}
+              onClick={() => setFiltro('')}
               className="mt-3 text-sm text-slate-500 hover:text-slate-800 underline underline-offset-2"
             >
-              Quitar filtros
+              Quitar búsqueda
             </button>
           )}
         </div>
@@ -944,19 +922,22 @@ function KpiCard({
     <button
       onClick={onClick}
       aria-pressed={active}
-      className={`text-left rounded-xl p-4 border shadow-sm transition-colors cursor-pointer outline-none focus-visible:ring-2 ${t.ring} ${
+      title={label}
+      className={`flex items-center gap-2 text-left rounded-lg px-2.5 py-2 border shadow-sm transition-colors cursor-pointer outline-none focus-visible:ring-2 ${t.ring} ${
         active ? t.activeBg : 'bg-white border-slate-200 hover:bg-slate-50'
       }`}
     >
-      <div className={`text-2xl font-bold tabular-nums ${t.num}`}>{value}</div>
-      <div className="mt-0.5 text-xs text-slate-500 flex items-center gap-1.5">
-        {Icono ? (
-          <Icono className={`w-3.5 h-3.5 shrink-0 ${t.icon}`} />
-        ) : (
-          tone !== 'neutral' && <span className={`inline-block w-2.5 h-2.5 rounded-full ${t.dot}`} />
-        )}
-        {label}
-      </div>
+      {/* Ícono/punto de color a la izquierda (compacto) */}
+      {Icono ? (
+        <Icono className={`w-4 h-4 shrink-0 ${t.icon}`} />
+      ) : (
+        tone !== 'neutral' && <span className={`inline-block w-2.5 h-2.5 rounded-full shrink-0 ${t.dot}`} />
+      )}
+      {/* Número + etiqueta en columna, pero compactos: número mediano, label diminuto */}
+      <span className="min-w-0">
+        <span className={`block text-lg font-bold leading-none tabular-nums ${t.num}`}>{value}</span>
+        <span className="block text-[11px] leading-tight text-slate-500 truncate">{label}</span>
+      </span>
     </button>
   )
 }
@@ -991,6 +972,83 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
           )}
           {expanded && causas.length > 50 && (
             <p className="text-sm text-slate-400 text-center">Mostrando 50 de {causas.length}</p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Bloque colapsable de causas destacadas (Traslados al curador / Seguimiento del NNA vencido).
+// Mismo patrón visual que el calendario: encabezado con chevron + ícono + título + badge de
+// conteo, y el listado se puede plegar/desplegar. Antes estos bloques mostraban TODAS las
+// causas de una, sin poder cerrarlos: Paula pedía un botón para agruparlos como el calendario.
+// Cada fila enlaza al detalle de la causa; opcionalmente muestra el botón del Asesor IA.
+function BloqueCausasColapsable({
+  titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, maximo = 50,
+}: {
+  titulo: string
+  subtitulo?: string
+  causas: CausaResumen[]
+  tono: 'violet' | 'rose'
+  Icono: IconoTipo
+  defaultOpen?: boolean
+  onAsesorIA?: (causaId: string, rit: string) => void
+  maximo?: number
+}) {
+  const [abierto, setAbierto] = useState(defaultOpen)
+  const t = tono === 'violet'
+    ? { bg: 'bg-violet-50', border: 'border-violet-300', chip: 'bg-violet-100', chipTxt: 'text-violet-700', title: 'text-violet-900', badge: 'bg-violet-600', sub: 'text-violet-700/70', rit: 'text-violet-700', card: 'border-violet-200' }
+    : { bg: 'bg-rose-50', border: 'border-rose-300', chip: 'bg-rose-100', chipTxt: 'text-rose-700', title: 'text-rose-900', badge: 'bg-rose-600', sub: 'text-rose-700/70', rit: 'text-rose-700', card: 'border-rose-200' }
+  const mostradas = causas.slice(0, maximo)
+
+  return (
+    <div className={`${t.bg} border ${t.border} rounded-xl p-4`}>
+      <button
+        onClick={() => setAbierto(!abierto)}
+        aria-expanded={abierto}
+        className="w-full flex items-center gap-2 focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
+      >
+        <IconChevron className={`w-4 h-4 ${t.chipTxt} transition-transform duration-200 ${abierto ? 'rotate-90' : ''}`} />
+        <span className={`flex items-center justify-center w-8 h-8 rounded-full ${t.chip} ${t.chipTxt}`}>
+          <Icono className="w-4 h-4" />
+        </span>
+        <h2 className={`font-bold ${t.title} text-base`}>{titulo}</h2>
+        <span className={`${t.badge} text-white text-xs font-semibold px-2 py-0.5 rounded-full tabular-nums`}>{causas.length}</span>
+        {subtitulo && <span className={`text-xs ${t.sub} ml-1 hidden sm:inline`}>{subtitulo}</span>}
+      </button>
+      {abierto && (
+        <div className="space-y-2 mt-3">
+          {mostradas.map(c => (
+            <div key={c.id} className={`bg-white border ${t.card} rounded-lg p-3`}>
+              <div className="flex items-center justify-between gap-3">
+                <Link href={`/causa/${c.id}`} className="min-w-0 group flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`font-mono font-bold ${t.rit} group-hover:underline`}>{c.rit}</span>
+                    {c.caratulado && <span className="text-slate-700 truncate">{c.caratulado}</span>}
+                  </div>
+                  {c.nombres_nna && (
+                    <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1">
+                      <IconUsers className="w-3.5 h-3.5 text-slate-400" />
+                      {c.nombres_nna.substring(0, 60)}
+                    </div>
+                  )}
+                </Link>
+                {onAsesorIA && (
+                  <button
+                    type="button"
+                    onClick={() => onAsesorIA(c.id, c.rit)}
+                    className="shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-violet-300 bg-white text-violet-700 hover:bg-violet-100 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-violet-400"
+                  >
+                    <IconSparkles className="w-3.5 h-3.5" />
+                    Estrategias del Asesor IA
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+          {causas.length > maximo && (
+            <p className={`text-xs ${t.sub} text-center pt-1`}>Mostrando {maximo} de {causas.length}. Usá el filtro para verlas todas.</p>
           )}
         </div>
       )}
