@@ -231,7 +231,7 @@ export default function Dashboard() {
   const [asesorIA, setAsesorIA] = useState<{
     rit: string
     cargando: boolean
-    resultado: { resumen: string; proximoPaso: string; riesgo: string } | null
+    resultado: { resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[] } | null
     error: string | null
   } | null>(null)
 
@@ -881,13 +881,27 @@ export default function Dashboard() {
                   <p className="text-sm text-slate-700">{asesorIA.resultado.resumen}</p>
                 </div>
                 <div>
-                  <div className="text-xs font-semibold text-violet-500 uppercase tracking-wide mb-1">Próxima gestión de curaduría</div>
-                  <p className="text-sm text-slate-700">{asesorIA.resultado.proximoPaso}</p>
+                  <div className="text-xs font-semibold text-violet-500 uppercase tracking-wide mb-1">Gestiones de curaduría sugeridas</div>
+                  {asesorIA.resultado.acciones && asesorIA.resultado.acciones.length > 0 ? (
+                    <ol className="text-sm text-slate-700 space-y-1 list-decimal list-inside">
+                      {asesorIA.resultado.acciones.map((a, i) => <li key={i}>{a}</li>)}
+                    </ol>
+                  ) : (
+                    <p className="text-sm text-slate-700">{asesorIA.resultado.proximoPaso}</p>
+                  )}
                 </div>
                 <div>
                   <div className="text-xs font-semibold text-amber-600 uppercase tracking-wide mb-1">Alerta de cumplimiento / riesgo del NNA</div>
                   <p className="text-sm text-slate-700">{asesorIA.resultado.riesgo}</p>
                 </div>
+                {asesorIA.resultado.preguntasPrograma && asesorIA.resultado.preguntasPrograma.length > 0 && (
+                  <div>
+                    <div className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Preguntas para el programa</div>
+                    <ul className="text-sm text-slate-700 space-y-1 list-disc list-inside">
+                      {asesorIA.resultado.preguntasPrograma.map((q, i) => <li key={i}>{q}</li>)}
+                    </ul>
+                  </div>
+                )}
                 <div className="flex items-start gap-1.5 text-xs text-slate-400 border-t border-slate-100 pt-3">
                   <IconAlert className="w-3.5 h-3.5 mt-0.5 shrink-0" />
                   <span>Sugerencia generada por IA con enfoque de curaduría, a partir de datos procesales
