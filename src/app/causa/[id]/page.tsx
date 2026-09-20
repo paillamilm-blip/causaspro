@@ -187,7 +187,7 @@ export default function CausaDetalle() {
               de la curaduría (RIT + NNA precargados, el resto en blanco para completar a
               mano). Salida nueva e independiente del reporte. Mismo token de descarga. */}
           <a
-            href={`/api/minuta/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${process.env.NEXT_PUBLIC_REPORTE_TOKEN}` : ''}`}
+            href={`/api/minuta/${id}${process.env.NEXT_PUBLIC_REPORTE_TOKEN ? `?token=${encodeURIComponent(process.env.NEXT_PUBLIC_REPORTE_TOKEN)}` : ''}`}
             className="text-sm bg-emerald-600 text-white px-3 py-1.5 rounded-lg hover:bg-emerald-700 transition-colors"
           >
             📝 Minuta de audiencia (Word)
