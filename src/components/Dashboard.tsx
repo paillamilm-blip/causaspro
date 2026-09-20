@@ -69,7 +69,7 @@ interface CausaResumen {
   adulto_nombre: string | null
   adulto_telefono: string | null
   // Marca calculada EN EL CLIENTE (no viene de la vista): el seguimiento del NNA está
-  // vencido (>90 días sin "Entrevista al NNA", o nunca se registró una). Se completa en
+  // vencido (>180 días sin "Entrevista al NNA", o nunca se registró una). Se completa en
   // loadCausas cruzando las causas con las gestiones. undefined hasta ese cruce.
   seguimiento_vencido?: boolean
 }
@@ -78,7 +78,7 @@ interface CausaResumen {
 // Cada uno resume una alerta de cumplimiento en un badge compacto y legible.
 function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
   const chips: { texto: string; clase: string }[] = []
-  // Seguimiento del NNA vencido (>90d sin "Entrevista al NNA" o nunca). Va primero porque
+  // Seguimiento del NNA vencido (>180d sin "Entrevista al NNA" o nunca). Va primero porque
   // es el recordatorio central de la curaduría: ver al NNA. Se calcula en el cliente.
   if (c.seguimiento_vencido) chips.push({ texto: 'Seguimiento NNA vencido', clase: 'bg-rose-100 text-rose-700' })
   if (c.tiene_orden_busqueda) chips.push({ texto: 'Orden de búsqueda', clase: 'bg-red-100 text-red-700' })
@@ -478,7 +478,7 @@ export default function Dashboard() {
   // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
   const traslados = causasPorTexto.filter(c => c.tiene_traslado_curador)
   // Seguimiento del NNA vencido: corte transversal (como Traslados) — una causa acá puede
-  // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 90 días.
+  // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 180 días.
   const seguimientoVencido = causasPorTexto.filter(c => c.seguimiento_vencido)
 
   // Próximas audiencias: causas con audiencia futura, ordenadas por fecha (la más próxima
@@ -737,7 +737,7 @@ export default function Dashboard() {
       {filtroUrgencia === 'todas' && (
       <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
         <span className="flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5 text-violet-600" /> Traslado al curador (prioritario)</span>
-        <span className="flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5 text-rose-600" /> Seguimiento del NNA vencido (&gt;90d)</span>
+        <span className="flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5 text-rose-600" /> Seguimiento del NNA vencido (&gt;180d)</span>
         <span className="flex items-center gap-1.5"><IconAlert className="w-3.5 h-3.5 text-red-500" /> Crítica: audiencia ≤2d / medida por vencer</span>
         <span className="flex items-center gap-1.5"><IconClock className="w-3.5 h-3.5 text-amber-500" /> Atención: movimiento o audiencia ≤7d</span>
         <span className="flex items-center gap-1.5"><IconPause className="w-3.5 h-3.5 text-orange-500" /> Revisar: estancada &gt;90d</span>
@@ -762,7 +762,7 @@ export default function Dashboard() {
       {seguimientoVencido.length > 0 && filtroUrgencia === 'todas' && (
         <BloqueCausasColapsable
           titulo="Seguimiento del NNA vencido"
-          subtitulo="más de 90 días sin ver al NNA"
+          subtitulo="más de 180 días sin ver al NNA"
           causas={seguimientoVencido}
           tono="rose"
           Icono={IconUsers}
