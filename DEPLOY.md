@@ -55,8 +55,7 @@ Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key),
 
 1. Copia la plantilla y quítale el `.example`:
    ```cmd
-   copy ejecutar-bot.bat.example ejecutar-bot.bat
-   copy ejecutar-todo-el-dia.bat.example ejecutar-todo-el-dia.bat
+   copy bot-100-causas.bat.example bot-100-causas.bat
    ```
 2. Abre el `.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
    - `PJUD_RUT` → tu RUT (ej: `17692174-9`)
@@ -68,9 +67,9 @@ Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key),
    npx playwright install chromium
    ```
 4. Ejecutar:
-   - **Una corrida:** doble clic en `ejecutar-bot.bat`
-   - **Todo el día (cada 1 h):** doble clic en `ejecutar-todo-el-dia.bat`
-   - **Prueba visible (1 causa):** `npm run bot:test`
+   - **Doble clic** en `bot-100-causas.bat` → 100 causas en 4 tandas de 33, con 30 min
+     de descanso entre tandas. No cierres la ventana hasta `PROCESO COMPLETO`.
+   - Ajustes (tamaño de tanda, descanso, horario): ver `BOT-PJUD.md`.
 
 ### 🔴 IMPORTANTE — Rotar las keys expuestas
 

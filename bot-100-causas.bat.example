@@ -1,0 +1,93 @@
+@echo off
+REM ============================================================
+REM CausasPro - BOT PJUD: 100 causas en tandas de 33 (Playwright)
+REM ============================================================
+REM
+REM QUE HACE:
+REM   Corre el bot en 4 tandas de 33 causas, con 30 minutos de
+REM   descanso entre cada tanda. En total procesa hasta ~132 causas
+REM   (4 x 33), tomando cada vez las causas que todavia no tienen
+REM   datos. Con esto cubris las 100 que necesitas.
+REM
+REM COMO USAR (una sola vez):
+REM   1. Copia este archivo como "bot-100-causas.bat"
+REM      (quitale el ".example" del final)
+REM   2. Abrilo con el Bloc de notas y reemplaza los CAMBIAR_* con
+REM      tus datos reales (RUT, clave, service role key).
+REM   3. Guarda. Hace doble clic en "bot-100-causas.bat" para correrlo.
+REM   4. NO cierres la ventana negra hasta que diga "PROCESO COMPLETO".
+REM      Para detener antes: apreta Ctrl + C.
+REM
+REM PRIMERA VEZ EN LA PC (instalar, una sola vez, en la carpeta):
+REM   npm install
+REM   npx playwright install chromium
+REM
+REM SEGURIDAD:
+REM   - Lock anti-solape: si ya hay una tanda corriendo, no arranca otra.
+REM   - NUNCA subas el .bat con tus claves a git (esta en .gitignore).
+REM ============================================================
+
+cd /d "%~dp0"
+
+REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
+if exist "bot-100-causas.lock" (
+  echo Ya hay una tanda corriendo. Se cancela esta.
+  pause
+  exit /b 0
+)
+echo running > "bot-100-causas.lock"
+
+REM --- TUS DATOS (reemplazar los CAMBIAR_*) ---
+set PJUD_RUT=CAMBIAR_POR_TU_RUT
+set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
+set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
+set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
+
+REM --- CONFIG ---
+REM 33 causas por tanda.
+set BOT_MAX_CAUSAS=33
+REM Correr a cualquier hora (estamos atrasados). Si preferis el modo seguro
+REM (solo 8-18h Chile), pone REM adelante de la linea de abajo.
+set SKIP_HOUR_CHECK=1
+
+REM Si la descarga de Chromium falla, usa tu Chrome instalado:
+REM set BOT_USE_SYSTEM_CHROME=1
+
+echo ============================================================
+echo   CausasPro - 100 causas en tandas de 33 (descanso 30 min)
+echo   NO CIERRES ESTA VENTANA
+echo ============================================================
+echo.
+
+REM ==================== TANDA 1 ====================
+echo [%date% %time%] Iniciando TANDA 1 de 4 (33 causas)...
+call npm run bot
+echo [%date% %time%] TANDA 1 terminada. Descanso de 30 minutos...
+timeout /t 1800 /nobreak
+
+REM ==================== TANDA 2 ====================
+echo [%date% %time%] Iniciando TANDA 2 de 4 (33 causas)...
+call npm run bot
+echo [%date% %time%] TANDA 2 terminada. Descanso de 30 minutos...
+timeout /t 1800 /nobreak
+
+REM ==================== TANDA 3 ====================
+echo [%date% %time%] Iniciando TANDA 3 de 4 (33 causas)...
+call npm run bot
+echo [%date% %time%] TANDA 3 terminada. Descanso de 30 minutos...
+timeout /t 1800 /nobreak
+
+REM ==================== TANDA 4 ====================
+echo [%date% %time%] Iniciando TANDA 4 de 4 (33 causas)...
+call npm run bot
+echo [%date% %time%] TANDA 4 terminada.
+
+REM --- Liberar el lock ---
+del "bot-100-causas.lock" 2>nul
+
+echo.
+echo ============================================================
+echo   PROCESO COMPLETO - Ya podes cerrar esta ventana.
+echo   Revisa el panel en causaspro.vercel.app
+echo ============================================================
+pause

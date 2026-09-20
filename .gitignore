@@ -17,5 +17,5 @@ semantic-review/
 bot-capturas/
 
 # Lock y logs de las tandas del bot (generados, no versionar)
-cargar-tanda.lock
+*.lock
 *-log.txt
