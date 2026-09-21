@@ -30,10 +30,19 @@ REM ============================================================
 cd /d "%~dp0"
 
 REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
+REM Si existe el lock, verificamos si de verdad hay un bot corriendo (proceso node).
+REM Si NO hay ninguno, el lock quedo HUERFANO de una corrida que se corto (Ctrl+C,
+REM ventana cerrada, PC apagada) -> lo limpiamos solo y seguimos, en vez de bloquear.
 if exist "bot-100-causas.lock" (
-  echo Ya hay una tanda corriendo. Se cancela esta.
-  pause
-  exit /b 0
+  tasklist /fi "imagename eq node.exe" 2>nul | find /i "node.exe" >nul
+  if errorlevel 1 (
+    echo Lock huerfano detectado ^(no hay bot corriendo^). Se limpia y continua.
+    del "bot-100-causas.lock" 2>nul
+  ) else (
+    echo Ya hay una tanda corriendo de verdad. Se cancela esta.
+    pause
+    exit /b 0
+  )
 )
 echo running > "bot-100-causas.lock"
 
@@ -46,6 +55,10 @@ set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
 REM --- CONFIG ---
 REM 33 causas por tanda.
 set BOT_MAX_CAUSAS=33
+REM Modo de busqueda: 'rit' revisa las causas YA cargadas (lo correcto para el dia a dia).
+REM NO cambiar a 'listado': ese modo recorre el portal completo y puede crear miles de
+REM causas que no son de la curaduria. Se fija aca para no heredar un valor viejo de la consola.
+set BOT_SEARCH_MODE=rit
 REM Correr a cualquier hora (estamos atrasados). Si preferis el modo seguro
 REM (solo 8-18h Chile), pone REM adelante de la linea de abajo.
 set SKIP_HOUR_CHECK=1
