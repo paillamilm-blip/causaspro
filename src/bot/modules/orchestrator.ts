@@ -163,7 +163,23 @@ export async function runBotSession(
     //    registra el paso con el éxito REAL según el valor de retorno.
     log('info', 'Intentando login...')
     const tLogin = Date.now()
-    const loginResult = await loginOJV(page, credentials)
+    // TOPE DURO de tiempo para el login. Un login sano tarda ~1 minuto; un login fallido
+    // debería fallar rápido. Se observó una corrida donde el login quedó colgado 2,7 HORAS
+    // (portal que no responde / página que nunca termina de cargar), consumiendo toda la
+    // tanda sin procesar ninguna causa. Con este tope, si el login no resuelve en
+    // LOGIN_TIMEOUT_MS se aborta la tanda de inmediato y el .bat pasa al descanso.
+    const LOGIN_TIMEOUT_MS = process.env.BOT_LOGIN_TIMEOUT_MS
+      ? Math.max(60_000, parseInt(process.env.BOT_LOGIN_TIMEOUT_MS, 10) || 240_000)
+      : 240_000 // 4 minutos
+    const loginResult = await Promise.race([
+      loginOJV(page, credentials),
+      new Promise<{ success: false; error: string }>((resolve) =>
+        setTimeout(
+          () => resolve({ success: false, error: `Login excedió el tope de ${Math.round(LOGIN_TIMEOUT_MS / 1000)}s (portal sin respuesta)` }),
+          LOGIN_TIMEOUT_MS,
+        ),
+      ),
+    ])
     await saveStepMetric({
       run_id: runId, paso: 'login', duracion_ms: Date.now() - tLogin,
       exito: loginResult.success,
