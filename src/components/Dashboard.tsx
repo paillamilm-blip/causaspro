@@ -505,9 +505,16 @@ export default function Dashboard() {
 
   // Progreso de llenado por el bot: una causa está "con datos del portal" si tiene
   // al menos un movimiento (fecha_ultimo_movimiento) o una audiencia registrada.
-  // Se calcula sobre TODAS las causas (no las filtradas) para reflejar el avance real.
-  const conDatos = causas.filter(c => c.fecha_ultimo_movimiento || c.ultima_audiencia).length
-  const pctDatos = totalCausas > 0 ? Math.round((conDatos / totalCausas) * 100) : 0
+  // El PORCENTAJE se calcula solo sobre las causas que SÍ están en el portal: se excluyen
+  // las marcadas [NO EN PORTAL] (relevadas/archivadas/otra competencia) porque el bot nunca
+  // podrá cargarlas → si contaran, la barra quedaría "clavada" sin poder llegar al 100%.
+  const fueraDelPortal = causas.filter(fueraDeMiLista).length
+  const totalEnPortal = totalCausas - fueraDelPortal
+  // Numerador y denominador se miden sobre el MISMO universo (causas que están en el portal),
+  // así el porcentaje nunca puede superar el 100% aunque una causa [NO EN PORTAL] conserve
+  // datos viejos de cuando sí estaba.
+  const conDatos = causas.filter(c => !fueraDeMiLista(c) && (c.fecha_ultimo_movimiento || c.ultima_audiencia)).length
+  const pctDatos = totalEnPortal > 0 ? Math.round((conDatos / totalEnPortal) * 100) : 0
 
   // FUERA DE MONITOREO: causas donde relevaron la curaduría ([NO EN PORTAL]) o con
   // sentencia de rechazo. Se destacan aparte y NO generan alarmas (no cuentan en urgencias
@@ -770,7 +777,7 @@ export default function Dashboard() {
             Datos cargados desde el portal
           </span>
           <span className="text-sm font-semibold text-slate-700 tabular-nums">
-            {conDatos} de {totalCausas} <span className="text-slate-400">({pctDatos}%)</span>
+            {conDatos} de {totalEnPortal} <span className="text-slate-400">({pctDatos}%)</span>
           </span>
         </div>
         <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
@@ -779,9 +786,14 @@ export default function Dashboard() {
             style={{ width: `${pctDatos}%` }}
           />
         </div>
-        {conDatos < totalCausas && (
+        {conDatos < totalEnPortal && (
           <p className="text-xs text-slate-400 mt-1.5">
-            Faltan {totalCausas - conDatos} causas por revisar con el bot (movimientos/audiencias).
+            Faltan {totalEnPortal - conDatos} causas por revisar con el bot (movimientos/audiencias).
+          </p>
+        )}
+        {fueraDelPortal > 0 && (
+          <p className="text-xs text-slate-400 mt-1">
+            {fueraDelPortal} causas fuera del portal de Familia (relevadas/archivadas) no se cuentan acá.
           </p>
         )}
       </div>
