@@ -82,6 +82,6 @@ echo.
 echo ============================================================
 echo   LISTO - Ya podes cerrar esta ventana.
 echo   Revisa el panel en causaspro.vercel.app
-echo   (Si dijo "Fuera de horario permitido", corrélo entre 8 y 18 h.)
+echo   (Si dijo "Fuera de horario permitido", correlo entre 8 y 18 h.)
 echo ============================================================
 pause
