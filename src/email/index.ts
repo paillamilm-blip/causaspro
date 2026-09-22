@@ -4,7 +4,8 @@
 // ============================================================
 
 export { runEmailCheck } from './modules/orchestrator'
-export { parseAsignacionesFromHtml } from './modules/htmlParser'
+// El parser se movió a src/lib/ (ver la nota en src/lib/asignacionesParser.ts).
+export { parseAsignacionesFromHtml } from '../lib/asignacionesParser'
 export type { AsignacionEmail, EmailRunStatus, EmailProcessResult } from './types'
 
 // CLI runner

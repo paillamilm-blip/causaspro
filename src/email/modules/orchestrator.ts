@@ -5,8 +5,11 @@
 
 import type { EmailRunStatus } from '../types'
 import { getImapConfig, fetchAsignacionEmailsSimple } from './imapClient'
-import { parseAsignacionesFromHtml } from './htmlParser'
-import { syncAsignaciones } from './syncAsignaciones'
+// El parser y el guardado viven en src/lib/ (lado web) y se importan desde acá.
+// La dependencia va en UNA sola dirección: src/email → src/lib, nunca al revés
+// (si una ruta de Next importa src/email, el build de Vercel falla por imapflow).
+import { parseAsignacionesFromHtml } from '../../lib/asignacionesParser'
+import { syncAsignaciones } from '../../lib/asignacionesSync'
 
 /**
  * Ejecuta una revisión completa de emails de ASIGNACIONES
