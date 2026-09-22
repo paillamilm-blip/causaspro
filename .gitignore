@@ -1,7 +1,13 @@
 node_modules
 .next
-.env.local
+
+# Variables de entorno: el .env tiene el RUT, la clave de Clave Unica y la
+# service role key. El patron .env.* cubre TAMBIEN los derivados (.env.local y
+# el .env.respaldo que genera bot-mantenimiento.bat antes de tocar el archivo):
+# sin eso, el respaldo quedaba fuera del ignore y podia subirse con credenciales.
 .env
+.env.*
+!.env.example
 
 # Scripts .bat con secretos (RUT, contraseña PJUD, service role key).
 # NO versionar: contienen credenciales. Usar los .bat.example como plantilla.

@@ -82,10 +82,17 @@ echo.
 REM Se escribe el .env con PowerShell (no con echo) para que no se rompa
 REM si la contrasena tiene simbolos como & o ^. El [char]34 son las comillas:
 REM loadEnv.ts acepta valores entre comillas, asi que soporta espacios.
-REM UTF8 (no ASCII) para que no se rompan la ene ni las tildes si la clave las
-REM tiene. El BOM que agrega PowerShell cae en la primera linea, que es un
-REM comentario sin '=', asi que loadEnv.ts la ignora sin problema.
-powershell -NoProfile -Command "$q=[char]34; $l=@('# CausasPro - credenciales del bot. NO subir a git.', ('PJUD_RUT=' + $q + $env:CFG_RUT + $q), ('PJUD_PASSWORD=' + $q + $env:CFG_PASS + $q), 'NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co', ('SUPABASE_SERVICE_ROLE_KEY=' + $q + $env:CFG_KEY + $q)); Set-Content -Path '.env' -Value $l -Encoding UTF8"
+REM Guardar en .env. Detalles que importan:
+REM  - Se escribe con PowerShell y NO con echo, porque echo se rompe si la clave
+REM    tiene & o ^. Las comillas se ponen con [char]34 para no pelear con el
+REM    escapado de cmd.
+REM  - UTF8 (no ASCII) para no romper la ene ni las tildes de la clave. El BOM
+REM    cae en la linea de comentario, que loadEnv.ts ignora.
+REM  - CONSERVA el .env que ya existiera: solo reemplaza las 4 claves que maneja
+REM    este script y deja intacto todo lo demas (por ejemplo IMAP_* o
+REM    CONFIG_ENCRYPT_KEY). Antes de tocar nada deja una copia en .env.respaldo.
+if exist ".env" copy /y ".env" ".env.respaldo" >nul 2>nul
+powershell -NoProfile -Command "$q=[char]34; $mias=@('PJUD_RUT','PJUD_PASSWORD','NEXT_PUBLIC_SUPABASE_URL','SUPABASE_SERVICE_ROLE_KEY'); $previas=@(); if (Test-Path '.env') { $previas = Get-Content '.env' | Where-Object { $linea = $_.Trim(); -not ($mias | Where-Object { $linea -like ($_ + '=*') }) } }; $nuevas=@(('PJUD_RUT=' + $q + $env:CFG_RUT + $q), ('PJUD_PASSWORD=' + $q + $env:CFG_PASS + $q), 'NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co', ('SUPABASE_SERVICE_ROLE_KEY=' + $q + $env:CFG_KEY + $q)); $salida=@('# CausasPro - credenciales del bot. NO subir a git.') + $nuevas; if ($previas.Count -gt 0) { $salida = $salida + '' + $previas }; Set-Content -Path '.env' -Value $salida -Encoding UTF8"
 if errorlevel 1 goto :error_guardar
 if not exist ".env" goto :error_guardar
 
