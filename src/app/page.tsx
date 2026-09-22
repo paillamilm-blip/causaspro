@@ -94,6 +94,15 @@ export default function Home() {
                 </button>
               </>
             )}
+            {/* Carga de asignaciones pegando el correo de la jefa. Siempre visible
+                (incluso sin causas cargadas): puede ser la primera forma de cargar datos. */}
+            <Link
+              href="/asignaciones"
+              className="text-sm bg-purple-100 text-purple-700 px-3 py-2 rounded-lg hover:bg-purple-200 transition"
+              title="Cargar las causas que te asignaron por correo"
+            >
+              📥 Asignaciones
+            </Link>
             <Link
               href="/config"
               className="text-sm bg-gray-100 text-gray-600 px-3 py-2 rounded-lg hover:bg-gray-200 transition"

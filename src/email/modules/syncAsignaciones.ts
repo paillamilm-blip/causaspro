@@ -11,6 +11,32 @@ import { inferirTipoRIT } from '../../bot/utils'
 
 let supabase: SupabaseClient | null = null
 
+/** Marca de las notas que deja este módulo, para poder reconocer su rastro después. */
+const MARCA_ASIGNACION = '[ASIGNACIÓN]'
+
+/**
+ * Agrega una línea a `notas` SIN DESTRUIR lo que ya había.
+ *
+ * CRÍTICO: el campo `notas` es un canal compartido. El bot guarda ahí marcas de las que
+ * depende su funcionamiento: `[NO EN PORTAL]` y `[REVISAR: no scrapeada]` (que
+ * getCausasToScrape usa para NO reintentar causas que no existen en el portal),
+ * `[INTENTOS FALLIDOS: n]` (el contador de reintentos), y `[VÍNCULO]` / `[REVISAR LETRA]`
+ * (el enlace entre causas hermanas P↔X). El Dashboard también lee `[NO EN PORTAL]` para
+ * la barra de progreso.
+ *
+ * Antes este módulo hacía `update({ notas: 'Reasignada por email...' })`, lo que BORRABA
+ * todas esas marcas: las 128 causas confirmadas como "no en portal" volvían a la cola del
+ * bot, se perdían los vínculos entre hermanas y se reseteaba el contador de intentos.
+ *
+ * Devuelve `null` si la línea ya estaba (así el llamador no escribe de más y pegar el
+ * mismo correo dos veces no duplica notas).
+ */
+function agregarNota(notasActuales: string | null, linea: string): string | null {
+  const actual = (notasActuales || '').trim()
+  if (actual.includes(linea)) return null // idempotente: ya está, no tocar
+  return actual ? `${actual}\n${linea}` : linea
+}
+
 function getSupabase(): SupabaseClient {
   if (supabase) return supabase
   
@@ -50,9 +76,10 @@ export async function syncAsignaciones(
   for (const asig of asignaciones) {
     try {
       // 1. Verificar si la causa ya existe (por RIT)
+      // Traemos `notas` para poder AGREGAR sin borrar las marcas del bot (ver agregarNota).
       const { data: existing } = await sb
         .from('causas')
-        .select('id')
+        .select('id, notas')
         .eq('rit', asig.rit)
         .limit(1)
       
@@ -64,12 +91,15 @@ export async function syncAsignaciones(
         result.causas_existentes++
         console.log(`  📌 ${asig.rit} ya existe → actualizar`)
         
-        // Actualizar updated_at para reflejar nueva asignación
+        // Actualizar updated_at y AGREGAR la nota de reasignación conservando lo anterior.
+        // Si la nota ya estaba (mismo correo pegado dos veces), no se reescribe `notas`.
+        const linea = `${MARCA_ASIGNACION} reasignada por email del ${emailMeta.fecha}${asig.curador ? `. Curador: ${asig.curador}` : ''}`
+        const nuevasNotas = agregarNota((existing[0] as any).notas ?? null, linea)
         await sb
           .from('causas')
-          .update({ 
+          .update({
             updated_at: new Date().toISOString(),
-            notas: `Reasignada por email ${emailMeta.fecha}`,
+            ...(nuevasNotas !== null ? { notas: nuevasNotas } : {}),
           })
           .eq('id', causaId)
         
@@ -82,7 +112,8 @@ export async function syncAsignaciones(
             tipo: inferirTipoRIT(asig.rit),
             estado: 'Asignada por email',
             fecha_notificacion: asig.fecha_ingreso || new Date().toISOString().split('T')[0],
-            notas: `Asignada por ${emailMeta.remitente} el ${emailMeta.fecha}. Curador: ${asig.curador}`,
+            // Causa nueva: no hay notas previas que conservar, así que se escribe directo.
+            notas: `${MARCA_ASIGNACION} asignada por ${emailMeta.remitente} el ${emailMeta.fecha}${asig.curador ? `. Curador: ${asig.curador}` : ''}`,
           })
           .select('id')
           .single()
