@@ -57,18 +57,23 @@ Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key),
    ```cmd
    copy bot-100-causas.bat.example bot-100-causas.bat
    ```
-2. Abre el `.bat` con el Bloc de notas y reemplaza los `CAMBIAR_*`:
-   - `PJUD_RUT` → tu RUT (ej: `17692174-9`)
-   - `PJUD_PASSWORD` → tu contraseña de Clave Única
-   - `SUPABASE_SERVICE_ROLE_KEY` → tu service role key (Supabase → Settings → API)
+2. Configurar tus datos (una sola vez): **doble clic en `bot-mantenimiento.bat`**. Te pide
+   RUT, Clave Única y service role key, y los guarda en `.env`. **No hay que editar
+   ningún archivo con el Bloc de notas**: los dos `.bat` leen `.env`.
+   ```cmd
+   copy /y bot-mantenimiento.bat.example bot-mantenimiento.bat
+   ```
 3. Preparar el proyecto (una vez):
    ```cmd
    npm install
    npx playwright install chromium
    ```
 4. Ejecutar:
-   - **Doble clic** en `bot-100-causas.bat` → 100 causas en 4 tandas de 33, con 30 min
-     de descanso entre tandas. No cierres la ventana hasta `PROCESO COMPLETO`.
+   - **Carga inicial** — doble clic en `bot-100-causas.bat` → 100 causas en 4 tandas de
+     33, con 15 min de descanso entre tandas. No cierres la ventana hasta
+     `PROCESO COMPLETO`.
+   - **Día a día** — doble clic en `bot-mantenimiento.bat` → 25 causas, una tanda, solo
+     entre 8 y 18 h (hora Chile).
    - Ajustes (tamaño de tanda, descanso, horario): ver `BOT-PJUD.md`.
 
 ### 🔴 IMPORTANTE — Rotar las keys expuestas

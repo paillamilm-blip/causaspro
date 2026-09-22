@@ -9,25 +9,37 @@ REM   descanso entre cada tanda. En total procesa hasta ~132 causas
 REM   (4 x 33), tomando cada vez las causas que todavia no tienen
 REM   datos. Con esto cubris las 100 que necesitas.
 REM
-REM COMO USAR (una sola vez):
-REM   1. Copia este archivo como "bot-100-causas.bat"
-REM      (quitale el ".example" del final)
-REM   2. Abrilo con el Bloc de notas y reemplaza los CAMBIAR_* con
-REM      tus datos reales (RUT, clave, service role key).
-REM   3. Guarda. Hace doble clic en "bot-100-causas.bat" para correrlo.
+REM COMO USAR:
+REM   1. Configura tus datos UNA VEZ con bot-mantenimiento.bat (doble clic:
+REM      te pregunta RUT, Clave Unica y llave de Supabase, y las guarda en .env).
+REM   2. Copia este archivo como "bot-100-causas.bat"
+REM      (quitale el ".example" del final). NO hay que editarlo.
+REM   3. Doble clic en "bot-100-causas.bat".
 REM   4. NO cierres la ventana negra hasta que diga "PROCESO COMPLETO".
 REM      Para detener antes: apreta Ctrl + C.
 REM
-REM PRIMERA VEZ EN LA PC (instalar, una sola vez, en la carpeta):
-REM   npm install
-REM   npx playwright install chromium
-REM
 REM SEGURIDAD:
 REM   - Lock anti-solape: si ya hay una tanda corriendo, no arranca otra.
-REM   - NUNCA subas el .bat con tus claves a git (esta en .gitignore).
+REM   - Las credenciales viven SOLO en .env (que esta en .gitignore).
+REM     Este .bat ya NO las lleva adentro: antes traia placeholders
+REM     CAMBIAR_* que, si no se editaban, le GANABAN al .env (loadEnv.ts no
+REM     pisa lo que ya esta en el entorno) y el bot intentaba entrar con el
+REM     RUT literal "CAMBIAR_POR_TU_RUT" -> login fallido repetido y riesgo
+REM     de que Clave Unica bloquee la cuenta.
 REM ============================================================
 
 cd /d "%~dp0"
+
+REM --- Esta Node.js instalado? ---
+where node >nul 2>nul
+if errorlevel 1 goto :falta_node
+
+REM --- Estan configuradas las credenciales? ---
+REM Se chequea ANTES de tomar el candado, asi si falta configuracion no queda un
+REM lock colgado. Las credenciales viven en .env; las crea bot-mantenimiento.bat.
+if not exist ".env" goto :falta_config
+findstr /b /c:"PJUD_RUT=" ".env" >nul 2>nul
+if errorlevel 1 goto :falta_config
 
 REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
 REM Si existe el lock, verificamos si de verdad hay un bot corriendo (proceso node).
@@ -45,12 +57,6 @@ if exist "bot-100-causas.lock" (
   )
 )
 echo running > "bot-100-causas.lock"
-
-REM --- TUS DATOS (reemplazar los CAMBIAR_*) ---
-set PJUD_RUT=CAMBIAR_POR_TU_RUT
-set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
-set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
-set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
 
 REM --- CONFIG ---
 REM 33 causas por tanda.
@@ -104,3 +110,35 @@ echo   PROCESO COMPLETO - Ya podes cerrar esta ventana.
 echo   Revisa el panel en causaspro.vercel.app
 echo ============================================================
 pause
+exit /b 0
+
+REM ============================================================
+REM MENSAJES DE ERROR
+REM ============================================================
+:falta_node
+echo ------------------------------------------------------------
+echo   FALTA INSTALAR NODE.JS
+echo ------------------------------------------------------------
+echo.
+echo   1. Entra a:  https://nodejs.org
+echo   2. Baja la version que dice "LTS".
+echo   3. Instalala apretando Siguiente hasta el final.
+echo   4. Volve a hacer doble clic en este archivo.
+echo.
+pause
+exit /b 1
+
+:falta_config
+echo ------------------------------------------------------------
+echo   FALTA CONFIGURAR TUS DATOS
+echo ------------------------------------------------------------
+echo.
+echo   Todavia no estan guardados tu RUT ni tu Clave Unica.
+echo.
+echo   Hace doble clic UNA VEZ en:  bot-mantenimiento.bat
+echo   Te va a pedir los 3 datos y los guarda.
+echo.
+echo   Despues volve a hacer doble clic en este archivo.
+echo.
+pause
+exit /b 1

@@ -69,29 +69,34 @@ En **Supabase → SQL Editor**, ejecutar (si no se hizo antes):
 - `schema.sql` (tablas base: causas, nna, adultos, audiencias, …)
 - `schema-bot.sql` (tablas `movimientos`, `bot_logs`, `bot_runs` + vista de urgencia)
 
-### Paso 4 — Crear tu `.bat` con tus datos
+### Paso 4 — Crear los `.bat` y configurar tus datos (una sola vez)
 ```cmd
-copy bot-100-causas.bat.example bot-100-causas.bat
-notepad bot-100-causas.bat
+copy /y bot-mantenimiento.bat.example bot-mantenimiento.bat
+copy /y bot-100-causas.bat.example bot-100-causas.bat
 ```
-En el Bloc de notas, reemplazar los `CAMBIAR_*`:
-- `PJUD_RUT` → tu RUT (ej: `17692174-9`)
-- `PJUD_PASSWORD` → tu contraseña de Clave Única
-- `SUPABASE_SERVICE_ROLE_KEY` → tu service role key (Supabase → Settings → API)
+**No hay que editar nada con el Bloc de notas.** Hacé **doble clic en
+`bot-mantenimiento.bat`**: la primera vez te pregunta 3 datos y los guarda en `.env`.
 
-Guardar y cerrar.
+- **RUT** → con guion y sin puntos (ej: `17692174-9`)
+- **Contraseña de Clave Única** → no se ve mientras la escribís (es a propósito)
+- **Service role key** → Supabase → Settings → API → `service_role`
 
-> ⚠️ El `.bat` con tus claves **NO se sube a git** (está en `.gitignore`). Solo se
-> versiona `bot-100-causas.bat.example` (sin secretos).
+De ahí en adelante los dos `.bat` arrancan directo, sin preguntar nada: los dos leen
+`.env` (ver `src/bot/loadEnv.ts`).
+
+> ⚠️ Ni los `.bat` ni el `.env` se suben a git (están en `.gitignore`, incluido el
+> respaldo `.env.respaldo`). Solo se versionan los `.bat.example`, sin secretos.
+
+> 🔒 Los `.bat` ya **no** llevan credenciales adentro. Antes traían placeholders
+> `CAMBIAR_*` y eso era peligroso: `loadEnv.ts` no pisa lo que ya está en el entorno, así
+> que un placeholder sin editar **le ganaba** al `.env` y el bot intentaba entrar con el
+> RUT literal `CAMBIAR_POR_TU_RUT` → login fallido repetido y riesgo de que Clave Única
+> bloquee la cuenta.
 
 ### Paso 5 — (Recomendado) Probar con pocas causas ANTES de largar las 100
 Para confirmar que el login y el scraping andan, corré una prueba visible (5 causas,
-navegador a la vista):
+navegador a la vista). Las credenciales las toma del `.env`, no hace falta escribirlas:
 ```cmd
-set PJUD_RUT=tu-rut
-set PJUD_PASSWORD=tu-clave
-set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
-set SUPABASE_SERVICE_ROLE_KEY=tu-service-role-key
 set SKIP_HOUR_CHECK=1
 npm run bot:test
 ```
@@ -105,9 +110,9 @@ seguí con el Paso 6.
 > (usa tu Google Chrome instalado). Si tu Chrome está en una ruta rara:
 > `set CHROME_PATH=C:\ruta\a\chrome.exe`
 
-### Paso 6 — Correr las 100 causas (4 tandas de 33, descanso de 30 min)
+### Paso 6 — Correr las 100 causas (4 tandas de 33, descanso de 15 min)
 **Doble clic** en `bot-100-causas.bat` (o desde la terminal: `bot-100-causas.bat`).
-- Corre 4 tandas de **33 causas** con **30 minutos de descanso** entre cada una.
+- Corre 4 tandas de **33 causas** con **15 minutos de descanso** entre cada una.
 - **NO cierres la ventana negra** hasta que diga `PROCESO COMPLETO` (tarda varias horas
   por los descansos).
 - Para detener antes: `Ctrl + C`.
@@ -126,12 +131,11 @@ Cuando la base ya está cargada, para el **día a día** usá `bot-mantenimiento
   Correr "de día, como una persona" reduce el riesgo de que el portal marque el bot.
 - Bajo perfil: sin ráfagas de 100. Ideal **1 vez al día**.
 
-Configuración (una sola vez):
-```cmd
-copy bot-mantenimiento.bat.example bot-mantenimiento.bat
-notepad bot-mantenimiento.bat
-```
-Poné tus datos (RUT, clave, service role key), guardá, y doble clic cada día.
+Se configura solo: la primera vez que le hacés doble clic te pide los 3 datos (Paso 4).
+Después, **un doble clic por día** y listo.
+
+> Si cambiás la Clave Única: borrá el archivo `.env` y volvé a hacer doble clic, para que
+> te pida los datos de nuevo.
 
 > Comparte el mismo lock que `bot-100-causas.bat`, así **nunca** corren los dos a la vez.
 
@@ -147,7 +151,7 @@ Poné tus datos (RUT, clave, service role key), guardá, y doble clic cada día.
 | Querés… | Editá en `bot-100-causas.bat` |
 |---|---|
 | Cambiar el tamaño de tanda | `set BOT_MAX_CAUSAS=33` |
-| Cambiar el descanso | los `timeout /t 1800` (1800 s = 30 min) |
+| Cambiar el descanso | los `timeout /t 900` (900 s = 15 min) |
 | Más / menos tandas | copiá o borrá un bloque `==== TANDA N ====` |
 | Correr solo en horario laboral (8–18h Chile) | poné `REM ` adelante de `set SKIP_HOUR_CHECK=1` |
 | Usar tu Chrome instalado | descomentá `set BOT_USE_SYSTEM_CHROME=1` |
@@ -155,7 +159,9 @@ Poné tus datos (RUT, clave, service role key), guardá, y doble clic cada día.
 **Seguridad incorporada:**
 - **Lock anti-solape** (`bot-100-causas.lock`): si una tanda aún corre, no arranca otra
   → nunca dos bots del mismo RUT a la vez.
-- Los descansos de 30 min entre tandas espacian la actividad (menos marca de bot).
+- Los descansos de 15 min entre tandas espacian la actividad (menos marca de bot).
+- Los `.bat` verifican que Node.js esté instalado y que `.env` tenga tus datos **antes**
+  de tomar el lock, así una configuración incompleta no deja un lock colgado.
 
 > ⚠️ Si Paula usa el **portal del PJUD** (no el dashboard) al mismo tiempo, pueden pisarse
 > la sesión. El dashboard (causaspro.vercel.app) NO toca el PJUD, así que puede usarlo sin
