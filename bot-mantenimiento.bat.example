@@ -1,0 +1,87 @@
+@echo off
+REM ============================================================
+REM CausasPro - BOT PJUD: MANTENIMIENTO DIARIO (Playwright)
+REM ============================================================
+REM
+REM QUE HACE:
+REM   Corre UNA tanda corta de 25 causas. Trae las causas NUEVAS que
+REM   todavia no tienen datos y, si sobra cupo, refresca las mas
+REM   desactualizadas. Es el .bat para el DIA A DIA (una vez cargada
+REM   la base completa con bot-100-causas.bat).
+REM
+REM   Es de BAJO PERFIL a proposito (menos riesgo de que el portal
+REM   marque el bot):
+REM     - Solo 25 causas, UNA tanda (sin rafagas).
+REM     - Solo corre en HORARIO LABORAL chileno (8 a 18 h). Fuera de
+REM       ese horario el bot se auto-cancela.
+REM
+REM COMO USAR (una sola vez):
+REM   1. Copia este archivo como "bot-mantenimiento.bat"
+REM      (quitale el ".example" del final)
+REM   2. Abrilo con el Bloc de notas y reemplaza los CAMBIAR_* con
+REM      tus datos reales (RUT, clave, service role key).
+REM   3. Guarda. Doble clic en "bot-mantenimiento.bat" para correrlo.
+REM
+REM CADA CUANTO: 1 vez al dia, en horario de oficina, alcanza.
+REM
+REM SEGURIDAD:
+REM   - Lock anti-solape (comparte lock con bot-100-causas para NUNCA
+REM     correr dos bots del mismo RUT a la vez).
+REM   - NUNCA subas el .bat con tus claves a git (esta en .gitignore).
+REM ============================================================
+
+cd /d "%~dp0"
+
+REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
+REM Comparte el MISMO lock que bot-100-causas.bat para que nunca corran los dos juntos.
+REM Si el lock quedo huerfano (no hay proceso node), se limpia solo y continua.
+if exist "bot-100-causas.lock" (
+  tasklist /fi "imagename eq node.exe" 2>nul | find /i "node.exe" >nul
+  if errorlevel 1 (
+    echo Lock huerfano detectado ^(no hay bot corriendo^). Se limpia y continua.
+    del "bot-100-causas.lock" 2>nul
+  ) else (
+    echo Ya hay un bot corriendo de verdad. Se cancela este.
+    pause
+    exit /b 0
+  )
+)
+echo running > "bot-100-causas.lock"
+
+REM --- TUS DATOS (reemplazar los CAMBIAR_*) ---
+set PJUD_RUT=CAMBIAR_POR_TU_RUT
+set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
+set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
+set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
+
+REM --- CONFIG ---
+REM 25 causas por corrida (bajo perfil).
+set BOT_MAX_CAUSAS=25
+REM Modo 'rit': revisa las causas YA cargadas. NUNCA cambiar a 'listado'.
+set BOT_SEARCH_MODE=rit
+REM SEGURIDAD: NO seteamos SKIP_HOUR_CHECK. El bot SOLO corre entre 8 y 18 h (hora Chile);
+REM fuera de ese horario se auto-cancela solo. Correr "de dia como una persona" es mas seguro.
+
+REM Si la descarga de Chromium falla, usa tu Chrome instalado:
+REM set BOT_USE_SYSTEM_CHROME=1
+
+echo ============================================================
+echo   CausasPro - Mantenimiento diario (25 causas, horario 8-18h)
+echo   NO CIERRES ESTA VENTANA hasta que termine.
+echo ============================================================
+echo.
+
+echo [%date% %time%] Iniciando mantenimiento (25 causas)...
+call npm run bot
+echo [%date% %time%] Mantenimiento terminado.
+
+REM --- Liberar el lock ---
+del "bot-100-causas.lock" 2>nul
+
+echo.
+echo ============================================================
+echo   LISTO - Ya podes cerrar esta ventana.
+echo   Revisa el panel en causaspro.vercel.app
+echo   (Si dijo "Fuera de horario permitido", corrélo entre 8 y 18 h.)
+echo ============================================================
+pause

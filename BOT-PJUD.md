@@ -116,6 +116,32 @@ Al terminar, revisá el panel en **https://causaspro.vercel.app**.
 
 ---
 
+## 🔁 Uso diario (una vez cargada la base): `bot-mantenimiento.bat`
+
+`bot-100-causas.bat` es para la **carga inicial** (llenar las ~647 de cero, en pocos días).
+Cuando la base ya está cargada, para el **día a día** usá `bot-mantenimiento.bat`:
+
+- Corre **UNA tanda de 25 causas** (trae las nuevas + refresca las más viejas).
+- **Solo corre entre 8 y 18 h (hora Chile)**: fuera de ese horario se auto-cancela.
+  Correr "de día, como una persona" reduce el riesgo de que el portal marque el bot.
+- Bajo perfil: sin ráfagas de 100. Ideal **1 vez al día**.
+
+Configuración (una sola vez):
+```cmd
+copy bot-mantenimiento.bat.example bot-mantenimiento.bat
+notepad bot-mantenimiento.bat
+```
+Poné tus datos (RUT, clave, service role key), guardá, y doble clic cada día.
+
+> Comparte el mismo lock que `bot-100-causas.bat`, así **nunca** corren los dos a la vez.
+
+> ⚠️ **Volumen y detección:** para la carga inicial, 100/día está OK por unos días (mejor
+> con algún día de descanso). Para el uso normal, 25/día en horario laboral es mucho más
+> seguro. Si ves "CAPTCHA detectado" o la tasa se desploma, cerrá el bot ese día y retomá
+> al siguiente.
+
+---
+
 ## ⚙️ Ajustes del `.bat` (opcional)
 
 | Querés… | Editá en `bot-100-causas.bat` |
