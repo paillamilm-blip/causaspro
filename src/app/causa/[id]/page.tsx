@@ -74,7 +74,10 @@ export default function CausaDetalle() {
       const res = await fetch(`/api/analisis/${id}${token ? `?token=${encodeURIComponent(token)}` : ''}`)
       const data = await res.json()
       if (!res.ok) {
-        setAnalisisError(data?.error || 'No se pudo generar el análisis.')
+        // `detalle` (si viene) dice QUÉ falló por modelo: ej. "HTTP 429 (límite de uso)".
+        // Se muestra para poder diagnosticar sin leer logs del servidor.
+        const base = data?.error || 'No se pudo generar el análisis.'
+        setAnalisisError(data?.detalle ? `${base}\n\nDetalle técnico: ${data.detalle}` : base)
       } else {
         setAnalisis({ resumen: data.resumen, proximoPaso: data.proximoPaso, riesgo: data.riesgo, acciones: data.acciones, preguntasPrograma: data.preguntasPrograma, resumenCausa: data.resumenCausa, resumenProgramas: data.resumenProgramas })
       }
@@ -226,8 +229,10 @@ export default function CausaDetalle() {
             {analizando && (
               <p className="text-sm text-purple-600">Analizando la protección del NNA y el cumplimiento de la medida…</p>
             )}
+            {/* whitespace-pre-line: el mensaje puede traer el "Detalle técnico" en una
+                línea aparte (el texto se arma con \n\n en pedirAnalisisIA). */}
             {analisisError && (
-              <p className="text-sm text-red-600">{analisisError}</p>
+              <p className="text-sm text-red-600 whitespace-pre-line">{analisisError}</p>
             )}
             {analisis && (
               <div className="space-y-3 text-sm">

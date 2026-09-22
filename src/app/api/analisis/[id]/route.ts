@@ -214,8 +214,18 @@ export async function GET(
     const analisis = await analizarCausaIA(lineas.join('\n'))
     return NextResponse.json(analisis, { headers: { 'Cache-Control': 'no-store' } })
   } catch (e: any) {
+    // `detalle` trae el motivo de falla de CADA modelo (lo arma aiClient): ej.
+    // "gemma-4-31b-it: HTTP 429 (límite de uso) · nemotron-3-super: sin JSON válido".
+    // Se muestra en pantalla porque el mensaje genérico anterior no permitía diagnosticar
+    // nada sin entrar a los logs de Vercel, y la usuaria no es programadora.
+    // No expone secretos: son códigos HTTP y nombres de modelo, nunca la API key.
+    const detalle = typeof e?.detalle === 'string' ? e.detalle : ''
+    console.error('[IA] análisis falló para causa', causaId, '-', detalle || e?.message)
     return NextResponse.json(
-      { error: 'La IA no pudo analizar la causa en este momento. Intenta de nuevo.' },
+      {
+        error: 'La IA no pudo analizar la causa en este momento. Intenta de nuevo.',
+        detalle: detalle || undefined,
+      },
       { status: 502 },
     )
   }
