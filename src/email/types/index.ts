@@ -21,25 +21,16 @@ export interface ParsedEmail {
   text?: string         // Contenido texto plano
 }
 
-/** Asignación extraída de la tabla HTML del correo */
-export interface AsignacionEmail {
-  rit: string           // RIT de la causa (ej: P-8141-2026)
-  fecha_audiencia: string | null   // Fecha audiencia (dd/mm/yyyy → ISO)
-  fecha_ingreso: string | null     // Fecha ingreso (dd/mm/yyyy → ISO)
-  curador: string       // Nombre del curador asignado
-}
+// Estos dos tipos se MOVIERON a src/lib/ junto con el parser y el guardado (ver la nota
+// en src/lib/asignacionesParser.ts). Se re-exportan con el nombre viejo para no romper a
+// quien los importe desde acá, pero la definición vive en un solo lugar: así no pueden
+// quedar desincronizados.
 
-/** Resultado de procesar un email de asignaciones */
-export interface EmailProcessResult {
-  email_id: string
-  fecha_email: string
-  remitente: string
-  asignaciones: AsignacionEmail[]
-  causas_nuevas: number
-  causas_existentes: number
-  audiencias_creadas: number
-  errores: string[]
-}
+/** Asignación extraída de la tabla del correo. Definida en src/lib/asignacionesParser.ts */
+export type { Asignacion as AsignacionEmail } from '../../lib/asignacionesParser'
+
+/** Resultado de procesar las asignaciones. Definido en src/lib/asignacionesSync.ts */
+export type { ResultadoSync as EmailProcessResult } from '../../lib/asignacionesSync'
 
 /** Estado de una ejecución del interceptor */
 export interface EmailRunStatus {

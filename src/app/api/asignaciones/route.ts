@@ -23,9 +23,12 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
-import { parseAsignaciones } from '@/email/modules/htmlParser'
-import { syncAsignaciones } from '@/email/modules/syncAsignaciones'
-import type { AsignacionEmail } from '@/email/types'
+// Se importa de @/lib y NUNCA de @/email: ese módulo es un CLI que arrastra imapflow y
+// rompe el build en Vercel (verificado por bisección — fallaba incluso importando el
+// parser sin modificar). La lógica pura vive en src/lib/ justamente por eso.
+import { parseAsignaciones } from '@/lib/asignacionesParser'
+import { syncAsignaciones } from '@/lib/asignacionesSync'
+import type { Asignacion } from '@/lib/asignacionesParser'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -73,7 +76,7 @@ function estaAutorizado(req: NextRequest): boolean {
 }
 
 /** Asignación + si el RIT ya está en la base (para la vista previa). */
-interface AsignacionPrevia extends AsignacionEmail {
+interface AsignacionPrevia extends Asignacion {
   yaExiste: boolean
 }
 

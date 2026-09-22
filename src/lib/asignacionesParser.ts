@@ -1,10 +1,26 @@
 // ============================================================
-// CAUSASPRO EMAIL - HTML Table Parser
-// Parsea la tabla de ASIGNACIONES del correo
+// CAUSASPRO - Parser de la tabla de ASIGNACIONES del correo de la jefa
 // Formato: RIT | FECHA AUD | FECHA ING | CURADOR
+// ------------------------------------------------------------
+// Vive en src/lib/ (lado WEB) y NO en src/email/ a propósito.
+//
+// `src/email/` es un módulo de CLI que se ejecuta con `tsx src/email/index.ts` y arrastra
+// `imapflow`. Cuando una ruta de Next importaba desde ahí, el build de Vercel fallaba
+// (verificado por bisección: hasta importar el parser SIN modificar lo rompía). Además el
+// repo ya separa deliberadamente el bot de la web (ver la nota de "espejado" en
+// materiasFamilia.ts), así que esta es la ubicación coherente.
+//
+// El CLI de correo sigue usándolo importándolo desde acá: la dependencia va en una sola
+// dirección (src/email → src/lib), nunca al revés.
 // ============================================================
 
-import type { AsignacionEmail } from '../types'
+/** Una fila de la tabla de asignaciones, ya normalizada. */
+export interface Asignacion {
+  rit: string                      // RIT de la causa (ej. P-8141-2026)
+  fecha_audiencia: string | null   // ISO yyyy-mm-dd
+  fecha_ingreso: string | null     // ISO yyyy-mm-dd
+  curador: string
+}
 
 /**
  * Parsea el HTML del email y extrae las asignaciones de la tabla
@@ -13,8 +29,8 @@ import type { AsignacionEmail } from '../types'
  * | RIT          | FECHA AUD   | FECHA ING   | CURADOR      |
  * | P-8141-2026  | 20/08/2026  | 10/08/2026  | PAULA VARGAS |
  */
-export function parseAsignacionesFromHtml(html: string): AsignacionEmail[] {
-  const asignaciones: AsignacionEmail[] = []
+export function parseAsignacionesFromHtml(html: string): Asignacion[] {
+  const asignaciones: Asignacion[] = []
   
   if (!html) return asignaciones
   
@@ -82,8 +98,8 @@ export function parseAsignacionesFromHtml(html: string): AsignacionEmail[] {
  * El ORDEN de las fechas se deduce del encabezado si aparece (FECHA AUD / FECHA ING); si no
  * hay encabezado, se asume el formato del correo de la jefa: primero AUD, después ING.
  */
-export function parseAsignacionesFromText(texto: string): AsignacionEmail[] {
-  const asignaciones: AsignacionEmail[] = []
+export function parseAsignacionesFromText(texto: string): Asignacion[] {
+  const asignaciones: Asignacion[] = []
   if (!texto) return asignaciones
 
   // ¿El encabezado pone FECHA ING antes que FECHA AUD? (invierte el orden por defecto)
@@ -139,7 +155,7 @@ export function parseAsignacionesFromText(texto: string): AsignacionEmail[] {
  * primera aparición que tenga fecha de audiencia, que es la que importa.
  */
 export function parseAsignaciones(contenido: string): {
-  asignaciones: AsignacionEmail[]
+  asignaciones: Asignacion[]
   origen: 'tabla-html' | 'texto' | 'vacio'
 } {
   const limpio = (contenido || '').trim()
@@ -157,7 +173,7 @@ export function parseAsignaciones(contenido: string): {
   }
 
   // Deduplicar por RIT conservando la entrada más completa.
-  const porRit = new Map<string, AsignacionEmail>()
+  const porRit = new Map<string, Asignacion>()
   for (const a of encontradas) {
     const previa = porRit.get(a.rit)
     if (!previa) { porRit.set(a.rit, a); continue }

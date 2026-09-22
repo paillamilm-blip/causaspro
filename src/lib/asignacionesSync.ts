@@ -1,13 +1,41 @@
 // ============================================================
-// CAUSASPRO EMAIL - Sync Asignaciones to Supabase
-// Crea nuevas causas y audiencias desde los emails de asignación
+// CAUSASPRO - Guardado de asignaciones en Supabase
+// Crea las causas nuevas y agenda las audiencias de la tabla del correo
+// ------------------------------------------------------------
+// Vive en src/lib/ por el mismo motivo que asignacionesParser.ts: importar `src/email/`
+// desde una ruta de Next rompe el build en Vercel (ese módulo es un CLI que arrastra
+// imapflow). El CLI de correo lo sigue usando importándolo desde acá.
 // ============================================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
-import type { AsignacionEmail, EmailProcessResult } from '../types'
-// Utilidad pura compartida: deriva `tipo` desde el RIT validando contra la
-// lista blanca del CHECK de la BD (misma lógica que usa el bot en orchestrator).
-import { inferirTipoRIT } from '../../bot/utils'
+import type { Asignacion } from './asignacionesParser'
+// Lista blanca de letras de RIT del lado WEB. Ojo: NO se importa `inferirTipoRIT` de
+// `src/bot/utils` a propósito — el bot y la web están deliberadamente separados (ver la
+// nota de "espejado" en materiasFamilia.ts) y ningún archivo de la web importa de src/bot/.
+import { LETRAS_VALIDAS } from './materiasFamilia'
+
+/** Resultado de procesar una tanda de asignaciones. */
+export interface ResultadoSync {
+  email_id: string
+  fecha_email: string
+  remitente: string
+  asignaciones: Asignacion[]
+  causas_nuevas: number
+  causas_existentes: number
+  audiencias_creadas: number
+  errores: string[]
+}
+
+/**
+ * Deriva el `tipo` (letra) desde el RIT, validando contra la lista blanca del CHECK de la
+ * tabla `causas`. Devuelve null si la letra no es válida, para no romper el insert.
+ */
+function inferirTipoDesdeRit(rit: string): string | null {
+  const m = rit.trim().match(/^([A-Z]{1,3})-\d+-\d{4}$/i)
+  if (!m) return null
+  const letra = m[1].toUpperCase()
+  return LETRAS_VALIDAS.includes(letra) ? letra : null
+}
 
 let supabase: SupabaseClient | null = null
 
@@ -57,12 +85,12 @@ function getSupabase(): SupabaseClient {
  * - Si la causa NO existe → crea causa + audiencia
  */
 export async function syncAsignaciones(
-  asignaciones: AsignacionEmail[],
+  asignaciones: Asignacion[],
   emailMeta: { email_id: string; fecha: string; remitente: string }
-): Promise<EmailProcessResult> {
+): Promise<ResultadoSync> {
   const sb = getSupabase()
   
-  const result: EmailProcessResult = {
+  const result: ResultadoSync = {
     email_id: emailMeta.email_id,
     fecha_email: emailMeta.fecha,
     remitente: emailMeta.remitente,
@@ -109,7 +137,7 @@ export async function syncAsignaciones(
           .from('causas')
           .insert({
             rit: asig.rit,
-            tipo: inferirTipoRIT(asig.rit),
+            tipo: inferirTipoDesdeRit(asig.rit),
             estado: 'Asignada por email',
             fecha_notificacion: asig.fecha_ingreso || new Date().toISOString().split('T')[0],
             // Causa nueva: no hay notas previas que conservar, así que se escribe directo.
@@ -175,7 +203,7 @@ export async function syncAsignaciones(
 /**
  * Guarda log del procesamiento de email
  */
-async function saveEmailLog(sb: SupabaseClient, result: EmailProcessResult): Promise<void> {
+async function saveEmailLog(sb: SupabaseClient, result: ResultadoSync): Promise<void> {
   try {
     await sb.from('email_logs').insert({
       email_id: result.email_id,
