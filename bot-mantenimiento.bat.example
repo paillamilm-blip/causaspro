@@ -1,87 +1,249 @@
 @echo off
-REM ============================================================
-REM CausasPro - BOT PJUD: MANTENIMIENTO DIARIO (Playwright)
-REM ============================================================
-REM
-REM QUE HACE:
-REM   Corre UNA tanda corta de 25 causas. Trae las causas NUEVAS que
-REM   todavia no tienen datos y, si sobra cupo, refresca las mas
-REM   desactualizadas. Es el .bat para el DIA A DIA (una vez cargada
-REM   la base completa con bot-100-causas.bat).
-REM
-REM   Es de BAJO PERFIL a proposito (menos riesgo de que el portal
-REM   marque el bot):
-REM     - Solo 25 causas, UNA tanda (sin rafagas).
-REM     - Solo corre en HORARIO LABORAL chileno (8 a 18 h). Fuera de
-REM       ese horario el bot se auto-cancela.
-REM
-REM COMO USAR (una sola vez):
-REM   1. Copia este archivo como "bot-mantenimiento.bat"
-REM      (quitale el ".example" del final)
-REM   2. Abrilo con el Bloc de notas y reemplaza los CAMBIAR_* con
-REM      tus datos reales (RUT, clave, service role key).
-REM   3. Guarda. Doble clic en "bot-mantenimiento.bat" para correrlo.
-REM
-REM CADA CUANTO: 1 vez al dia, en horario de oficina, alcanza.
-REM
-REM SEGURIDAD:
-REM   - Lock anti-solape (comparte lock con bot-100-causas para NUNCA
-REM     correr dos bots del mismo RUT a la vez).
-REM   - NUNCA subas el .bat con tus claves a git (esta en .gitignore).
-REM ============================================================
-
+setlocal
 cd /d "%~dp0"
+title CausasPro - Mantenimiento diario
 
-REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
-REM Comparte el MISMO lock que bot-100-causas.bat para que nunca corran los dos juntos.
-REM Si el lock quedo huerfano (no hay proceso node), se limpia solo y continua.
+REM ============================================================
+REM CausasPro - BOT PJUD: MANTENIMIENTO DIARIO (un solo clic)
+REM ============================================================
+REM
+REM QUE HACE: trae los movimientos nuevos de 25 causas. Primero las que
+REM todavia no tienen datos y, si sobra cupo, refresca las mas viejas.
+REM
+REM COMO SE USA: doble clic. Nada mas.
+REM
+REM   - La PRIMERA vez te pregunta 3 datos (RUT, clave, llave de Supabase)
+REM     y los guarda en el archivo .env.
+REM   - De ahi en adelante arranca directo, sin preguntar nada.
+REM
+REM Es de BAJO PERFIL a proposito (menos riesgo con el portal):
+REM   - Solo 25 causas, UNA tanda (sin rafagas).
+REM   - Solo corre entre las 8 y las 18 h (hora de Chile). Fuera de ese
+REM     horario se cancela solo: correr de dia parece uso normal.
+REM
+REM SI CAMBIAS LA CLAVE UNICA: borra el archivo .env y volve a hacer
+REM doble clic; te va a preguntar los datos de nuevo.
+REM ============================================================
+
+echo ============================================================
+echo   CausasPro - MANTENIMIENTO DIARIO
+echo ============================================================
+echo.
+
+REM ---------- 1) Esta Node.js instalado? ----------
+where node >nul 2>nul
+if errorlevel 1 goto :falta_node
+
+REM ---------- 2) Hay credenciales guardadas? ----------
+if not exist ".env" goto :configurar
+findstr /b /c:"PJUD_RUT=" ".env" >nul 2>nul
+if errorlevel 1 goto :configurar
+goto :hay_config
+
+REM ============================================================
+REM PRIMERA VEZ: pedir los datos y guardarlos en .env
+REM ============================================================
+:configurar
+echo ------------------------------------------------------------
+echo   CONFIGURACION INICIAL (solo esta vez)
+echo ------------------------------------------------------------
+echo.
+echo Te voy a pedir 3 datos. Se guardan en este PC, en el archivo
+echo .env, y no se suben a internet ni a GitHub.
+echo.
+
+echo 1 de 3) Tu RUT para Clave Unica
+echo         Escribilo con guion y sin puntos. Ejemplo: 17692174-9
+set "CFG_RUT="
+set /p "CFG_RUT=RUT: "
+if not defined CFG_RUT goto :dato_vacio
+echo.
+
+echo 2 de 3) Tu contrasena de Clave Unica
+echo         No se va a ver nada mientras la escribis. Es normal.
+echo         Podes pegarla con clic derecho. Apreta Enter al terminar.
+set "CFG_PASS="
+REM El prompt se imprime aca (sin salto de linea) porque Read-Host no puede
+REM mostrarlo: su salida la captura el for /f.
+<nul set /p "=Contrasena: "
+for /f "delims=" %%P in ('powershell -NoProfile -Command "$s=Read-Host -AsSecureString; [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($s))"') do set "CFG_PASS=%%P"
+if not defined CFG_PASS goto :dato_vacio
+echo.
+echo.
+
+echo 3 de 3) La llave de Supabase (service role key)
+echo         Es un texto largo. Pegalo con clic derecho.
+echo         Lo saco de: Supabase ^> Settings ^> API ^> service_role
+set "CFG_KEY="
+set /p "CFG_KEY=Llave: "
+if not defined CFG_KEY goto :dato_vacio
+echo.
+
+REM Se escribe el .env con PowerShell (no con echo) para que no se rompa
+REM si la contrasena tiene simbolos como & o ^. El [char]34 son las comillas:
+REM loadEnv.ts acepta valores entre comillas, asi que soporta espacios.
+REM UTF8 (no ASCII) para que no se rompan la ene ni las tildes si la clave las
+REM tiene. El BOM que agrega PowerShell cae en la primera linea, que es un
+REM comentario sin '=', asi que loadEnv.ts la ignora sin problema.
+powershell -NoProfile -Command "$q=[char]34; $l=@('# CausasPro - credenciales del bot. NO subir a git.', ('PJUD_RUT=' + $q + $env:CFG_RUT + $q), ('PJUD_PASSWORD=' + $q + $env:CFG_PASS + $q), 'NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co', ('SUPABASE_SERVICE_ROLE_KEY=' + $q + $env:CFG_KEY + $q)); Set-Content -Path '.env' -Value $l -Encoding UTF8"
+if errorlevel 1 goto :error_guardar
+if not exist ".env" goto :error_guardar
+
+REM Borrar las variables de memoria: de aca en mas el bot lee el .env.
+set "CFG_RUT="
+set "CFG_PASS="
+set "CFG_KEY="
+
+echo Datos guardados. No te los voy a volver a pedir.
+echo.
+
+:hay_config
+
+REM ---------- 3) Estan instaladas las dependencias? ----------
+if not exist "node_modules" (
+  echo Primera preparacion: instalando lo que necesita el bot.
+  echo Esto puede tardar unos minutos. No cierres la ventana.
+  echo.
+  call npm install
+  if errorlevel 1 goto :error_install
+  echo.
+)
+
+REM ---------- 4) Traer las ultimas mejoras (si se puede) ----------
+where git >nul 2>nul
+if not errorlevel 1 (
+  echo Buscando mejoras del programa...
+  git pull >nul 2>nul
+  if errorlevel 1 (
+    echo    ^(No se pudieron traer mejoras ahora. No importa, sigo.^)
+  ) else (
+    echo    Listo.
+  )
+  echo.
+)
+
+REM ---------- 5) Candado: que no corran dos bots a la vez ----------
+REM Comparte candado con bot-100-causas.bat: dos bots con el mismo RUT a la
+REM vez es justo lo que hace que el portal marque el bot.
 if exist "bot-100-causas.lock" (
   tasklist /fi "imagename eq node.exe" 2>nul | find /i "node.exe" >nul
   if errorlevel 1 (
-    echo Lock huerfano detectado ^(no hay bot corriendo^). Se limpia y continua.
+    echo Habia un candado viejo de una corrida que se corto. Lo limpio y sigo.
     del "bot-100-causas.lock" 2>nul
+    echo.
   ) else (
-    echo Ya hay un bot corriendo de verdad. Se cancela este.
+    echo ------------------------------------------------------------
+    echo   YA HAY UN BOT CORRIENDO
+    echo ------------------------------------------------------------
+    echo   Espera que termine el otro y volve a intentar.
+    echo.
     pause
     exit /b 0
   )
 )
 echo running > "bot-100-causas.lock"
 
-REM --- TUS DATOS (reemplazar los CAMBIAR_*) ---
-set PJUD_RUT=CAMBIAR_POR_TU_RUT
-set PJUD_PASSWORD=CAMBIAR_POR_CLAVE_UNICA_REAL
-set NEXT_PUBLIC_SUPABASE_URL=https://ggwpikokzhckjpwyltye.supabase.co
-set SUPABASE_SERVICE_ROLE_KEY=CAMBIAR_POR_SERVICE_ROLE_KEY
-
-REM --- CONFIG ---
-REM 25 causas por corrida (bajo perfil).
-set BOT_MAX_CAUSAS=25
+REM ---------- 6) Configuracion de esta corrida ----------
+REM 25 causas: bajo perfil.
+set "BOT_MAX_CAUSAS=25"
 REM Modo 'rit': revisa las causas YA cargadas. NUNCA cambiar a 'listado'.
-set BOT_SEARCH_MODE=rit
-REM SEGURIDAD: NO seteamos SKIP_HOUR_CHECK. El bot SOLO corre entre 8 y 18 h (hora Chile);
-REM fuera de ese horario se auto-cancela solo. Correr "de dia como una persona" es mas seguro.
+set "BOT_SEARCH_MODE=rit"
+REM NO se setea SKIP_HOUR_CHECK: el bot solo corre entre 8 y 18 h.
 
-REM Si la descarga de Chromium falla, usa tu Chrome instalado:
-REM set BOT_USE_SYSTEM_CHROME=1
+REM Si falla la descarga de Chromium, descomenta la linea de abajo para
+REM usar el Chrome que ya tenes instalado:
+REM set "BOT_USE_SYSTEM_CHROME=1"
 
 echo ============================================================
-echo   CausasPro - Mantenimiento diario (25 causas, horario 8-18h)
+echo   Arrancando (25 causas, horario 8 a 18 h)
 echo   NO CIERRES ESTA VENTANA hasta que termine.
 echo ============================================================
 echo.
 
-echo [%date% %time%] Iniciando mantenimiento (25 causas)...
+echo [%date% %time%] Iniciando...
 call npm run bot
-echo [%date% %time%] Mantenimiento terminado.
+set "RESULTADO=%errorlevel%"
+echo [%date% %time%] Terminado.
 
-REM --- Liberar el lock ---
 del "bot-100-causas.lock" 2>nul
 
 echo.
+if not "%RESULTADO%"=="0" goto :termino_con_error
 echo ============================================================
 echo   LISTO - Ya podes cerrar esta ventana.
 echo   Revisa el panel en causaspro.vercel.app
-echo   (Si dijo "Fuera de horario permitido", correlo entre 8 y 18 h.)
 echo ============================================================
+echo.
 pause
+exit /b 0
+
+REM ============================================================
+REM MENSAJES DE ERROR
+REM ============================================================
+:falta_node
+echo ------------------------------------------------------------
+echo   FALTA INSTALAR NODE.JS
+echo ------------------------------------------------------------
+echo.
+echo   1. Entra a:  https://nodejs.org
+echo   2. Baja la version que dice "LTS".
+echo   3. Instalala apretando Siguiente hasta el final.
+echo   4. Volve a hacer doble clic en este archivo.
+echo.
+pause
+exit /b 1
+
+:dato_vacio
+echo.
+echo ------------------------------------------------------------
+echo   No escribiste el dato. No guarde nada.
+echo   Volve a hacer doble clic para empezar de nuevo.
+echo ------------------------------------------------------------
+echo.
+pause
+exit /b 1
+
+:error_guardar
+echo.
+echo ------------------------------------------------------------
+echo   No pude guardar el archivo .env
+echo ------------------------------------------------------------
+echo   Puede ser que la carpeta este protegida o sea de solo lectura.
+echo   Avisale a quien te armo el sistema y mostrale este mensaje.
+echo.
+pause
+exit /b 1
+
+:error_install
+echo.
+echo ------------------------------------------------------------
+echo   Fallo la instalacion de dependencias
+echo ------------------------------------------------------------
+echo   Puede ser falta de internet. Revisa la conexion y volve a
+echo   hacer doble clic.
+echo.
+pause
+exit /b 1
+
+:termino_con_error
+echo ============================================================
+echo   EL BOT TERMINO CON UN PROBLEMA
+echo ============================================================
+echo.
+echo   Cosas para mirar, en orden:
+echo.
+echo   - Si dice "Fuera de horario permitido":
+echo     correlo entre las 8 y las 18 h. Es a proposito.
+echo.
+echo   - Si dice "Login fallido":
+echo     puede que cambiaste la Clave Unica. Borra el archivo .env
+echo     de esta carpeta y volve a hacer doble clic para cargarla.
+echo.
+echo   - Si dice algo de red o "ERR_NAME_NOT_RESOLVED":
+echo     el portal puede estar en mantenimiento. No lo corras cerca
+echo     de las 23 h, que es cuando se actualiza.
+echo.
+echo   Saca una foto de esta ventana y mandala si no se resuelve.
+echo.
+pause
+exit /b 1
