@@ -244,7 +244,15 @@ export default function Dashboard() {
       const res = await fetch(`/api/analisis/${causaId}${qs}`, { cache: 'no-store' })
       const json = await res.json()
       if (!res.ok) {
-        setAsesorIA({ rit, cargando: false, resultado: null, error: json?.error || `Error ${res.status}` })
+        // `detalle` (si viene) dice QUÉ falló por modelo: ej. "HTTP 429 (límite de uso)".
+        // Se muestra para poder diagnosticar sin leer logs del servidor.
+        const base = json?.error || `Error ${res.status}`
+        setAsesorIA({
+          rit,
+          cargando: false,
+          resultado: null,
+          error: json?.detalle ? `${base}\n\nDetalle técnico: ${json.detalle}` : base,
+        })
         return
       }
       setAsesorIA({ rit, cargando: false, resultado: json, error: null })
@@ -880,7 +888,9 @@ export default function Dashboard() {
               <div className="py-4">
                 <div className="flex items-start gap-2 text-red-600 text-sm">
                   <IconAlert className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>{asesorIA.error}</span>
+                  {/* whitespace-pre-line: el mensaje puede traer el "Detalle técnico"
+                      en una línea aparte (separado por \n\n). */}
+                  <span className="whitespace-pre-line">{asesorIA.error}</span>
                 </div>
               </div>
             )}

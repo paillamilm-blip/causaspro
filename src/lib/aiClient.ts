@@ -9,20 +9,43 @@
 // una recomendación a revisar con criterio profesional (disclaimer en la UI).
 // ============================================================
 
-/** Modelos gratuitos VIGENTES de OpenRouter (verificados ago-2026), en orden de
- *  preferencia (fallback en cascada). Solo Google (gemma) y NVIDIA (nemotron): los
- *  tiers gratuitos de meta-llama/qwen/mistral fueron retirados. Si uno da 429/error,
- *  se pasa al siguiente. Son los mismos modelos que ya funcionan en producción. */
+/** Modelos gratuitos de OpenRouter, en orden de preferencia (fallback en cascada).
+ *
+ *  VERIFICADOS el 22-sep-2026 contra https://openrouter.ai/api/v1/models. Los cinco
+ *  cumplen las 3 condiciones que este cliente necesita:
+ *    1. el id EXISTE en el catálogo (un id inventado da HTTP 404 y quema un intento),
+ *    2. soportan `response_format` (modo JSON),
+ *    3. su razonamiento NO es obligatorio (`reasoning.mandatory === false`), así podemos
+ *       apagarlo con `reasoning: { enabled: false }` y dedicar todo el presupuesto de
+ *       tokens a la RESPUESTA en vez de al "pensamiento" interno.
+ *
+ *  Orden: primero los dos gemma, que ya vienen con el razonamiento apagado de fábrica
+ *  (`default_enabled: false`) y por eso son los más predecibles para devolver JSON.
+ *
+ *  Descartado a propósito: `liquid/lfm-2.5-2.6b:free` (razonamiento OBLIGATORIO y modelo
+ *  muy chico para materia jurídica).
+ *
+ *  SI ALGÚN DÍA TODOS FALLAN CON "HTTP 404": los ids fueron retirados. Revisar el catálogo
+ *  (https://openrouter.ai/api/v1/models) y reemplazarlos por otros `:free` que tengan
+ *  `response_format` en `supported_parameters`. */
 const MODELOS = [
   'google/gemma-4-31b-it:free',
-  'nvidia/nemotron-3-nano-30b-a3b:free',
   'google/gemma-4-26b-a4b-it:free',
   'nvidia/nemotron-3-super-120b-a12b:free',
-  'google/gemma-3n-e4b-it:free',
+  'nex-agi/nex-n2.5-mini:free',
+  'dots-studio/dots-3-note-preview:free',
 ]
 
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions'
 const TIMEOUT_MS = 25000
+
+/** Presupuesto de tokens de la respuesta. El análisis pide 6 campos en ESPAÑOL
+ *  (resumenCausa, resumenProgramas, resumen, acciones, riesgo, preguntasPrograma).
+ *  El español gasta bastantes más tokens que el inglés, así que con un presupuesto chico
+ *  el JSON se CORTA a la mitad, `JSON.parse` falla y perdemos el modelo por nada.
+ *  Todos los modelos de la lista admiten ≥32k de salida y son gratis: ser generoso acá
+ *  no cuesta dinero y evita el error "la IA no pudo analizar". */
+const MAX_TOKENS = 2500
 
 /** Resultado estructurado del análisis estratégico de una causa.
  *  `resumen`, `proximoPaso` y `riesgo` se mantienen por compatibilidad con el frontend.
@@ -72,8 +95,14 @@ async function llamarOpenRouter(system: string, user: string): Promise<any> {
   const key = process.env.OPENROUTER_KEY
   if (!key) throw new Error('OPENROUTER_KEY no configurada')
 
+  // Motivo de falla de CADA modelo, en lenguaje corto. Si todos fallan, esto viaja en el
+  // error para que la UI pueda mostrar POR QUÉ falló (antes solo se veía "no pudo
+  // analizar", que no dice nada y obligaba a leer los logs de Vercel).
+  const fallas: string[] = []
   let ultimoError: any = null
+
   for (const modelo of MODELOS) {
+    const corto = modelo.replace(':free', '').split('/').pop() || modelo
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), TIMEOUT_MS)
     try {
@@ -90,9 +119,14 @@ async function llamarOpenRouter(system: string, user: string): Promise<any> {
             { role: 'user', content: user },
           ],
           temperature: 0.2,
-          max_tokens: 1000,
+          max_tokens: MAX_TOKENS,
           // Forzar salida JSON: reduce que el modelo devuelva texto/razonamiento libre.
           response_format: { type: 'json_object' },
+          // Apagar el "razonamiento". Varios modelos gratis razonan por defecto y esos
+          // tokens SE DESCUENTAN de max_tokens: el modelo se gasta el presupuesto pensando
+          // y el JSON llega cortado o vacío. Apagado, todo el presupuesto va a la respuesta.
+          // Ningún modelo de MODELOS tiene el razonamiento obligatorio, así que es seguro.
+          reasoning: { enabled: false },
         }),
         signal: controller.signal,
       })
@@ -101,35 +135,53 @@ async function llamarOpenRouter(system: string, user: string): Promise<any> {
         // Log del cuerpo del error de OpenRouter (aparece en los logs de Vercel) para
         // poder diagnosticar: modelo retirado (404), key inválida (401), sin crédito (402),
         // rate-limit (429). No rompe: probamos el siguiente modelo.
-        const detalle = await res.text().catch(() => '')
-        console.warn(`[IA] ${modelo}: HTTP ${res.status} ${detalle.slice(0, 200)}`)
+        const cuerpo = await res.text().catch(() => '')
+        console.warn(`[IA] ${modelo}: HTTP ${res.status} ${cuerpo.slice(0, 300)}`)
+        fallas.push(`${corto}: HTTP ${res.status}${res.status === 401 ? ' (key inválida)' : res.status === 402 ? ' (sin crédito)' : res.status === 404 ? ' (modelo retirado)' : res.status === 429 ? ' (límite de uso)' : ''}`)
         ultimoError = new Error(`${modelo}: HTTP ${res.status}`)
         continue // probar siguiente modelo
       }
       const json = await res.json()
-      const texto = json?.choices?.[0]?.message?.content
-      if (typeof texto !== 'string' || !texto.trim()) {
-        console.warn(`[IA] ${modelo}: respuesta vacía o sin content`)
+      const msg = json?.choices?.[0]?.message
+      const finish = json?.choices?.[0]?.finish_reason
+      // Algunos modelos devuelven el JSON dentro de `reasoning` en vez de `content`.
+      // Probamos content primero y, si no sirve, el reasoning: es respuesta del mismo
+      // modelo, solo en otro campo, así que es válida.
+      const candidatos = [msg?.content, msg?.reasoning].filter(
+        (t): t is string => typeof t === 'string' && t.trim().length > 0,
+      )
+      if (candidatos.length === 0) {
+        // finish_reason === 'length' ⇒ se agotó max_tokens antes de escribir nada útil.
+        console.warn(`[IA] ${modelo}: respuesta vacía (finish_reason=${finish})`)
+        fallas.push(`${corto}: respuesta vacía${finish === 'length' ? ' (se cortó por largo)' : ''}`)
         ultimoError = new Error(`${modelo}: respuesta vacía`)
         continue
       }
       // VALIDAR que sea JSON útil. Si el modelo respondió con razonamiento/inglés/sin JSON,
       // NO lo aceptamos: probamos el siguiente modelo (evita el "genérico" del fallback).
-      const obj = extraerJsonAnalisis(texto)
+      const obj = candidatos.map(extraerJsonAnalisis).find((o) => o !== null)
       if (!obj) {
-        console.warn(`[IA] ${modelo}: respuesta sin JSON válido (posible razonamiento libre). Probando siguiente modelo.`)
+        console.warn(`[IA] ${modelo}: sin JSON válido (finish_reason=${finish}). Probando siguiente modelo.`)
+        fallas.push(`${corto}: sin JSON válido${finish === 'length' ? ' (JSON cortado por largo)' : ''}`)
         ultimoError = new Error(`${modelo}: sin JSON válido`)
         continue
       }
+      console.log(`[IA] análisis OK con ${modelo}`)
       return obj
     } catch (e: any) {
       clearTimeout(timer)
-      console.warn(`[IA] ${modelo}: ${e?.name === 'AbortError' ? 'timeout' : e?.message || e}`)
+      const esTimeout = e?.name === 'AbortError'
+      console.warn(`[IA] ${modelo}: ${esTimeout ? 'timeout' : e?.message || e}`)
+      fallas.push(`${corto}: ${esTimeout ? `timeout (${TIMEOUT_MS / 1000}s)` : String(e?.message || e).slice(0, 80)}`)
       ultimoError = e
       // AbortError (timeout) o error de red → probar siguiente modelo.
     }
   }
-  throw ultimoError || new Error('Todos los modelos de IA fallaron')
+  // Todos fallaron: propagar un error que LLEVA el detalle por modelo, para que el API
+  // route lo muestre en pantalla y se pueda diagnosticar sin entrar a los logs.
+  const err: any = ultimoError || new Error('Todos los modelos de IA fallaron')
+  err.detalle = fallas.join(' · ')
+  throw err
 }
 
 /**
