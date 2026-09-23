@@ -282,3 +282,31 @@ export function calcularTasaExito(exitosas: number, procesadas: number, fueraDeA
   const pct = (exitosas / alcanzables) * 100
   return Number(Math.min(100, Math.max(0, pct)).toFixed(2))
 }
+
+
+/** Letras de RIT de la MISMA familia: Protección y su Cumplimiento. Son las únicas dos
+ *  materias que pueden referirse al mismo caso (una P puede tener su X de cumplimiento). */
+const FAMILIA_PROTECCION = ['P', 'X']
+
+/**
+ * ¿Los RIT que devolvió el portal para el mismo número+año pueden ser la causa HERMANA de la
+ * que tenemos en la base (o la misma con la letra mal), o son causas de otra materia?
+ *
+ * POR QUÉ IMPORTA: en los tribunales de familia la LETRA del RIT **es la materia**, y cada
+ * materia numera sus causas por separado. C-4354-2022 (Contencioso) y X-4354-2022
+ * (Cumplimiento de protección) son expedientes DISTINTOS que solo comparten número y año por
+ * casualidad. Confundirlos lleva a vincular causas sin relación —y, si se corre
+ * BOT_FIX_LETRAS, a crear causas hermanas que no existen.
+ *
+ * Solo P↔X son de la misma familia. Si la de la base es P/X y el portal devuelve P/X,
+ * conviene revisarlo. Si el portal devuelve C/F/V/A, la conclusión correcta es la opuesta:
+ * la causa buscada NO está en Mis Causas y lo que apareció es otro expediente.
+ */
+export function esPosibleCausaHermana(ritEnBase: string, ritsEnPortal: string[]): boolean {
+  const letraBase = (parseRIT(ritEnBase)?.tipo || '').toUpperCase()
+  if (!FAMILIA_PROTECCION.includes(letraBase)) return false
+  return ritsEnPortal.some(r => {
+    const l = (parseRIT(r)?.tipo || '').toUpperCase()
+    return FAMILIA_PROTECCION.includes(l)
+  })
+}

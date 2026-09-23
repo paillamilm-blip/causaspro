@@ -12,7 +12,7 @@ import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath, calcularTasaExito } from '../utils'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath, calcularTasaExito, esPosibleCausaHermana } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
 
@@ -444,15 +444,41 @@ async function runBusquedaPorRit(
       // nada. Se corrige despues con BOT_FIX_LETRAS=1, que es el modo hecho para eso.
       if (encontradas.length === 0 && ritsConOtraLetra.length > 0) {
         status.fallidas++
-        // No es falla del bot: la causa existe con otro RIT. Fuera del denominador.
+        // No es falla del bot: buscó bien y el portal contestó. Fuera del denominador.
         status.fuera_de_alcance = (status.fuera_de_alcance ?? 0) + 1
-        status.errores.push(`${causa.rit}: en el portal figura como ${ritsConOtraLetra.join(' o ')} — revisar la letra`)
-        log('warn', `  ⚠️ ${causa.rit}: el portal la tiene como ${ritsConOtraLetra.join(' o ')}. La causa EXISTE; la letra del RIT en la base esta mal.`)
-        log('info', `     Para corregirlo: BOT_FIX_LETRAS=1 con BOT_RIT=${causa.rit}`)
+
+        // CUIDADO con la conclusión. En los tribunales de familia la LETRA del RIT **es la
+        // materia**, y cada materia numera sus causas por separado. O sea que C-4354-2022
+        // (Contencioso) y X-4354-2022 (Cumplimiento de protección) son causas DISTINTAS que
+        // solo comparten número y año por casualidad.
+        //
+        // Únicamente P (Protección) y X (Cumplimiento de protección) son de la MISMA familia:
+        // ahí sí es plausible que se trate del mismo caso (o de su hermana) y que la letra de
+        // la base esté mal. Si la del portal es C/F/V/A, la conclusión correcta es la opuesta:
+        // la causa buscada NO está en Mis Causas, y lo que apareció es otro expediente.
+        //
+        // La versión anterior afirmaba siempre "la causa EXISTE; la letra está mal" y sugería
+        // BOT_FIX_LETRAS. Eso era un error: aplicado a un C/V habría creado y vinculado como
+        // "hermana" una causa de otra materia, ensuciando la base.
+        const listado = Array.from(new Set(ritsConOtraLetra)).join(', ')  // el portal repite filas
+        const posibleHermana = esPosibleCausaHermana(causa.rit, ritsConOtraLetra)
+
+        if (posibleHermana) {
+          status.errores.push(`${causa.rit}: el portal tiene ${listado} (misma familia de protección) — revisar la letra`)
+          log('warn', `  ⚠️ ${causa.rit}: el portal tiene ${listado}, de la misma familia de protección. Puede ser la causa hermana, o la letra de la base mal.`)
+          log('info', `     Para revisarlo: BOT_FIX_LETRAS=1 con BOT_RIT=${causa.rit}`)
+        } else {
+          status.errores.push(`${causa.rit}: no está en Mis Causas (con ese número/año el portal tiene ${listado}, de otra materia)`)
+          log('warn', `  ⚠️ ${causa.rit}: NO aparece en Mis Causas. Con ese número/año el portal tiene ${listado}, que son de OTRA materia (causas distintas).`)
+          log('info', '     NO correr BOT_FIX_LETRAS acá: vincularía causas que no tienen relación.')
+        }
+
         if (!causa.id.startsWith('temp-')) {
           await marcarRevisionLetra(
             causa.id,
-            `el portal la tiene como ${ritsConOtraLetra.join(' o ')} (en la base figura ${causa.rit}). Corregir con BOT_FIX_LETRAS=1.`,
+            posibleHermana
+              ? `el portal tiene ${listado}, de la misma familia de protección (en la base figura ${causa.rit}). Puede ser la hermana o la letra mal: revisar con BOT_FIX_LETRAS=1.`
+              : `no aparece en Mis Causas. Con ese número/año el portal tiene ${listado}, de otra materia (causas distintas). NO usar BOT_FIX_LETRAS.`,
           ).catch(() => {})
         }
         await navigateToConsulta(page)
@@ -828,17 +854,32 @@ async function runFixLetras(
           // CASO DELICADO: la causa YA tenía letra (ej. P) y el portal muestra OTRA (ej. X),
           // pero SIN la letra original en los resultados. NO pisamos: la P podría estar
           // archivada (no aparece en "Mis Causas") mientras su cumplimiento X sí. Pisar
-          // borraría la protección original (bug real que ya nos pasó). Marcamos para
-          // revisión + creamos la hermana + vinculamos, conservando ambas.
-          relacionadas++
-          status.exitosas++
-          const tipoH = inferirTipoRIT(ritReal)
-          const { id: idH, creada } = await upsertCausaHermana(ritReal, tipoH, null)
-          const rel = describeVinculo(ritBdCanon, ritReal)
-          await vincularCausaEnNotas(causa.id, ritReal, rel)
-          if (idH) await vincularCausaEnNotas(idH, ritBdCanon, rel)
-          await marcarRevisionLetra(causa.id, `el portal muestra ${ritReal} (no ${ritBdCanon}). Se conservó ${ritBdCanon} y se ${creada ? 'creó' : 'vinculó'} ${ritReal}. Verificar relación.`)
-          log('warn', `  🔗 ${causa.rit}: el portal muestra ${ritReal}. Se CONSERVA ${ritBdCanon} y se ${creada ? 'crea' : 'vincula'} ${ritReal} (no se pisa).`)
+          // borraría la protección original (bug real que ya nos pasó).
+          //
+          // PERO antes hay que ver SI son la misma familia. La letra del RIT es la MATERIA, y
+          // cada materia numera por separado: C-8656-2023 (Contencioso) no tiene NADA que ver
+          // con P-8656-2023 (Protección), solo comparten número y año. Solo P↔X pueden ser el
+          // mismo caso. Crear y vincular una "hermana" de otra materia ensucia la base con una
+          // relación inventada (ya pasó: se creó el vínculo espurio P-8656-2023 ↔ C-8656-2023).
+          if (!esPosibleCausaHermana(ritBdCanon, [ritReal])) {
+            ambiguas++
+            status.fallidas++
+            const detalle = `no aparece en Mis Causas. Con ese número/año el portal tiene ${ritReal}, que es de OTRA materia (causa distinta, no la hermana). No se creó ni vinculó nada: revisar si el RIT del Excel está mal o si la causa fue archivada.`
+            await marcarRevisionLetra(causa.id, detalle)
+            log('warn', `  ⚠️ ${causa.rit}: el portal tiene ${ritReal}, de OTRA materia. NO se vincula (no son el mismo caso). Marcada para revisión.`)
+          } else {
+            // Misma familia (P↔X): acá sí es plausible que sea el mismo caso o su hermana.
+            // Marcamos para revisión + creamos la hermana + vinculamos, conservando ambas.
+            relacionadas++
+            status.exitosas++
+            const tipoH = inferirTipoRIT(ritReal)
+            const { id: idH, creada } = await upsertCausaHermana(ritReal, tipoH, null)
+            const rel = describeVinculo(ritBdCanon, ritReal)
+            await vincularCausaEnNotas(causa.id, ritReal, rel)
+            if (idH) await vincularCausaEnNotas(idH, ritBdCanon, rel)
+            await marcarRevisionLetra(causa.id, `el portal muestra ${ritReal} (no ${ritBdCanon}). Se conservó ${ritBdCanon} y se ${creada ? 'creó' : 'vinculó'} ${ritReal}. Verificar relación.`)
+            log('warn', `  🔗 ${causa.rit}: el portal muestra ${ritReal}. Se CONSERVA ${ritBdCanon} y se ${creada ? 'crea' : 'vincula'} ${ritReal} (no se pisa).`)
+          }
         }
       }
 
