@@ -49,6 +49,11 @@ const MARCA_NO_EN_PORTAL = '[NO EN PORTAL]'
  *  seguidos. La saca del loop (no atasca tandas) pero, a diferencia de [NO EN PORTAL], NO afirma
  *  que la causa no exista → queda visible para revisión manual (nunca perder una causa real). */
 const MARCA_REVISAR = '[REVISAR: no scrapeada]'
+/** Marca que deja marcarRevisionLetra: el RIT de la base NO coincide con el del portal
+ *  (mismo número+año, otra letra), o el portal fue ambiguo. Buscar la causa tal cual nunca
+ *  va a funcionar, así que también sale de la cola: necesita una decisión humana, no más
+ *  reintentos. OJO: es distinta de MARCA_REVISAR y no se solapa en el includes(). */
+const MARCA_REVISAR_LETRA = '[REVISAR LETRA]'
 
 /**
  * Obtiene las causas a scrapear, PRIORIZANDO las que aún NO tienen datos (movimientos),
@@ -106,10 +111,20 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
       if (lote.length < 1000) break
     }
 
-    // Fuera del loop: las confirmadas [NO EN PORTAL] y las puestas en cuarentena [REVISAR]
-    // (fallaron N veces seguidas por motivos transitorios). Ambas dejan de consumir cupo.
+    // Fuera del loop: las confirmadas [NO EN PORTAL], las puestas en cuarentena [REVISAR]
+    // (fallaron N veces seguidas por motivos transitorios) y las [REVISAR LETRA].
+    //
+    // Las [REVISAR LETRA] son causas cuyo RIT en la base NO coincide con el del portal: el
+    // portal devuelve el mismo numero+anio con otra letra. Buscarlas tal cual NUNCA va a
+    // funcionar, asi que si siguieran en la cola gastarian un cupo en cada corrida para
+    // siempre. Necesitan una decision HUMANA (si el RIT del Excel esta mal o si es la causa
+    // hermana), no mas reintentos. Caso real: X-2772-2023 y P-8656-2023, donde el portal
+    // solo tiene P-2772-2023 y C-8656-2023; FIX_LETRAS ya creo y vinculo las hermanas, que
+    // SI se scrapean, asi que el expediente real queda monitoreado igual.
     const esRuido = (c: { notas: string | null }) =>
-      (c.notas || '').includes(MARCA_NO_EN_PORTAL) || (c.notas || '').includes(MARCA_REVISAR)
+      (c.notas || '').includes(MARCA_NO_EN_PORTAL)
+      || (c.notas || '').includes(MARCA_REVISAR)
+      || (c.notas || '').includes(MARCA_REVISAR_LETRA)
     const ruido = causas.filter(esRuido).length
 
     // Prioridad 1: sin movimientos y sin marca de ruido.

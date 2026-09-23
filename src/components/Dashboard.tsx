@@ -88,6 +88,23 @@ function fueraDeMiLista(c: CausaResumen): boolean {
   return (c.notas ?? '').toUpperCase().includes('[NO EN PORTAL]')
 }
 
+// ¿El bot NO puede traer datos de esta causa, haga lo que haga? Se usa SOLO para la barra
+// de progreso: son las causas que están fuera de la cola de scraping, así que si contaran en
+// el denominador la barra nunca podría llegar al 100%.
+//
+// Es a propósito distinta de fueraDeMiLista(): esa significa "le relevaron la curaduría" y
+// además silencia alarmas. Acá el criterio es más amplio y solo habla de lo que el bot puede
+// cargar (mantener alineado con esRuido() en src/bot/modules/supabaseSync.ts):
+//   [NO EN PORTAL]          → el portal confirmó que no aparece en Mis Causas
+//   [REVISAR: no scrapeada] → en cuarentena tras varios fallos transitorios
+//   [REVISAR LETRA]         → el RIT de la base no coincide con el del portal (otra letra)
+function noCargablePorBot(c: CausaResumen): boolean {
+  const n = (c.notas ?? '').toUpperCase()
+  return n.includes('[NO EN PORTAL]')
+    || n.includes('[REVISAR: NO SCRAPEADA]')
+    || n.includes('[REVISAR LETRA]')
+}
+
 // ¿La causa tiene SENTENCIA DE RECHAZO? En ese caso la protección se rechazó: la causa
 // se destaca y sale de seguimiento/urgencias (ya no hay medida que monitorear). Se detecta
 // de forma tolerante en el estado/síntesis/último movimiento (el portal usa textos como
@@ -513,15 +530,15 @@ export default function Dashboard() {
 
   // Progreso de llenado por el bot: una causa está "con datos del portal" si tiene
   // al menos un movimiento (fecha_ultimo_movimiento) o una audiencia registrada.
-  // El PORCENTAJE se calcula solo sobre las causas que SÍ están en el portal: se excluyen
-  // las marcadas [NO EN PORTAL] (relevadas/archivadas/otra competencia) porque el bot nunca
-  // podrá cargarlas → si contaran, la barra quedaría "clavada" sin poder llegar al 100%.
-  const fueraDelPortal = causas.filter(fueraDeMiLista).length
+  // El PORCENTAJE se calcula solo sobre las causas que el bot SÍ puede cargar: se excluyen
+  // las que están fuera de su cola (ver noCargablePorBot) porque nunca van a tener datos →
+  // si contaran, la barra quedaría "clavada" sin poder llegar al 100%.
+  const fueraDelPortal = causas.filter(noCargablePorBot).length
   const totalEnPortal = totalCausas - fueraDelPortal
   // Numerador y denominador se miden sobre el MISMO universo (causas que están en el portal),
   // así el porcentaje nunca puede superar el 100% aunque una causa [NO EN PORTAL] conserve
   // datos viejos de cuando sí estaba.
-  const conDatos = causas.filter(c => !fueraDeMiLista(c) && (c.fecha_ultimo_movimiento || c.ultima_audiencia)).length
+  const conDatos = causas.filter(c => !noCargablePorBot(c) && (c.fecha_ultimo_movimiento || c.ultima_audiencia)).length
   const pctDatos = totalEnPortal > 0 ? Math.round((conDatos / totalEnPortal) * 100) : 0
 
   // FUERA DE MONITOREO: causas donde relevaron la curaduría ([NO EN PORTAL]) o con
@@ -801,7 +818,7 @@ export default function Dashboard() {
         )}
         {fueraDelPortal > 0 && (
           <p className="text-xs text-slate-400 mt-1">
-            {fueraDelPortal} causas fuera del portal de Familia (relevadas/archivadas) no se cuentan acá.
+            {fueraDelPortal} causas que el bot no puede cargar (relevadas, archivadas o con el RIT a revisar) no se cuentan acá.
           </p>
         )}
       </div>
