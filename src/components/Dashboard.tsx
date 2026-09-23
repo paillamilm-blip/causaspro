@@ -4,6 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, agruparGestionesPorCausa } from '@/lib/seguimientoNna'
+import { estaTerminada, MARCA_TERMINADA } from '@/lib/monitoreo'
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
@@ -29,7 +30,7 @@ const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; 
   atencion:    { title: 'Atención — Revisar esta semana', dotColor: 'bg-amber-400', tono: 'amber', Icono: IconClock },
   revisar:     { title: 'Revisar — Seguimiento pendiente', dotColor: 'bg-orange-400', tono: 'orange', Icono: IconPause },
   estables:    { title: 'Estables — Sin urgencia inmediata', dotColor: 'bg-green-500', tono: 'green', Icono: IconCheck },
-  fuera:       { title: 'Fuera de monitoreo — relevadas / con sentencia de rechazo', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
+  fuera:       { title: 'Fuera de monitoreo — terminadas / relevadas / con sentencia de rechazo', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
 }
 
 // Color del chip de materia según su grupo práctico.
@@ -103,6 +104,7 @@ function noCargablePorBot(c: CausaResumen): boolean {
   return n.includes('[NO EN PORTAL]')
     || n.includes('[REVISAR: NO SCRAPEADA]')
     || n.includes('[REVISAR LETRA]')
+    || n.includes(MARCA_TERMINADA)   // la curadora la cerró: el bot ya no la revisa
 }
 
 // ¿La causa tiene SENTENCIA DE RECHAZO? En ese caso la protección se rechazó: la causa
@@ -118,10 +120,14 @@ function tieneSentenciaRechazo(c: CausaResumen): boolean {
   return /rechaz\w*\s+(la\s+)?(solicitud|demanda|medida|protecci|causa|denuncia|requerimiento)/.test(texto)
 }
 
-// ¿La causa debe salir del monitoreo activo (no generar alarmas)? Sea porque le relevaron
-// la curaduría (fuera de la lista del portal) o porque hay sentencia de rechazo.
+// ¿La causa debe salir del monitoreo activo (no generar alarmas)? Por tres motivos:
+// le relevaron la curaduría, hay sentencia de rechazo, o la curadora la marcó como terminada.
+//
+// Lo último es MANUAL a propósito: el portal NO informa cuándo una causa terminó (se verificó
+// con datos — `estado` dice "Sin Estado" en 292 causas y los movimientos no traen vocabulario
+// de cierre), así que el sistema no puede deducirlo. La curadora sí lo sabe.
 function fueraDeMonitoreo(c: CausaResumen): boolean {
-  return fueraDeMiLista(c) || tieneSentenciaRechazo(c)
+  return fueraDeMiLista(c) || tieneSentenciaRechazo(c) || estaTerminada(c.notas)
 }
 
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
@@ -130,6 +136,10 @@ function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
   const chips: { texto: string; clase: string }[] = []
   // Si la causa salió del monitoreo (relevaron curaduría o sentencia de rechazo), mostramos
   // SOLO ese chip: las demás señales (seguimiento, alertas) ya no aplican.
+  // La marca manual de la curadora manda por sobre cualquier señal inferida.
+  if (estaTerminada(c.notas)) {
+    return [{ texto: 'Terminada', clase: 'bg-slate-700 text-white' }]
+  }
   if (tieneSentenciaRechazo(c)) {
     return [{ texto: 'Sentencia de rechazo', clase: 'bg-slate-800 text-white' }]
   }
@@ -275,6 +285,30 @@ export default function Dashboard() {
       setAsesorIA({ rit, cargando: false, resultado: json, error: null })
     } catch (e: any) {
       setAsesorIA({ rit, cargando: false, resultado: null, error: e?.message || 'No se pudo conectar con el Asesor IA.' })
+    }
+  }
+
+  // Saca una causa de monitoreo (o la reactiva) y recarga la lista para que se recategorice.
+  // El portal NO informa cuándo una causa terminó, así que esta marca manual de la curadora es
+  // la única fuente. Va por el endpoint (server-side) porque `notas` es un canal compartido con
+  // el bot y hay que agregar una línea sin pisar sus marcas.
+  async function toggleMonitoreo(causaId: string, terminada: boolean) {
+    try {
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+      const res = await fetch(`/api/causa/${causaId}/monitoreo${qs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ terminada }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        alert(json?.error || `No se pudo guardar (error ${res.status}).`)
+        return
+      }
+      await loadCausas()
+    } catch (e: any) {
+      alert(e?.message || 'No se pudo conectar con el servidor.')
     }
   }
 
@@ -780,6 +814,7 @@ export default function Dashboard() {
               Icono={FILTRO_SECCION[filtroUrgencia].Icono}
               defaultOpen={true}
               onAsesorIA={filtroUrgencia === 'traslados' ? abrirAsesorIA : undefined}
+              onToggleMonitoreo={toggleMonitoreo}
             />
           ) : (
             <div className="text-center py-10 px-4 bg-white border border-slate-200 rounded-xl">
@@ -980,16 +1015,16 @@ export default function Dashboard() {
       {filtroUrgencia === 'todas' && (
         <>
           {criticas.length > 0 && (
-            <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={false} dotColor="bg-red-500" />
+            <Section title="CRÍTICAS - Acción inmediata" causas={criticas} defaultOpen={false} dotColor="bg-red-500" onToggleMonitoreo={toggleMonitoreo} />
           )}
           {atencion.length > 0 && (
-            <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={false} dotColor="bg-amber-400" />
+            <Section title="ATENCIÓN - Revisar esta semana" causas={atencion} defaultOpen={false} dotColor="bg-amber-400" onToggleMonitoreo={toggleMonitoreo} />
           )}
           {revisar.length > 0 && (
-            <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" />
+            <Section title="REVISAR - Seguimiento pendiente" causas={revisar} defaultOpen={false} dotColor="bg-orange-400" onToggleMonitoreo={toggleMonitoreo} />
           )}
           {estables.length > 0 && (
-            <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" />
+            <Section title="ESTABLES - Sin urgencia inmediata" causas={estables} defaultOpen={false} dotColor="bg-green-500" onToggleMonitoreo={toggleMonitoreo} />
           )}
         </>
       )}
@@ -1063,7 +1098,13 @@ function KpiCard({
   )
 }
 
-function Section({ title, causas, defaultOpen, dotColor }: { title: string; causas: CausaResumen[]; defaultOpen: boolean; dotColor: string }) {
+function Section({ title, causas, defaultOpen, dotColor, onToggleMonitoreo }: {
+  title: string
+  causas: CausaResumen[]
+  defaultOpen: boolean
+  dotColor: string
+  onToggleMonitoreo?: (causaId: string, terminada: boolean) => void
+}) {
   const [expanded, setExpanded] = useState(defaultOpen)
   // Colapsa de VERDAD: cerrado oculta toda la lista (como el calendario y los bloques
   // destacados). Antes, "cerrado" igual mostraba 5 causas, así que en secciones con ≤5
@@ -1084,7 +1125,7 @@ function Section({ title, causas, defaultOpen, dotColor }: { title: string; caus
       {expanded && showing.length > 0 && (
         <div className="space-y-2">
           {showing.map((c) => (
-            <CausaCard key={c.id} causa={c} />
+            <CausaCard key={c.id} causa={c} onToggleMonitoreo={onToggleMonitoreo} />
           ))}
           {causas.length > 50 && (
             <p className="text-sm text-slate-400 text-center">Mostrando 50 de {causas.length}. Afiná con el buscador.</p>
@@ -1118,7 +1159,7 @@ const PALETA_BLOQUE: Record<TonoBloque, {
 }
 
 function BloqueCausasColapsable({
-  titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, maximo = 50,
+  titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, onToggleMonitoreo, maximo = 50,
 }: {
   titulo: string
   subtitulo?: string
@@ -1127,6 +1168,7 @@ function BloqueCausasColapsable({
   Icono: IconoTipo
   defaultOpen?: boolean
   onAsesorIA?: (causaId: string, rit: string) => void
+  onToggleMonitoreo?: (causaId: string, terminada: boolean) => void
   maximo?: number
 }) {
   const [abierto, setAbierto] = useState(defaultOpen)
@@ -1173,6 +1215,25 @@ function BloqueCausasColapsable({
                   >
                     <IconSparkles className="w-3.5 h-3.5" />
                     Estrategias del Asesor IA
+                  </button>
+                )}
+                {/* Sacar/volver a monitoreo. Importa especialmente en el filtro "Fuera de
+                    monitoreo": es desde donde la curadora reactiva una causa que cerró por
+                    error. Acá el botón está FUERA del <Link>, así que no hace falta frenar
+                    la navegación. */}
+                {onToggleMonitoreo && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const cerrada = estaTerminada(c.notas)
+                      const pregunta = cerrada
+                        ? `¿Volver a monitorear ${c.rit}?`
+                        : `¿Sacar ${c.rit} de monitoreo?\n\nDejará de generar alertas y el bot no la va a revisar más. Podés revertirlo cuando quieras.`
+                      if (window.confirm(pregunta)) onToggleMonitoreo(c.id, !cerrada)
+                    }}
+                    className="shrink-0 text-[11px] text-slate-500 hover:text-slate-900 underline decoration-dotted px-1 py-0.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                  >
+                    {estaTerminada(c.notas) ? 'Volver a monitorear' : 'Sacar de monitoreo'}
                   </button>
                 )}
               </div>
@@ -1242,7 +1303,12 @@ function CalendarioAudiencias({ causas }: { causas: CausaResumen[] }) {
   )
 }
 
-function CausaCard({ causa: c }: { causa: CausaResumen }) {
+function CausaCard({ causa: c, onToggleMonitoreo }: {
+  causa: CausaResumen
+  /** Si se pasa, la tarjeta muestra el botón de sacar/volver a monitoreo. */
+  onToggleMonitoreo?: (causaId: string, terminada: boolean) => void
+}) {
+  const terminada = estaTerminada(c.notas)
   const sem = getSemaforo(c.nivel_urgencia)
   const motivo = getUrgenciaMotivo(c)
   // Materia de la causa (del tipo/letra o del RIT). Nunca se inventa.
@@ -1322,9 +1388,30 @@ function CausaCard({ causa: c }: { causa: CausaResumen }) {
             )}
           </div>
         </div>
-        {c.estado && (
-          <div className="mt-2 text-xs text-slate-400 italic truncate">{c.estado}</div>
-        )}
+        <div className="mt-2 flex items-end justify-between gap-3">
+          {c.estado ? (
+            <div className="text-xs text-slate-400 italic truncate">{c.estado}</div>
+          ) : <div />}
+          {/* Sacar de monitoreo / reactivar. Va DENTRO del <Link>, así que hay que frenar la
+              navegación con preventDefault + stopPropagation, y se pide confirmación porque
+              cambia si la causa genera alarmas. */}
+          {onToggleMonitoreo && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.preventDefault()
+                e.stopPropagation()
+                const pregunta = terminada
+                  ? `¿Volver a monitorear ${c.rit}?`
+                  : `¿Sacar ${c.rit} de monitoreo?\n\nDejará de generar alertas y el bot no la va a revisar más. Podés revertirlo cuando quieras.`
+                if (window.confirm(pregunta)) onToggleMonitoreo(c.id, !terminada)
+              }}
+              className="text-[11px] text-slate-500 hover:text-slate-900 underline decoration-dotted shrink-0 px-1 py-0.5 rounded focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+            >
+              {terminada ? 'Volver a monitorear' : 'Sacar de monitoreo'}
+            </button>
+          )}
+        </div>
       </div>
     </Link>
   )
