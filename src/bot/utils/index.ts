@@ -292,14 +292,15 @@ const FAMILIA_PROTECCION = ['P', 'X']
  * ¿La causa de la base y las que devolvió el portal (mismo número+año, otra letra) son de la
  * MISMA FAMILIA de protección (P↔X)?
  *
- * OJO CON LO QUE **NO** DICE: `false` NO significa "son causas distintas". Una causa PUEDE
- * cambiar de materia conservando número y año, así que un C-4354-2022 podría ser el mismo
- * expediente que X-4354-2022 en otra etapa. Lo único que distingue de verdad los dos casos son
- * las PARTES (caratulado), y eso lo decide la curadora.
+ * CONFIRMADO POR LA CURADORA (reunión 23-sep-2026): si una P y una X comparten el NÚMERO, son
+ * causas VINCULADAS — una es antecedente de la otra (la protección y su cumplimiento). No es
+ * una coincidencia de numeración: es el mismo caso en dos etapas. Por eso, cuando esta función
+ * da `true`, vincularlas es lo correcto.
  *
- * Esta función solo separa el caso EVIDENTE (P y X son la protección y su cumplimiento, casi
- * siempre el mismo caso) del que necesita confirmación humana. Se usa para graduar el mensaje
- * y para NO crear vínculos automáticos sin confirmar, nunca para afirmar que no hay relación.
+ * OJO CON LO QUE **NO** DICE: `false` NO significa "son causas distintas". Una causa también
+ * puede cambiar de materia conservando número y año, así que un C-4354-2022 podría ser el mismo
+ * expediente que X-4354-2022 en otra etapa. Para esos casos lo único que distingue de verdad
+ * son las PARTES (caratulado), y lo decide la curadora: por eso no se vincula automáticamente.
  */
 export function esPosibleCausaHermana(ritEnBase: string, ritsEnPortal: string[]): boolean {
   const letraBase = (parseRIT(ritEnBase)?.tipo || '').toUpperCase()

@@ -464,15 +464,22 @@ async function runBusquedaPorRit(
         // informa la diferencia y quién decide es la curadora.
         status.errores.push(`${causa.rit}: el portal lo tiene como ${listado} — verificar`)
         log('warn', `  ⚠️ ${causa.rit}: con ese número y año el portal tiene ${listado}.`)
-        log('info', mismaFamilia
-          ? '     Misma familia de protección (P/X): probable que sea el mismo caso o su cumplimiento.'
-          : '     Otra materia: puede ser el mismo caso que cambió de materia, o una causa distinta.')
-        log('info', '     Lo decide la curadora comparando las partes. Para vincularlas: BOT_FIX_LETRAS=1 con BOT_RIT=' + causa.rit)
+        if (mismaFamilia) {
+          // Confirmado por la curadora: P y X con el mismo número son causas VINCULADAS (una
+          // es antecedente de la otra). Acá no hay duda que resolver, solo hay que vincularlas.
+          log('info', '     P y X con el mismo número son causas VINCULADAS (una es antecedente de la otra).')
+          log('info', '     Para vincularlas: BOT_FIX_LETRAS=1 con BOT_RIT=' + causa.rit)
+        } else {
+          log('info', '     Otra materia: puede ser el mismo caso que cambió de materia, o una causa distinta.')
+          log('info', '     Lo decide la curadora comparando las partes, antes de vincular.')
+        }
 
         if (!causa.id.startsWith('temp-')) {
           await marcarRevisionLetra(
             causa.id,
-            `con ese número y año el portal tiene ${listado}${mismaFamilia ? ' (misma familia de protección)' : ' (otra materia)'}. Puede ser el mismo caso con la letra cambiada o una causa distinta: verificar las partes antes de vincular.`,
+            mismaFamilia
+              ? `el portal tiene ${listado}. P y X con el mismo número son causas VINCULADAS (una es antecedente de la otra): vincular con BOT_FIX_LETRAS=1.`
+              : `con ese número y año el portal tiene ${listado}, de otra materia. Puede ser el mismo caso que cambió de materia o una causa distinta: verificar las partes antes de vincular.`,
           ).catch(() => {})
         }
         await navigateToConsulta(page)
