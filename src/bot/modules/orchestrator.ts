@@ -12,7 +12,7 @@ import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
 import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos } from './supabaseSync'
-import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath } from '../utils'
+import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath, calcularTasaExito } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
 
@@ -264,9 +264,13 @@ export async function runBotSession(
     // causas_por_min = velocidad de scraping ÚTIL → usa exitosas (no procesadas,
     // que incluye fallidas y daría una "velocidad" engañosa).
     status.causas_por_min = durMs > 0 ? Number(((status.exitosas / durMs) * 60000).toFixed(2)) : 0
-    status.tasa_exito = status.procesadas > 0
-      ? Number(((status.exitosas / status.procesadas) * 100).toFixed(2))
-      : 0
+    // tasa_exito mide qué tan bien funciona EL BOT, así que el denominador son las causas
+    // que realmente podía traer. Se descuentan las "fuera de alcance": las que el portal
+    // confirmó que no existen y las que están con otra letra. Esas no son fallas técnicas —
+    // el bot hizo lo correcto — y si contaran, una corrida sana daría 44% y el motor de
+    // aprendizaje recomendaría revisar selectores que están perfectos (fue justo lo que
+    // pasó: "Tasa de éxito baja (4%) → revisá los selectores de busqueda").
+    status.tasa_exito = calcularTasaExito(status.exitosas, status.procesadas, status.fuera_de_alcance ?? 0)
     // Marca de bloqueo: si la sesión se detuvo por captcha/bloqueo
     if (status.detenido_por === 'captcha' || status.detenido_por === 'bloqueado') {
       status.bloqueo_detectado = true
@@ -278,6 +282,16 @@ export async function runBotSession(
     log('info', `📊 Resumen sesión ${runId}:`)
     log('info', `   Total: ${status.total_causas} | Procesadas: ${status.procesadas}`)
     log('success', `   Exitosas: ${status.exitosas} | Fallidas: ${status.fallidas}`)
+    // Desglose de las "fallidas": separar lo que el bot no podía traer de lo que falló de
+    // verdad. Sin esto el resumen asusta sin motivo (ej. "14 fallidas" cuando 12 causas
+    // simplemente no están en el portal y el bot funcionó perfecto).
+    if ((status.fuera_de_alcance ?? 0) > 0) {
+      const fallosReales = status.fallidas - (status.fuera_de_alcance ?? 0)
+      log('info', `   De las fallidas: ${status.fuera_de_alcance} fuera de alcance (no están en el portal o tienen otra letra) y ${fallosReales} fallo(s) real(es) del bot.`)
+    }
+    if (status.tasa_exito !== undefined) {
+      log('info', `   Tasa de éxito del bot: ${status.tasa_exito}% (medida solo sobre las causas que podía traer).`)
+    }
     if (status.solo_diagnostico) log('warn', `   Solo diagnóstico (NO persistidas): ${status.solo_diagnostico}`)
     log('info', `   Detenido por: ${status.detenido_por}`)
     if (status.errores.length > 0) log('warn', `   Errores: ${status.errores.length}`)
@@ -389,7 +403,13 @@ async function runBusquedaPorRit(
           (rits) => { ritsConOtraLetra = rits },
         ),
         causa.rit,
-        (res) => res.length > 0,   // éxito solo si encontró la causa
+        // El paso "busqueda" se considera EXITOSO si encontró la causa O si el portal
+        // respondió con claridad que no existe / que está con otra letra. En esos dos casos
+        // la búsqueda hizo bien su trabajo: el dato simplemente no estaba. Contarlos como
+        // fallo del paso hacía que el motor de aprendizaje señalara "busqueda" como el paso
+        // más problemático y recomendara revisar selectores/timeouts que están perfectos.
+        // Un panel inaccesible SÍ sigue siendo fallo del paso: ahí la búsqueda no corrió.
+        (res) => res.length > 0 || portalConfirmoNoExiste || ritsConOtraLetra.length > 0,
         'no_encontrada',
       )
 
@@ -424,6 +444,8 @@ async function runBusquedaPorRit(
       // nada. Se corrige despues con BOT_FIX_LETRAS=1, que es el modo hecho para eso.
       if (encontradas.length === 0 && ritsConOtraLetra.length > 0) {
         status.fallidas++
+        // No es falla del bot: la causa existe con otro RIT. Fuera del denominador.
+        status.fuera_de_alcance = (status.fuera_de_alcance ?? 0) + 1
         status.errores.push(`${causa.rit}: en el portal figura como ${ritsConOtraLetra.join(' o ')} — revisar la letra`)
         log('warn', `  ⚠️ ${causa.rit}: el portal la tiene como ${ritsConOtraLetra.join(' o ')}. La causa EXISTE; la letra del RIT en la base esta mal.`)
         log('info', `     Para corregirlo: BOT_FIX_LETRAS=1 con BOT_RIT=${causa.rit}`)
@@ -442,6 +464,11 @@ async function runBusquedaPorRit(
         status.fallidas++
         status.errores.push(`${causa.rit}: no encontrada en el portal`)
         // (Nunca marcar ids temporales de BOT_RIT.)
+        // El portal confirmó que la causa no existe ⇒ no es falla del bot: queda fuera del
+        // denominador de tasa_exito (el bot buscó bien; simplemente no estaba).
+        if (portalConfirmoNoExiste) {
+          status.fuera_de_alcance = (status.fuera_de_alcance ?? 0) + 1
+        }
         if (!causa.id.startsWith('temp-')) {
           if (portalConfirmoNoExiste) {
             // El portal CONFIRMÓ que no existe → marca directa, deja de reintentarse.

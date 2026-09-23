@@ -98,6 +98,11 @@ export interface BotRunStatus {
   procesadas: number
   exitosas: number
   fallidas: number
+  /** De las `fallidas`, cuántas NO son culpa del bot: causas que el portal confirmó que no
+   *  existen, o que están en el portal con otra letra. El bot hizo bien su trabajo y no había
+   *  nada que traer. Se descuentan del denominador de `tasa_exito` para que el motor de
+   *  aprendizaje no interprete una corrida sana como un problema técnico. */
+  fuera_de_alcance?: number
   // 'sesion_perdida': se cortó la tanda porque el panel de Familia dejó de estar accesible
   // en varias causas seguidas (sesión del portal caída). Las causas que faltaban NO se
   // penalizan: quedan intactas en la cola para la próxima corrida.

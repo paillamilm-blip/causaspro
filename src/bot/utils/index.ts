@@ -258,3 +258,27 @@ export function capturaPath(nombre: string): string {
   const seguro = nombre.replace(/[^a-zA-Z0-9._-]/g, '_')
   return path.join(dir, seguro)
 }
+
+
+/**
+ * Calcula la tasa de éxito del BOT (0-100), que es lo que consume el motor de aprendizaje.
+ *
+ * El denominador son las causas ALCANZABLES: las procesadas menos las que estaban "fuera de
+ * alcance" (el portal confirmó que no existen, o están en el portal con otra letra). Esas no
+ * son fallas técnicas —el bot buscó bien y no había nada que traer— y meterlas en el
+ * denominador hacía que una corrida sana pareciera un problema: con 25 procesadas, 11
+ * exitosas y 14 fuera de alcance daba 44%, y el motor recomendaba "revisar los selectores"
+ * de un paso que funcionaba perfecto.
+ *
+ * Casos borde:
+ *  - Si NINGUNA causa era alcanzable, el bot no falló en nada → 100% (no 0%, que se leería
+ *    como "el bot está roto"). Con 0 procesadas devuelve 0: no hay nada que medir.
+ *  - Nunca devuelve más de 100 ni menos de 0, incluso con contadores inconsistentes.
+ */
+export function calcularTasaExito(exitosas: number, procesadas: number, fueraDeAlcance = 0): number {
+  if (procesadas <= 0) return 0
+  const alcanzables = procesadas - fueraDeAlcance
+  if (alcanzables <= 0) return 100
+  const pct = (exitosas / alcanzables) * 100
+  return Number(Math.min(100, Math.max(0, pct)).toFixed(2))
+}

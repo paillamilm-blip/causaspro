@@ -108,14 +108,19 @@ export async function analizarHistorial(ventanaCorridas = 20): Promise<Diagnosti
     })
   }
 
-  // B. Tasa de éxito baja
+  // B. Tasa de éxito baja.
+  // OJO con el historial VIEJO: hasta el commit que agregó `fuera_de_alcance`, tasa_exito
+  // metía en el denominador las causas que el portal confirmó que no existen, así que una
+  // corrida sana podía reportar 4% y esta regla recomendaba "revisar los selectores" de un
+  // paso que funcionaba perfecto. Las corridas nuevas ya miden solo lo que el bot podía
+  // traer; el promedio se va a corregir a medida que las viejas salgan de la ventana.
   if (tasaProm !== null && tasaProm < 70) {
     recomendaciones.push({
       severidad: tasaProm < 40 ? 'alta' : 'media',
       titulo: `Tasa de éxito baja (${tasaProm.toFixed(0)}%)`,
-      detalle: 'Muchas causas están fallando respecto a las procesadas.',
+      detalle: 'De las causas que el bot SÍ podía traer, muchas no se pudieron cargar. (No incluye las que el portal confirmó que no existen ni las que están con otra letra.)',
       sugerencia: pasoProblematico
-        ? `El paso que más falla es "${pasoProblematico}". Revisá los selectores/timeout de esa etapa.`
+        ? `El paso que más falla es "${pasoProblematico}". Antes de tocar selectores: mirá si las corridas se cortaron por "sesion_perdida" — eso es del portal, no del bot. Si no, revisá los selectores/timeout de esa etapa.`
         : 'Revisá los errores recientes en la vista v_bot_errores para ubicar la causa.',
     })
   }
