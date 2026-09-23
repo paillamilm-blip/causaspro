@@ -126,6 +126,24 @@ un diagnóstico falso. Es el primer sesgo a descartar ante cualquier bug de este
 registro, o el entorno?* Si fue el entorno (sesión, red, portal caído), **cortar el proceso**,
 no marcar el registro. Y si el proceso ya descubrió el dato correcto, **persistirlo**.
 
+#### 📋 Dominio: qué significa la LETRA del RIT (confirmado por la curadora)
+
+> Reunión con Paula, 23-sep-2026. Esto es conocimiento del negocio, no una inferencia:
+> ante cualquier duda sobre RIT, **manda esto** por sobre lo que parezca en el código.
+
+- **P y X con el MISMO NÚMERO son causas VINCULADAS**: una es antecedente de la otra
+  (la protección y su cumplimiento). Es el mismo caso en dos etapas, no una coincidencia de
+  numeración. Vincularlas es correcto.
+- **Una causa PUEDE cambiar de letra/materia** conservando número y año. Por eso un
+  `C-4354-2022` podría ser el mismo expediente que `X-4354-2022` en otra etapa.
+- **Corolario:** para letras fuera de P/X no se puede concluir nada desde el RIT. Lo único que
+  distingue "mismo caso que cambió de materia" de "dos causas sin relación" son las **PARTES**
+  (caratulado), y eso lo decide la curadora. El bot informa y no vincula solo.
+
+Este punto costó tres iteraciones en un día por afirmar de más, primero en un sentido
+(*"la letra está mal"*) y después en el otro (*"son causas distintas"*). Ver la regla del
+patrón de arriba: **cuando el dato no alcanza para concluir, no concluir.**
+
 #### 11. `notas` de la tabla `causas` es un CANAL COMPARTIDO
 Contiene marcas de las que depende el funcionamiento: `[NO EN PORTAL]`,
 `[REVISAR: no scrapeada]`, `[INTENTOS FALLIDOS: n]`, `[VÍNCULO]`, `[REVISAR LETRA]`,
