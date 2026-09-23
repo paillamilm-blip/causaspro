@@ -98,7 +98,10 @@ export interface BotRunStatus {
   procesadas: number
   exitosas: number
   fallidas: number
-  detenido_por?: 'completado' | 'limite_sesion' | 'error_critico' | 'captcha' | 'bloqueado'
+  // 'sesion_perdida': se cortó la tanda porque el panel de Familia dejó de estar accesible
+  // en varias causas seguidas (sesión del portal caída). Las causas que faltaban NO se
+  // penalizan: quedan intactas en la cola para la próxima corrida.
+  detenido_por?: 'completado' | 'limite_sesion' | 'error_critico' | 'captcha' | 'bloqueado' | 'sesion_perdida'
   errores: string[]
   // --- Métricas de auto-aprendizaje (modo conservador: solo se registran) ---
   /** Duración total de la sesión en ms (finished - started) */

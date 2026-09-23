@@ -761,6 +761,13 @@ export async function searchByRitExacto(
   // (timeout, panel no cargó, ambigüedad, excepción) que también retorna []. NUNCA marcar
   // como ausente ante un [] genérico: solo cuando este callback se invocó.
   onConfirmadoNoExiste?: () => void,
+  // OPCIONAL — se invoca cuando NO se pudo activar el panel de Familia. Eso NO dice nada
+  // sobre la causa: es un fallo SISTEMICO (sesion caida, pagina equivocada, modal encima).
+  // Distinguirlo importa porque si no, el orquestador le cuenta el fallo a la causa y tras
+  // 3 corridas la manda a [REVISAR], sacando de la cola causas perfectamente validas.
+  // Caso real (23-sep-2026): la sesion se cayo en la causa 9 y las 17 siguientes quedaron
+  // registradas como "no encontrada en el portal" con su contador de intentos incrementado.
+  onPanelInaccesible?: () => void,
 ): Promise<CausaFoundInPortal[]> {
   const parsed = parseRIT(rit)
   if (!parsed) {
@@ -791,6 +798,9 @@ export async function searchByRitExacto(
     if (!enFamilia) {
       log('warn', `  No se pudo activar el panel de Familia para ${ritLegible}; se omite esta causa para no buscar en otra competencia.`)
       { const p = capturaPath(`bot_error_familia_panel_${tipo}${numero}${año}.png`); await page.screenshot({ path: p }).catch(() => {}); log('info', `  Screenshot: ${p}`) }
+      // Avisar que el fallo es del PANEL (sistemico), no de la causa. El orquestador usa
+      // esto para no penalizar la causa y para cortar la tanda si se repite.
+      onPanelInaccesible?.()
       return []
     }
 

@@ -360,6 +360,11 @@ async function runBusquedaPorRit(
     return
   }
 
+  // Circuit breaker de sesion: cuenta causas SEGUIDAS en las que no se pudo abrir el panel
+  // de Familia. Al llegar al tope se corta la tanda (la sesion no se recupera sola).
+  let panelFallosConsecutivos = 0
+  const PANEL_FALLOS_PARA_CORTAR = 3
+
   for (const causa of causas) {
     status.procesadas++
     log('info', `  [${status.procesadas}/${causas.length}] ${causa.rit}...`)
@@ -373,13 +378,42 @@ async function runBusquedaPorRit(
       // no cargado/ambigüedad/excepción NO lo activa → así NUNCA marcamos [NO EN PORTAL]
       // una causa real de menores por un fallo transitorio (bug crítico evitado).
       let portalConfirmoNoExiste = false
+      let panelInaccesible = false
       const encontradas = await medirPaso(
         status.run_id, 'busqueda',
-        () => searchByRitExacto(page, causa.rit, undefined, () => { portalConfirmoNoExiste = true }),
+        () => searchByRitExacto(
+          page, causa.rit, undefined,
+          () => { portalConfirmoNoExiste = true },
+          () => { panelInaccesible = true },
+        ),
         causa.rit,
         (res) => res.length > 0,   // éxito solo si encontró la causa
         'no_encontrada',
       )
+
+      // FALLO SISTEMICO: no se pudo entrar al panel de Familia. Eso NO dice nada sobre esta
+      // causa (sesion caida / pagina equivocada / modal encima), asi que NO se le cuenta el
+      // fallo. Si se repite PANEL_FALLOS_PARA_CORTAR veces seguidas, se corta la tanda: la
+      // sesion no se recupera sola y seguir solo ensucia datos.
+      //
+      // Caso real (23-sep-2026): la sesion se cayo en la causa 9 de 25 y el bot siguio 18
+      // minutos marcando 17 causas validas como "no encontrada en el portal", incrementando
+      // su contador de intentos. A la tercera corrida asi, habrian quedado en [REVISAR] y
+      // fuera de la cola.
+      if (panelInaccesible) {
+        panelFallosConsecutivos++
+        log('warn', `  ⚠️ ${causa.rit}: no se pudo abrir el panel de Familia (fallo del portal/sesion, NO de la causa). No se penaliza la causa.`)
+        if (panelFallosConsecutivos >= PANEL_FALLOS_PARA_CORTAR) {
+          log('error', `  🛑 ${panelFallosConsecutivos} causas seguidas sin poder abrir Familia: se perdio la sesion del portal.`)
+          log('info', '     Se corta la tanda ACA. Las causas que faltan quedan intactas en la cola.')
+          log('info', '     Volve a correr el bot: hace un login nuevo y sigue donde quedo.')
+          status.detenido_por = 'sesion_perdida'
+          break
+        }
+        await navigateToConsulta(page)
+        await sleep(1500)
+        continue
+      }
 
       if (encontradas.length === 0) {
         status.fallidas++
@@ -420,6 +454,10 @@ async function runBusquedaPorRit(
       // el filtro exacto/fail-closed del PASO 9), NO el causa.rit del usuario. Así la fila
       // que se abre es EXACTAMENTE la validada como encontrada (el portal puede mostrar el
       // prefijo de letra aunque el usuario lo tenga sin letra), evitando abrir otra fila.
+      // Se encontro la causa ⇒ el panel de Familia responde bien ⇒ se reinicia el contador
+      // del circuit breaker (solo cortamos ante fallos CONSECUTIVOS, no acumulados).
+      panelFallosConsecutivos = 0
+
       const ritResuelto = encontradas[0].rit
       const opened = await medirPaso(
         status.run_id, 'detalle',
