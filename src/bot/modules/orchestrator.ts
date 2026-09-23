@@ -379,12 +379,14 @@ async function runBusquedaPorRit(
       // una causa real de menores por un fallo transitorio (bug crítico evitado).
       let portalConfirmoNoExiste = false
       let panelInaccesible = false
+      let ritsConOtraLetra: string[] = []
       const encontradas = await medirPaso(
         status.run_id, 'busqueda',
         () => searchByRitExacto(
           page, causa.rit, undefined,
           () => { portalConfirmoNoExiste = true },
           () => { panelInaccesible = true },
+          (rits) => { ritsConOtraLetra = rits },
         ),
         causa.rit,
         (res) => res.length > 0,   // éxito solo si encontró la causa
@@ -409,6 +411,27 @@ async function runBusquedaPorRit(
           log('info', '     Volve a correr el bot: hace un login nuevo y sigue donde quedo.')
           status.detenido_por = 'sesion_perdida'
           break
+        }
+        await navigateToConsulta(page)
+        await sleep(1500)
+        continue
+      }
+
+      // LETRA EQUIVOCADA: el portal tiene la causa con el mismo numero+anio pero otra letra.
+      // La causa EXISTE; lo que esta mal es el RIT de la BD. Se deja anotado con el RIT real
+      // (dato que el bot ya descubrio) y NO se cuenta como fallo transitorio: reintentarla
+      // tal cual nunca va a funcionar, y penalizarla la mandaria a [REVISAR] sin explicar
+      // nada. Se corrige despues con BOT_FIX_LETRAS=1, que es el modo hecho para eso.
+      if (encontradas.length === 0 && ritsConOtraLetra.length > 0) {
+        status.fallidas++
+        status.errores.push(`${causa.rit}: en el portal figura como ${ritsConOtraLetra.join(' o ')} — revisar la letra`)
+        log('warn', `  ⚠️ ${causa.rit}: el portal la tiene como ${ritsConOtraLetra.join(' o ')}. La causa EXISTE; la letra del RIT en la base esta mal.`)
+        log('info', `     Para corregirlo: BOT_FIX_LETRAS=1 con BOT_RIT=${causa.rit}`)
+        if (!causa.id.startsWith('temp-')) {
+          await marcarRevisionLetra(
+            causa.id,
+            `el portal la tiene como ${ritsConOtraLetra.join(' o ')} (en la base figura ${causa.rit}). Corregir con BOT_FIX_LETRAS=1.`,
+          ).catch(() => {})
         }
         await navigateToConsulta(page)
         await sleep(1500)

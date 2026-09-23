@@ -768,6 +768,13 @@ export async function searchByRitExacto(
   // Caso real (23-sep-2026): la sesion se cayo en la causa 9 y las 17 siguientes quedaron
   // registradas como "no encontrada en el portal" con su contador de intentos incrementado.
   onPanelInaccesible?: () => void,
+  // OPCIONAL — se invoca cuando el portal SI devolvio filas para ese numero+anio, pero
+  // ninguna coincide en la LETRA. O sea: la causa existe en el portal, con otra letra.
+  // Eso NO es "no encontrada": es que el RIT de la BD tiene la letra equivocada (tipeo del
+  // Excel) o es la causa hermana. Se pasa el/los RIT reales para poder registrarlos y que
+  // la informacion no se pierda: antes solo se logueaba y la causa quedaba penalizada como
+  // si no existiera, repitiendo el mismo fallo en cada corrida.
+  onLetraDistinta?: (ritsEnPortal: string[]) => void,
 ): Promise<CausaFoundInPortal[]> {
   const parsed = parseRIT(rit)
   if (!parsed) {
@@ -1212,6 +1219,17 @@ export async function searchByRitExacto(
       // DIAGNÓSTICO: log de los RIT que SÍ leyó la tabla, para ver por qué ninguno matcheó.
       if (DIAG_ON && causas.length > 0) {
         log('info', `  RIT leídos en la tabla: ${causas.map(c => c.rit).join(' | ')}`)
+      }
+      // ¿Hay filas con el MISMO numero+anio pero otra letra? Entonces la causa SI esta en el
+      // portal y lo que esta mal es la letra del RIT en la BD. Se avisa al llamador con los
+      // RIT reales para dejarlo anotado (marcarRevisionLetra) en vez de tirar el dato.
+      // NUNCA se corrige la letra sola: P y X son causas hermanas legalmente distintas
+      // (proteccion / cumplimiento) y adivinar podria mezclar dos expedientes.
+      if (onLetraDistinta) {
+        const mismoNumeroAnio = causas
+          .filter(c => { const p = partes(c.rit); return p && mismoNumero(p.numero, numero) && p.año === año })
+          .map(c => c.rit)
+        if (mismoNumeroAnio.length > 0) onLetraDistinta(mismoNumeroAnio)
       }
       await page.screenshot({ path: capturaPath(`bot_error_rit_nomatch_${tipo}${numero}${año}.png`) }).catch(() => {})
       return []
