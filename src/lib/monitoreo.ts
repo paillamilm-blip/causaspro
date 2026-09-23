@@ -18,6 +18,22 @@
 /** Marca que se guarda en `notas` cuando la curadora saca la causa de monitoreo. */
 export const MARCA_TERMINADA = '[TERMINADA]'
 
+/**
+ * Etapa que usa el portal del PJUD cuando la causa se cerró. ES LA SEÑAL AUTOMÁTICA, y está
+ * en `movimientos.etapa` (no en `causas.estado`, que dice "Sin Estado" en 292 causas).
+ *
+ * Medido sobre datos reales (23-sep-2026): aparece en 167 movimientos de 52 causas, y esas 52
+ * la tienen como ÚLTIMO movimiento (47 con trámite "Resolución" + 5 con "Actuación"). Es un
+ * estado TERMINAL: después no pasa nada más, así que alcanza con preguntar si la causa tiene
+ * algún movimiento en esta etapa.
+ *
+ * NO confundir con otras etapas que parecen finales y no lo son:
+ *   · "Sentencia" (42 causas) → puede seguir el cumplimiento.
+ *   · "Incompetencia" (47 causas) → solo 2 la tienen como último movimiento; las otras 45
+ *     siguieron tramitando después.
+ */
+export const ETAPA_TERMINADA = 'Terminada'
+
 /** ¿La curadora sacó esta causa de monitoreo? Tolerante a mayúsculas/espacios. */
 export function estaTerminada(notas: string | null | undefined): boolean {
   return (notas ?? '').toUpperCase().includes(MARCA_TERMINADA)

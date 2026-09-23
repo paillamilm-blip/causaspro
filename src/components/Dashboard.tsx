@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, agruparGestionesPorCausa } from '@/lib/seguimientoNna'
-import { estaTerminada, MARCA_TERMINADA } from '@/lib/monitoreo'
+import { estaTerminada, MARCA_TERMINADA, ETAPA_TERMINADA } from '@/lib/monitoreo'
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
@@ -78,6 +78,10 @@ interface CausaResumen {
   // vencido (>180 días sin "Entrevista al NNA", o nunca se registró una). Se completa en
   // loadCausas cruzando las causas con las gestiones. undefined hasta ese cruce.
   seguimiento_vencido?: boolean
+  // También calculada en el cliente: el PORTAL marcó la causa como terminada (tiene un
+  // movimiento con etapa "Terminada"). La vista expone el `tramite` del último movimiento
+  // pero no su `etapa`, así que se cruza aparte en loadCausas. undefined hasta ese cruce.
+  terminada_portal?: boolean
 }
 
 // ¿La causa ya NO está en la lista del portal del curador? El bot marca [NO EN PORTAL] en
@@ -127,7 +131,10 @@ function tieneSentenciaRechazo(c: CausaResumen): boolean {
 // con datos — `estado` dice "Sin Estado" en 292 causas y los movimientos no traen vocabulario
 // de cierre), así que el sistema no puede deducirlo. La curadora sí lo sabe.
 function fueraDeMonitoreo(c: CausaResumen): boolean {
-  return fueraDeMiLista(c) || tieneSentenciaRechazo(c) || estaTerminada(c.notas)
+  return fueraDeMiLista(c)
+    || tieneSentenciaRechazo(c)
+    || estaTerminada(c.notas)      // la marcó la curadora a mano
+    || c.terminada_portal === true // el portal la cerró (etapa "Terminada")
 }
 
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
@@ -138,7 +145,11 @@ function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
   // SOLO ese chip: las demás señales (seguimiento, alertas) ya no aplican.
   // La marca manual de la curadora manda por sobre cualquier señal inferida.
   if (estaTerminada(c.notas)) {
-    return [{ texto: 'Terminada', clase: 'bg-slate-700 text-white' }]
+    return [{ texto: 'Terminada (cerrada por vos)', clase: 'bg-slate-700 text-white' }]
+  }
+  // Señal del portal: la causa tiene un movimiento en etapa "Terminada".
+  if (c.terminada_portal) {
+    return [{ texto: 'Terminada en el portal', clase: 'bg-slate-600 text-white' }]
   }
   if (tieneSentenciaRechazo(c)) {
     return [{ texto: 'Sentencia de rechazo', clase: 'bg-slate-800 text-white' }]
@@ -398,12 +409,21 @@ export default function Dashboard() {
   // (todo "Estable", sin barra de progreso). La vista ya trae su propio ORDER BY con
   // desempate final por c.id (orden total único), así que paginar sobre ella es estable
   // sin necesidad de un ORDER BY id externo.
-  async function fetchAll(tabla: string, columnas: string, ordenar?: string, ordenIdParaPaginar = false) {
+  async function fetchAll(
+    tabla: string,
+    columnas: string,
+    ordenar?: string,
+    ordenIdParaPaginar = false,
+    // Filtro opcional de igualdad (columna → valor). Se aplica ANTES de paginar, así que
+    // solo viajan las filas que interesan (ej. movimientos con etapa = 'Terminada').
+    filtroIgual?: Record<string, string>,
+  ) {
     const PAGE = 1000
     let desde = 0
     let todo: any[] = []
     for (;;) {
       let q = supabase.from(tabla).select(columnas)
+      if (filtroIgual) for (const [col, val] of Object.entries(filtroIgual)) q = q.eq(col, val)
       if (ordenar) q = q.order(ordenar, { ascending: false })
       if (ordenIdParaPaginar) q = q.order('id', { ascending: true })
       const { data, error } = await q.range(desde, desde + PAGE - 1)
@@ -530,6 +550,29 @@ export default function Dashboard() {
         }))
       } catch (e) {
         console.warn('No se pudieron cargar las gestiones para el seguimiento del NNA:', e)
+      }
+
+      // CAUSAS TERMINADAS SEGÚN EL PORTAL. Se trae aparte porque la vista v_causas_ranking
+      // expone el `tramite` del último movimiento pero NO su `etapa`, y la etapa es donde
+      // está la señal.
+      //
+      // Medido sobre los datos reales (23-sep-2026): la etapa "Terminada" aparece en 167
+      // movimientos de 52 causas, y esas 52 la tienen como ÚLTIMO movimiento (47 con trámite
+      // "Resolución" + 5 con "Actuación"). O sea que es un estado TERMINAL: después no pasa
+      // nada más. Por eso alcanza con "¿tiene algún movimiento en etapa Terminada?" sin
+      // comparar fechas.
+      //
+      // Ojo con las etapas que NO son terminales, aunque lo parezcan:
+      //   · "Sentencia" (42 causas) → puede seguir con cumplimiento; NO es el fin.
+      //   · "Incompetencia" (47 causas) → solo 2 la tienen como último movimiento, las otras
+      //     45 siguieron después. Tampoco es terminal.
+      // Es una consulta liviana (167 filas). Si falla, no se marca ninguna y el panel sigue.
+      try {
+        const { data: terms } = await fetchAll('movimientos', 'causa_id', undefined, false, { etapa: ETAPA_TERMINADA })
+        const idsTerminadas = new Set(((terms as any[]) || []).map((m) => m.causa_id))
+        data = data.map((c: any) => ({ ...c, terminada_portal: idsTerminadas.has(c.id) }))
+      } catch (e) {
+        console.warn('No se pudieron cargar las causas terminadas según el portal:', e)
       }
       setCausas(data)
       setTotalCausas(data.length)
