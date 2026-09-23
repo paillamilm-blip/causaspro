@@ -144,6 +144,31 @@ Este punto costó tres iteraciones en un día por afirmar de más, primero en un
 (*"la letra está mal"*) y después en el otro (*"son causas distintas"*). Ver la regla del
 patrón de arriba: **cuando el dato no alcanza para concluir, no concluir.**
 
+#### 📋 Dominio: el portal NO informa cuándo una causa terminó
+
+Medido con datos reales el 23-sep-2026, **antes** de escribir el filtro:
+
+| Campo | Qué hay |
+|---|---|
+| `causas.estado` | **292** dicen literalmente `Sin Estado`; el resto vacío. Solo 6 `Corte Suprema` (basura) y 2 `Asignada por email` |
+| `movimientos.tramite` | **Cero** vocabulario de cierre. Las 4 coincidencias con `archiv/termin/sentencia/cumpl/cierr` eran de las 6 causas basura |
+
+Consecuencias:
+
+- El filtro `estado NOT ILIKE '%terminada%'` de `schema-bot.sql` es **código muerto**: nunca
+  coincidió con nada. No era un bug de lógica — el campo estaba equivocado.
+- **No se puede inferir el cierre.** La curadora lo marca a mano (`[TERMINADA]`, ver
+  `src/lib/monitoreo.ts`) y esa marca manda por sobre cualquier señal.
+
+**Regla de método:** antes de escribir un matcher contra un campo, **mirar los valores reales**
+(`SELECT campo, COUNT(*) ... GROUP BY campo`). Adivinar 5 palabras clave hizo perder un ciclo
+completo y el resultado fue 4 coincidencias, todas de datos basura.
+
+> **Pista sin explotar:** el portal trae un `Estado` **por movimiento** (columnas Etapa,
+> Estado, Trámite, Descripción, Fecha). El bot lo lee en `search.ts` y lo **descarta** — la
+> tabla `movimientos` no tiene esa columna. Puede ser la señal automática, pero cuesta una
+> migración + re-scrapear ~300 causas.
+
 #### 11. `notas` de la tabla `causas` es un CANAL COMPARTIDO
 Contiene marcas de las que depende el funcionamiento: `[NO EN PORTAL]`,
 `[REVISAR: no scrapeada]`, `[INTENTOS FALLIDOS: n]`, `[VÍNCULO]`, `[REVISAR LETRA]`,
