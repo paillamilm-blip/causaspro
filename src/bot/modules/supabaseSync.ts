@@ -54,6 +54,12 @@ const MARCA_REVISAR = '[REVISAR: no scrapeada]'
  *  va a funcionar, así que también sale de la cola: necesita una decisión humana, no más
  *  reintentos. OJO: es distinta de MARCA_REVISAR y no se solapa en el includes(). */
 const MARCA_REVISAR_LETRA = '[REVISAR LETRA]'
+/** Marca MANUAL de la curadora: la causa terminó, sacarla de monitoreo. El portal no informa
+ *  el cierre (verificado: `estado` dice "Sin Estado" y los movimientos no traen vocabulario de
+ *  término), así que esta marca es la única fuente y manda. Definida en src/lib/monitoreo.ts;
+ *  acá se copia el literal para no importar src/lib desde el bot y mantener los dos lados
+ *  desacoplados — si cambia allá, cambiar acá (hay un test que verifica que coincidan). */
+const MARCA_TERMINADA = '[TERMINADA]'
 
 /**
  * Obtiene las causas a scrapear, PRIORIZANDO las que aún NO tienen datos (movimientos),
@@ -125,6 +131,7 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
       (c.notas || '').includes(MARCA_NO_EN_PORTAL)
       || (c.notas || '').includes(MARCA_REVISAR)
       || (c.notas || '').includes(MARCA_REVISAR_LETRA)
+      || (c.notas || '').includes(MARCA_TERMINADA)
     const ruido = causas.filter(esRuido).length
 
     // Prioridad 1: sin movimientos y sin marca de ruido.
