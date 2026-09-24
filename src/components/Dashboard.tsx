@@ -139,38 +139,121 @@ function fueraDeMonitoreo(c: CausaResumen): boolean {
 
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
 // Cada uno resume una alerta de cumplimiento en un badge compacto y legible.
-function chipsSenales(c: CausaResumen): { texto: string; clase: string }[] {
-  const chips: { texto: string; clase: string }[] = []
-  // Si la causa salió del monitoreo (relevaron curaduría o sentencia de rechazo), mostramos
-  // SOLO ese chip: las demás señales (seguimiento, alertas) ya no aplican.
-  // La marca manual de la curadora manda por sobre cualquier señal inferida.
+// Un chip: texto corto + color + explicación (tooltip) de qué significa y qué hacer.
+// El `title` es clave para una usuaria no programadora: al pasar el mouse (o mantener
+// pulsado en el celu) ve la explicación en palabras, sin jerga jurídica ni técnica.
+interface Chip { texto: string; clase: string; ayuda: string }
+
+// Estados de CIERRE: la causa ya no se monitorea. Se muestran SOLOS (las alertas de una
+// causa activa no tienen sentido si ya está cerrada) y con el mismo look apagado (gris/⏸),
+// para que se distingan de un vistazo de las alertas activas (colores vivos).
+// Cada uno dice, en el tooltip, POR QUÉ está cerrada — que es lo que pidió la curadora.
+function chipDeCierre(c: CausaResumen): Chip | null {
   if (estaTerminada(c.notas)) {
-    return [{ texto: 'Terminada (cerrada por vos)', clase: 'bg-slate-700 text-white' }]
+    return { texto: '⏸ Cerrada por vos', clase: 'bg-slate-700 text-white',
+      ayuda: 'Vos la sacaste de monitoreo a mano. Ya no genera alertas ni aparece en las urgencias. Podés reactivarla desde el detalle.' }
   }
-  // Señal del portal: la causa tiene un movimiento en etapa "Terminada".
   if (c.terminada_portal) {
-    return [{ texto: 'Terminada en el portal', clase: 'bg-slate-600 text-white' }]
+    return { texto: '⏸ Terminada en el portal', clase: 'bg-slate-600 text-white',
+      ayuda: 'El portal del PJUD registró que esta causa terminó (movimiento en etapa "Terminada"). Ya no genera alertas.' }
   }
   if (tieneSentenciaRechazo(c)) {
-    return [{ texto: 'Sentencia de rechazo', clase: 'bg-slate-800 text-white' }]
+    return { texto: '⏸ Protección rechazada', clase: 'bg-slate-800 text-white',
+      ayuda: 'Hay una sentencia que rechazó la solicitud de protección. La causa se cerró: ya no hay medida que monitorear.' }
   }
   if (fueraDeMiLista(c)) {
-    return [{ texto: 'Ya no en mi lista PJUD', clase: 'bg-slate-200 text-slate-600' }]
+    return { texto: '⏸ Ya no es tu causa', clase: 'bg-slate-300 text-slate-700',
+      ayuda: 'Esta causa ya no aparece en tu lista del portal (te relevaron la curaduría). No genera alertas.' }
   }
-  // Seguimiento del NNA vencido (>180d sin "Entrevista al NNA" o nunca). Va primero porque
-  // es el recordatorio central de la curaduría: ver al NNA. Se calcula en el cliente.
-  if (c.seguimiento_vencido) chips.push({ texto: 'Seguimiento NNA vencido', clase: 'bg-rose-100 text-rose-700' })
-  if (c.tiene_orden_busqueda) chips.push({ texto: 'Orden de búsqueda', clase: 'bg-red-100 text-red-700' })
-  if (c.tiene_no_adherencia) chips.push({ texto: 'No adherencia', clase: 'bg-amber-100 text-amber-700' })
-  if (c.tiene_citacion_audiencia) chips.push({ texto: 'Citación audiencia', clase: 'bg-amber-100 text-amber-700' })
-  // Estancamiento: sin movimiento hace más de 6 meses (criterio de Paula).
-  // Solo si NO es nivel 6: en nivel 6 el motivo de urgencia ya dice "Sin movimiento hace N días
-  // (estancada)", así que el chip sería redundante. En otros niveles (ej. una crítica por orden
-  // de búsqueda que además está estancada) el chip sí aporta.
+  return null
+}
+
+function chipsSenales(c: CausaResumen): Chip[] {
+  // Si la causa está CERRADA, mostramos SOLO ese chip: las alertas de una causa activa
+  // (traslado, seguimiento, etc.) ya no aplican y solo confundirían.
+  const cierre = chipDeCierre(c)
+  if (cierre) return [cierre]
+
+  // A partir de acá, la causa está ACTIVA. Alertas ordenadas de más a menos urgente, con
+  // texto en palabras (no jerga) y explicación en el tooltip.
+  const chips: Chip[] = []
+
+  if (c.tiene_orden_busqueda) chips.push({ texto: '🔴 NNA no ubicado', clase: 'bg-red-100 text-red-700',
+    ayuda: 'Hay una orden de búsqueda: el tribunal no tiene ubicado al niño/a. Es lo más urgente — requiere acción inmediata.' })
+
+  if (c.tiene_traslado_curador) chips.push({ texto: '🟣 Te toca responder', clase: 'bg-violet-100 text-violet-700',
+    ayuda: 'El tribunal te trasladó la causa para que te pronuncies (traslado al curador), en los últimos 30 días. Tenés que revisar y responder.' })
+
+  if (c.seguimiento_vencido) chips.push({ texto: '👁 Falta ver al NNA', clase: 'bg-rose-100 text-rose-700',
+    ayuda: 'Pasaron más de 180 días desde la última entrevista al niño/a (o nunca se registró una). Conviene coordinar una visita/entrevista.' })
+
+  if (c.tiene_no_adherencia) chips.push({ texto: '⚠ Programa sin respuesta', clase: 'bg-amber-100 text-amber-700',
+    ayuda: 'El programa (OPD, PPF, PIE…) informó inasistencia, abandono o no adherencia. Conviene coordinar reunión técnica o evaluar re-derivación.' })
+
+  if (c.tiene_citacion_audiencia) chips.push({ texto: '📅 Citación a audiencia', clase: 'bg-sky-100 text-sky-700',
+    ayuda: 'Hay una citación a audiencia reciente. Revisá la fecha y preparate.' })
+
+  // Estancamiento: sin movimiento >6 meses. Se omite en nivel 6 porque el motivo de urgencia
+  // ya lo dice ahí (sería redundante).
   if (c.dias_sin_actividad != null && c.dias_sin_actividad > 180 && c.nivel_urgencia !== 6) {
-    chips.push({ texto: `Sin movimiento ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700' })
+    chips.push({ texto: `💤 Parada ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700',
+      ayuda: `Sin ningún movimiento hace ~${Math.round(c.dias_sin_actividad / 30)} meses. Conviene impulsarla o pedir estado al tribunal.` })
   }
   return chips
+}
+
+// Leyenda desplegable que explica QUÉ significa cada chip. Pensada para que la curadora la
+// tenga siempre a mano: separa las ALERTAS de una causa activa (colores vivos) de los
+// ESTADOS DE CIERRE (grises), que es justo la confusión que reportó ("no entiendo si una
+// está en traslado pero ya se cerró"). Arranca cerrada para no ocupar espacio.
+function LeyendaChips() {
+  const [abierta, setAbierta] = useState(false)
+  const item = (chipClase: string, texto: string, explica: string) => (
+    <div className="flex items-start gap-2">
+      <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full shrink-0 ${chipClase}`}>{texto}</span>
+      <span className="text-xs text-slate-500">{explica}</span>
+    </div>
+  )
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl">
+      <button
+        onClick={() => setAbierta(!abierta)}
+        aria-expanded={abierta}
+        className="w-full flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-600 hover:text-slate-900 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded-xl"
+      >
+        <IconChevron className={`w-4 h-4 text-slate-400 transition-transform duration-200 ${abierta ? 'rotate-90' : ''}`} />
+        ¿Qué significan las etiquetas de colores?
+      </button>
+      {abierta && (
+        <div className="px-4 pb-4 space-y-4">
+          <div>
+            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Alertas — necesitan tu atención</p>
+            <div className="space-y-2">
+              {item('bg-red-100 text-red-700', '🔴 NNA no ubicado', 'Orden de búsqueda: el tribunal no encuentra al niño/a. Lo más urgente.')}
+              {item('bg-violet-100 text-violet-700', '🟣 Te toca responder', 'El tribunal te trasladó la causa para que te pronuncies. Hay que responder.')}
+              {item('bg-rose-100 text-rose-700', '👁 Falta ver al NNA', 'Más de 180 días sin entrevistar al niño/a. Conviene coordinar una visita.')}
+              {item('bg-amber-100 text-amber-700', '⚠ Programa sin respuesta', 'El programa informó inasistencia o abandono. Conviene reunión técnica.')}
+              {item('bg-sky-100 text-sky-700', '📅 Citación a audiencia', 'Hay una audiencia citada. Revisá la fecha y preparate.')}
+              {item('bg-orange-100 text-orange-700', '💤 Parada N meses', 'Sin ningún movimiento hace meses. Conviene impulsarla o pedir estado.')}
+            </div>
+          </div>
+          <div>
+            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Cerradas — ya no se monitorean</p>
+            <p className="text-xs text-slate-400 mb-2">Las grises ya no generan alertas ni aparecen en las urgencias. El motivo lo dice cada etiqueta:</p>
+            <div className="space-y-2">
+              {item('bg-slate-700 text-white', '⏸ Cerrada por vos', 'La sacaste de monitoreo a mano. Podés reactivarla desde el detalle de la causa.')}
+              {item('bg-slate-600 text-white', '⏸ Terminada en el portal', 'El portal del PJUD registró que la causa terminó.')}
+              {item('bg-slate-800 text-white', '⏸ Protección rechazada', 'Una sentencia rechazó la protección: no hay medida que monitorear.')}
+              {item('bg-slate-300 text-slate-700', '⏸ Ya no es tu causa', 'Te relevaron la curaduría: ya no aparece en tu lista del portal.')}
+            </div>
+          </div>
+          <p className="text-xs text-slate-400 pt-1 border-t border-slate-100">
+            Tip: en cada causa, pasá el mouse por encima de una etiqueta (o mantené pulsado en el celular) para ver esta explicación.
+          </p>
+        </div>
+      )}
+    </div>
+  )
 }
 
 // Semáforo basado en nivel_urgencia multi-criterio
@@ -905,16 +988,7 @@ export default function Dashboard() {
       {/* Leyenda del semáforo (íconos formales ligados al color). Solo en la vista general:
           cuando Paula filtra por un KPI, el encabezado del resultado ya dice qué está viendo,
           así que la leyenda sería ruido. */}
-      {filtroUrgencia === 'todas' && (
-      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-500">
-        <span className="flex items-center gap-1.5"><IconShield className="w-3.5 h-3.5 text-violet-600" /> Traslado al curador (prioritario)</span>
-        <span className="flex items-center gap-1.5"><IconUsers className="w-3.5 h-3.5 text-rose-600" /> Seguimiento del NNA vencido (&gt;180d)</span>
-        <span className="flex items-center gap-1.5"><IconAlert className="w-3.5 h-3.5 text-red-500" /> Crítica: audiencia ≤2d / medida por vencer</span>
-        <span className="flex items-center gap-1.5"><IconClock className="w-3.5 h-3.5 text-amber-500" /> Atención: movimiento o audiencia ≤7d</span>
-        <span className="flex items-center gap-1.5"><IconPause className="w-3.5 h-3.5 text-orange-500" /> Revisar: estancada &gt;90d</span>
-        <span className="flex items-center gap-1.5"><IconCheck className="w-3.5 h-3.5 text-green-500" /> Estable: actividad reciente</span>
-      </div>
-      )}
+      {filtroUrgencia === 'todas' && <LeyendaChips />}
 
       {/* Bloques destacados transversales (Traslados / Seguimiento vencido). Ahora son
           COLAPSABLES (patrón del calendario) y solo se muestran en la vista general: al
@@ -1398,7 +1472,7 @@ function CausaCard({ causa: c, onToggleMonitoreo }: {
             {senales.length > 0 && (
               <div className="mt-1.5 flex flex-wrap gap-1">
                 {senales.map((s, i) => (
-                  <span key={i} className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${s.clase}`}>
+                  <span key={i} title={s.ayuda} className={`text-[11px] font-medium px-2 py-0.5 rounded-full cursor-help ${s.clase}`}>
                     {s.texto}
                   </span>
                 ))}
