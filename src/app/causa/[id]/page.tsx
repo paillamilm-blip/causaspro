@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, textoSeguimientoNna, DIAS_UMBRAL_SEGUIMIENTO } from '@/lib/seguimientoNna'
+import { estaTerminada } from '@/lib/monitoreo'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
@@ -64,6 +65,39 @@ export default function CausaDetalle() {
   const [analisis, setAnalisis] = useState<{ resumen: string; proximoPaso: string; riesgo: string; acciones?: string[]; preguntasPrograma?: string[]; resumenCausa?: string; resumenProgramas?: string } | null>(null)
   const [analizando, setAnalizando] = useState(false)
   const [analisisError, setAnalisisError] = useState<string | null>(null)
+
+  // Monitoreo: la curadora marca la causa como terminada (o la reactiva). Va por el endpoint
+  // porque `notas` es un canal compartido con el bot y hay que agregar una línea sin pisar
+  // sus marcas. `cerrada` se lee de las notas que ya trajo loadData.
+  const [guardandoMonitoreo, setGuardandoMonitoreo] = useState(false)
+  const cerrada = estaTerminada(causa?.notas)
+  async function toggleMonitoreo() {
+    if (!causa) return
+    const pregunta = cerrada
+      ? `¿Volver a monitorear ${causa.rit}?`
+      : `¿Sacar ${causa.rit} de monitoreo?\n\nDejará de generar alertas y el bot no la va a revisar más. Podés revertirlo cuando quieras.`
+    if (!window.confirm(pregunta)) return
+    setGuardandoMonitoreo(true)
+    try {
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const qs = token ? `?token=${encodeURIComponent(token)}` : ''
+      const res = await fetch(`/api/causa/${causa.id}/monitoreo${qs}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ terminada: !cerrada }),
+      })
+      const json = await res.json()
+      if (!res.ok) {
+        alert(json?.error || `No se pudo guardar (error ${res.status}).`)
+        return
+      }
+      await loadData()   // recargar para que el chip y el botón reflejen el cambio
+    } catch (e: any) {
+      alert(e?.message || 'No se pudo conectar con el servidor.')
+    } finally {
+      setGuardandoMonitoreo(false)
+    }
+  }
 
   async function pedirAnalisisIA() {
     setAnalizando(true)
@@ -176,6 +210,21 @@ export default function CausaDetalle() {
           {causa.programa_vigente && (
             <span className="text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">{causa.programa_vigente}</span>
           )}
+          {/* Chip + botón de monitoreo. Estaban solo en las tarjetas del dashboard, pero esta
+              es la pantalla donde la curadora revisa una causa y decide que ya terminó, así
+              que acá es donde más falta hacían. */}
+          {cerrada && (
+            <span className="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full">Terminada</span>
+          )}
+          <button
+            onClick={toggleMonitoreo}
+            disabled={guardandoMonitoreo}
+            className="text-xs text-slate-500 hover:text-slate-900 underline decoration-dotted disabled:opacity-50"
+          >
+            {guardandoMonitoreo
+              ? 'Guardando…'
+              : cerrada ? 'Volver a monitorear' : 'Sacar de monitoreo'}
+          </button>
           {/* Análisis estratégico IA (bajo demanda): llama /api/analisis/[id], que arma un
               contexto SOLO procesal (sin nombres/RUT ni cuerpo de resoluciones) y lo manda
               a la IA. Devuelve resumen + próximo paso sugerido + riesgo. */}
