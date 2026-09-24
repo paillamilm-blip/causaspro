@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useParams } from 'next/navigation'
 import { materiaDeTipo, materiaDeRit, GRUPO_LABEL } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, textoSeguimientoNna, DIAS_UMBRAL_SEGUIMIENTO } from '@/lib/seguimientoNna'
-import { estaTerminada } from '@/lib/monitoreo'
+import { estaTerminada, ETAPA_TERMINADA } from '@/lib/monitoreo'
 
 interface Causa {
   id: string; rit: string; caratulado: string; tipo: string; estado: string;
@@ -71,6 +71,12 @@ export default function CausaDetalle() {
   // sus marcas. `cerrada` se lee de las notas que ya trajo loadData.
   const [guardandoMonitoreo, setGuardandoMonitoreo] = useState(false)
   const cerrada = estaTerminada(causa?.notas)
+  // ¿El PORTAL la cerró? Se calcula con los movimientos que esta pantalla ya carga (traen
+  // `etapa`), así que no hace falta ninguna consulta extra. El dashboard hace el mismo cruce
+  // pero por su lado, porque la vista v_causas_ranking no expone la etapa del último
+  // movimiento. Mostrarlo acá era el hueco que hacía parecer que el sistema no se daba
+  // cuenta: la causa ya salía del monitoreo en el panel, pero el detalle no decía nada.
+  const terminadaPortal = movimientos.some((m) => m.etapa === ETAPA_TERMINADA)
   async function toggleMonitoreo() {
     if (!causa) return
     const pregunta = cerrada
@@ -213,9 +219,15 @@ export default function CausaDetalle() {
           {/* Chip + botón de monitoreo. Estaban solo en las tarjetas del dashboard, pero esta
               es la pantalla donde la curadora revisa una causa y decide que ya terminó, así
               que acá es donde más falta hacían. */}
-          {cerrada && (
-            <span className="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full">Terminada</span>
-          )}
+          {cerrada ? (
+            <span className="text-xs bg-slate-700 text-white px-2 py-0.5 rounded-full" title="La sacaste de monitoreo a mano">
+              Terminada (cerrada por vos)
+            </span>
+          ) : terminadaPortal ? (
+            <span className="text-xs bg-slate-600 text-white px-2 py-0.5 rounded-full" title="El portal tiene un movimiento en etapa Terminada. Ya no genera alertas ni entra al ranking.">
+              Terminada en el portal
+            </span>
+          ) : null}
           <button
             onClick={toggleMonitoreo}
             disabled={guardandoMonitoreo}
