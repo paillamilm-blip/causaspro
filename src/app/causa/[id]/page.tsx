@@ -485,7 +485,12 @@ export default function CausaDetalle() {
                     {m.etapa && <span className="text-xs text-gray-400">{m.etapa}</span>}
                     <span className="text-sm font-semibold text-gray-700">{m.tramite}</span>
                     {m.es_traslado_curador && (
-                      <span className="text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-medium">Traslado al curador</span>
+                      <span
+                        title="En este movimiento el tribunal te trasladó la causa para que te pronuncies."
+                        className="text-xs bg-violet-100 text-violet-700 px-2 py-0.5 rounded-full font-medium cursor-help"
+                      >
+                        🟣 Traslado al curador
+                      </span>
                     )}
                   </div>
                   {m.descripcion && (
