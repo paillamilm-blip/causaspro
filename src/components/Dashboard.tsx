@@ -30,7 +30,7 @@ const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; 
   atencion:    { title: 'Atención — Revisar esta semana', dotColor: 'bg-amber-400', tono: 'amber', Icono: IconClock },
   revisar:     { title: 'Revisar — Seguimiento pendiente', dotColor: 'bg-orange-400', tono: 'orange', Icono: IconPause },
   estables:    { title: 'Estables — Sin urgencia inmediata', dotColor: 'bg-green-500', tono: 'green', Icono: IconCheck },
-  fuera:       { title: 'Fuera de monitoreo — terminadas / relevadas / con sentencia de rechazo', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
+  fuera:       { title: 'Causas terminadas', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
 }
 
 // Color del chip de materia según su grupo práctico.
@@ -124,17 +124,69 @@ function tieneSentenciaRechazo(c: CausaResumen): boolean {
   return /rechaz\w*\s+(la\s+)?(solicitud|demanda|medida|protecci|causa|denuncia|requerimiento)/.test(texto)
 }
 
-// ¿La causa debe salir del monitoreo activo (no generar alarmas)? Por tres motivos:
-// le relevaron la curaduría, hay sentencia de rechazo, o la curadora la marcó como terminada.
-//
-// Lo último es MANUAL a propósito: el portal NO informa cuándo una causa terminó (se verificó
-// con datos — `estado` dice "Sin Estado" en 292 causas y los movimientos no traen vocabulario
-// de cierre), así que el sistema no puede deducirlo. La curadora sí lo sabe.
+// ============================================================
+// ESTADO DE LA CAUSA — modelo de 2 estados pedido por la curadora
+// ------------------------------------------------------------
+// Solo hay dos: VIGENTE (se monitorea, trae sus alertas) y TERMINADA (cerrada, no genera
+// alertas). Una causa terminada SIEMPRE trae el MOTIVO del cierre. La jerga es técnica a
+// propósito (la curadora la maneja y la prefiere).
+// ============================================================
+
+type MotivoTermino =
+  | 'rechazo'         // sentencia rechazó la protección
+  | 'incompetencia'   // el tribunal se declaró incompetente
+  | 'cese_medida'     // cesó / se dejó sin efecto la medida de protección
+  | 'terminada'       // el portal la marca "Terminada" sin sub-motivo distinguible
+  | 'relevada'        // le relevaron la curaduría (ya no es su causa)
+  | 'cerrada_manual'  // la curadora la cerró a mano
+
+/** ¿El portal declaró INCOMPETENCIA como cierre? Solo cuenta si es el ESTADO de la causa,
+ *  no un movimiento intermedio (una causa puede pasar por incompetencia y seguir). */
+function tieneIncompetencia(c: CausaResumen): boolean {
+  const texto = `${c.estado ?? ''} ${c.ultimo_movimiento ?? ''}`.toLowerCase()
+  return /incompeten/.test(texto)
+}
+
+/** ¿Cesó la medida de protección? Textos del portal: "cesa/cese de la medida",
+ *  "deja sin efecto la medida de protección", "término de la medida". */
+function tieneCeseMedida(c: CausaResumen): boolean {
+  const texto = `${c.estado ?? ''} ${c.sintesis ?? ''} ${c.ultimo_movimiento ?? ''}`.toLowerCase()
+  return /(cesa|cese|termino|término|deja sin efecto)[^.]*\bmedida/.test(texto)
+    || /medida[^.]*(cesad|dejada sin efecto|terminad)/.test(texto)
+}
+
+/**
+ * Estado de la causa: vigente o terminada + motivo. Es la ÚNICA distinción de primer nivel.
+ * Orden de prioridad del motivo (del más específico al más genérico): la marca manual de la
+ * curadora manda; después los motivos jurídicos concretos; "terminada" genérica al final.
+ */
+function estadoCausa(c: CausaResumen): { vigente: boolean; motivo?: MotivoTermino } {
+  if (estaTerminada(c.notas)) return { vigente: false, motivo: 'cerrada_manual' }
+  if (fueraDeMiLista(c)) return { vigente: false, motivo: 'relevada' }
+  if (tieneSentenciaRechazo(c)) return { vigente: false, motivo: 'rechazo' }
+  if (tieneCeseMedida(c)) return { vigente: false, motivo: 'cese_medida' }
+  // La incompetencia y la etapa "Terminada" del portal solo cierran si NO hubo actividad
+  // posterior. Como señal simple usamos el estado/último movimiento (incompetencia) y el
+  // flag terminada_portal (que ya se calculó mirando la etapa del expediente).
+  if (tieneIncompetencia(c)) return { vigente: false, motivo: 'incompetencia' }
+  if (c.terminada_portal === true) return { vigente: false, motivo: 'terminada' }
+  return { vigente: true }
+}
+
+/** Texto técnico + tooltip para cada motivo de término. Jerga jurídica a propósito. */
+const MOTIVO_TERMINO: Record<MotivoTermino, { texto: string; ayuda: string }> = {
+  rechazo:        { texto: 'Terminada · Rechazo', ayuda: 'Sentencia que rechazó la solicitud de protección. No hay medida que monitorear.' },
+  incompetencia:  { texto: 'Terminada · Incompetencia', ayuda: 'El tribunal se declaró incompetente. La causa salió de este tribunal.' },
+  cese_medida:    { texto: 'Terminada · Cese de medida', ayuda: 'Cesó o se dejó sin efecto la medida de protección. Ya no hay medida vigente.' },
+  terminada:      { texto: 'Terminada', ayuda: 'El portal registró la causa en etapa "Terminada".' },
+  relevada:       { texto: 'Terminada · Relevada', ayuda: 'Te relevaron la curaduría: la causa ya no aparece en tu lista del portal.' },
+  cerrada_manual: { texto: 'Terminada · Cerrada por vos', ayuda: 'La marcaste como terminada a mano. Podés reactivarla desde el detalle.' },
+}
+
+// Compat: se mantiene el nombre viejo, ahora derivado del modelo de 2 estados. Todo lo que
+// antes preguntaba "¿está fuera de monitoreo?" sigue funcionando igual.
 function fueraDeMonitoreo(c: CausaResumen): boolean {
-  return fueraDeMiLista(c)
-    || tieneSentenciaRechazo(c)
-    || estaTerminada(c.notas)      // la marcó la curadora a mano
-    || c.terminada_portal === true // el portal la cerró (etapa "Terminada")
+  return !estadoCausa(c).vigente
 }
 
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
@@ -144,60 +196,38 @@ function fueraDeMonitoreo(c: CausaResumen): boolean {
 // pulsado en el celu) ve la explicación en palabras, sin jerga jurídica ni técnica.
 interface Chip { texto: string; clase: string; ayuda: string }
 
-// Estados de CIERRE: la causa ya no se monitorea. Se muestran SOLOS (las alertas de una
-// causa activa no tienen sentido si ya está cerrada) y con el mismo look apagado (gris/⏸),
-// para que se distingan de un vistazo de las alertas activas (colores vivos).
-// Cada uno dice, en el tooltip, POR QUÉ está cerrada — que es lo que pidió la curadora.
-function chipDeCierre(c: CausaResumen): Chip | null {
-  if (estaTerminada(c.notas)) {
-    return { texto: '⏸ Cerrada por vos', clase: 'bg-slate-700 text-white',
-      ayuda: 'Vos la sacaste de monitoreo a mano. Ya no genera alertas ni aparece en las urgencias. Podés reactivarla desde el detalle.' }
-  }
-  if (c.terminada_portal) {
-    return { texto: '⏸ Terminada en el portal', clase: 'bg-slate-600 text-white',
-      ayuda: 'El portal del PJUD registró que esta causa terminó (movimiento en etapa "Terminada"). Ya no genera alertas.' }
-  }
-  if (tieneSentenciaRechazo(c)) {
-    return { texto: '⏸ Protección rechazada', clase: 'bg-slate-800 text-white',
-      ayuda: 'Hay una sentencia que rechazó la solicitud de protección. La causa se cerró: ya no hay medida que monitorear.' }
-  }
-  if (fueraDeMiLista(c)) {
-    return { texto: '⏸ Ya no es tu causa', clase: 'bg-slate-300 text-slate-700',
-      ayuda: 'Esta causa ya no aparece en tu lista del portal (te relevaron la curaduría). No genera alertas.' }
-  }
-  return null
-}
-
 function chipsSenales(c: CausaResumen): Chip[] {
-  // Si la causa está CERRADA, mostramos SOLO ese chip: las alertas de una causa activa
-  // (traslado, seguimiento, etc.) ya no aplican y solo confundirían.
-  const cierre = chipDeCierre(c)
-  if (cierre) return [cierre]
+  // PRIMERA Y ÚNICA distinción de primer nivel: vigente o terminada.
+  // Si está TERMINADA, un solo chip gris con el MOTIVO. Las alertas de una causa vigente
+  // (traslado, seguimiento) ya no aplican y solo confundirían — por eso return acá.
+  const estado = estadoCausa(c)
+  if (!estado.vigente && estado.motivo) {
+    const m = MOTIVO_TERMINO[estado.motivo]
+    return [{ texto: m.texto, clase: 'bg-slate-600 text-white', ayuda: m.ayuda }]
+  }
 
-  // A partir de acá, la causa está ACTIVA. Alertas ordenadas de más a menos urgente, con
-  // texto en palabras (no jerga) y explicación en el tooltip.
+  // VIGENTE: sus alertas, ordenadas de más a menos urgente. Terminología técnica (Paula
+  // la maneja); el tooltip agrega el contexto de qué hacer.
   const chips: Chip[] = []
 
-  if (c.tiene_orden_busqueda) chips.push({ texto: '🔴 NNA no ubicado', clase: 'bg-red-100 text-red-700',
-    ayuda: 'Hay una orden de búsqueda: el tribunal no tiene ubicado al niño/a. Es lo más urgente — requiere acción inmediata.' })
+  if (c.tiene_orden_busqueda) chips.push({ texto: 'Orden de búsqueda', clase: 'bg-red-100 text-red-700',
+    ayuda: 'El tribunal decretó orden de búsqueda: el NNA no está ubicado. Máxima urgencia.' })
 
-  if (c.tiene_traslado_curador) chips.push({ texto: '🟣 Te toca responder', clase: 'bg-violet-100 text-violet-700',
-    ayuda: 'El tribunal te trasladó la causa para que te pronuncies (traslado al curador), en los últimos 30 días. Tenés que revisar y responder.' })
+  if (c.tiene_traslado_curador) chips.push({ texto: 'Traslado al curador', clase: 'bg-violet-100 text-violet-700',
+    ayuda: 'El tribunal confirió traslado al curador (últimos 30 días). Requiere que te pronuncies.' })
 
-  if (c.seguimiento_vencido) chips.push({ texto: '👁 Falta ver al NNA', clase: 'bg-rose-100 text-rose-700',
-    ayuda: 'Pasaron más de 180 días desde la última entrevista al niño/a (o nunca se registró una). Conviene coordinar una visita/entrevista.' })
+  if (c.seguimiento_vencido) chips.push({ texto: 'Seguimiento NNA vencido', clase: 'bg-rose-100 text-rose-700',
+    ayuda: 'Más de 180 días sin entrevista al NNA (o sin registro). Corresponde diligencia de seguimiento.' })
 
-  if (c.tiene_no_adherencia) chips.push({ texto: '⚠ Programa sin respuesta', clase: 'bg-amber-100 text-amber-700',
-    ayuda: 'El programa (OPD, PPF, PIE…) informó inasistencia, abandono o no adherencia. Conviene coordinar reunión técnica o evaluar re-derivación.' })
+  if (c.tiene_no_adherencia) chips.push({ texto: 'No adherencia del programa', clase: 'bg-amber-100 text-amber-700',
+    ayuda: 'El programa (OPD/PPF/PIE/PRM) informó inasistencia, abandono o no adherencia. Evaluar reunión técnica o re-derivación.' })
 
-  if (c.tiene_citacion_audiencia) chips.push({ texto: '📅 Citación a audiencia', clase: 'bg-sky-100 text-sky-700',
-    ayuda: 'Hay una citación a audiencia reciente. Revisá la fecha y preparate.' })
+  if (c.tiene_citacion_audiencia) chips.push({ texto: 'Citación a audiencia', clase: 'bg-sky-100 text-sky-700',
+    ayuda: 'Hay citación a audiencia reciente. Verificar fecha y preparar.' })
 
-  // Estancamiento: sin movimiento >6 meses. Se omite en nivel 6 porque el motivo de urgencia
-  // ya lo dice ahí (sería redundante).
   if (c.dias_sin_actividad != null && c.dias_sin_actividad > 180 && c.nivel_urgencia !== 6) {
-    chips.push({ texto: `💤 Parada ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700',
-      ayuda: `Sin ningún movimiento hace ~${Math.round(c.dias_sin_actividad / 30)} meses. Conviene impulsarla o pedir estado al tribunal.` })
+    chips.push({ texto: `Estancada ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700',
+      ayuda: `Sin movimiento hace ~${Math.round(c.dias_sin_actividad / 30)} meses. Corresponde impulsar o solicitar estado de la causa.` })
   }
   return chips
 }
@@ -227,24 +257,29 @@ function LeyendaChips() {
       {abierta && (
         <div className="px-4 pb-4 space-y-4">
           <div>
-            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Alertas — necesitan tu atención</p>
+            <p className="text-xs font-bold text-green-700 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-green-500"></span> Causa vigente — sus alertas
+            </p>
             <div className="space-y-2">
-              {item('bg-red-100 text-red-700', '🔴 NNA no ubicado', 'Orden de búsqueda: el tribunal no encuentra al niño/a. Lo más urgente.')}
-              {item('bg-violet-100 text-violet-700', '🟣 Te toca responder', 'El tribunal te trasladó la causa para que te pronuncies. Hay que responder.')}
-              {item('bg-rose-100 text-rose-700', '👁 Falta ver al NNA', 'Más de 180 días sin entrevistar al niño/a. Conviene coordinar una visita.')}
-              {item('bg-amber-100 text-amber-700', '⚠ Programa sin respuesta', 'El programa informó inasistencia o abandono. Conviene reunión técnica.')}
-              {item('bg-sky-100 text-sky-700', '📅 Citación a audiencia', 'Hay una audiencia citada. Revisá la fecha y preparate.')}
-              {item('bg-orange-100 text-orange-700', '💤 Parada N meses', 'Sin ningún movimiento hace meses. Conviene impulsarla o pedir estado.')}
+              {item('bg-red-100 text-red-700', 'Orden de búsqueda', 'El NNA no está ubicado. Máxima urgencia.')}
+              {item('bg-violet-100 text-violet-700', 'Traslado al curador', 'El tribunal confirió traslado: requiere que te pronuncies.')}
+              {item('bg-rose-100 text-rose-700', 'Seguimiento NNA vencido', 'Más de 180 días sin entrevista al NNA. Corresponde diligencia de seguimiento.')}
+              {item('bg-amber-100 text-amber-700', 'No adherencia del programa', 'El programa informó inasistencia o abandono. Evaluar reunión técnica o re-derivación.')}
+              {item('bg-sky-100 text-sky-700', 'Citación a audiencia', 'Hay citación reciente. Verificar fecha.')}
+              {item('bg-orange-100 text-orange-700', 'Estancada N meses', 'Sin movimiento hace meses. Corresponde impulsar o solicitar estado.')}
             </div>
           </div>
           <div>
-            <p className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-2">Cerradas — ya no se monitorean</p>
-            <p className="text-xs text-slate-400 mb-2">Las grises ya no generan alertas ni aparecen en las urgencias. El motivo lo dice cada etiqueta:</p>
+            <p className="text-xs font-bold text-slate-600 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+              <span className="w-2.5 h-2.5 rounded-full bg-slate-400"></span> Causa terminada — motivo del cierre
+            </p>
+            <p className="text-xs text-slate-400 mb-2">No generan alertas. El motivo lo dice la etiqueta:</p>
             <div className="space-y-2">
-              {item('bg-slate-700 text-white', '⏸ Cerrada por vos', 'La sacaste de monitoreo a mano. Podés reactivarla desde el detalle de la causa.')}
-              {item('bg-slate-600 text-white', '⏸ Terminada en el portal', 'El portal del PJUD registró que la causa terminó.')}
-              {item('bg-slate-800 text-white', '⏸ Protección rechazada', 'Una sentencia rechazó la protección: no hay medida que monitorear.')}
-              {item('bg-slate-300 text-slate-700', '⏸ Ya no es tu causa', 'Te relevaron la curaduría: ya no aparece en tu lista del portal.')}
+              {item('bg-slate-600 text-white', 'Terminada · Rechazo', 'Sentencia que rechazó la protección.')}
+              {item('bg-slate-600 text-white', 'Terminada · Incompetencia', 'El tribunal se declaró incompetente.')}
+              {item('bg-slate-600 text-white', 'Terminada · Cese de medida', 'Cesó o se dejó sin efecto la medida de protección.')}
+              {item('bg-slate-600 text-white', 'Terminada · Relevada', 'Te relevaron la curaduría: ya no está en tu lista del portal.')}
+              {item('bg-slate-600 text-white', 'Terminada · Cerrada por vos', 'La marcaste a mano. Reactivable desde el detalle.')}
             </div>
           </div>
           <p className="text-xs text-slate-400 pt-1 border-t border-slate-100">
@@ -856,16 +891,47 @@ export default function Dashboard() {
         </div>
       </div>
 
-      {/* KPIs clickeables (actúan como filtro rápido por urgencia). Íconos formales
-          ligados al color del semáforo. "Traslados al curador" y "Seguimiento vencido"
-          son cortes transversales (una causa puede caer en ellos con cualquier nivel). */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
-        <KpiCard
-          label="Total causas" value={totalCausas}
-          active={filtroUrgencia === 'todas'}
+      {/* DISTINCIÓN DE PRIMER NIVEL (pedido de la curadora): Vigentes vs Terminadas.
+          Todo lo demás (urgencias, traslados) es un sub-corte de las VIGENTES. Los dos
+          botones grandes actúan como filtro maestro; abajo, los sub-filtros de urgencia. */}
+      <div className="grid grid-cols-2 gap-3">
+        <button
           onClick={() => setFiltroUrgencia('todas')}
-          tone="neutral"
-        />
+          className={`rounded-xl p-4 border-2 text-left transition-colors ${
+            filtroUrgencia !== 'fuera'
+              ? 'border-green-500 bg-green-50'
+              : 'border-slate-200 bg-white hover:border-green-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-3.5 h-3.5 rounded-full bg-green-500 shadow-sm"></span>
+            <span className="text-sm font-semibold text-slate-700">Causas vigentes</span>
+          </div>
+          <div className="mt-1 text-3xl font-bold text-green-700 tabular-nums">{causasActivas.length}</div>
+          <div className="text-xs text-slate-500 mt-0.5">En monitoreo. Mirá abajo las que necesitan acción.</div>
+        </button>
+        <button
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'fuera' ? 'todas' : 'fuera')}
+          className={`rounded-xl p-4 border-2 text-left transition-colors ${
+            filtroUrgencia === 'fuera'
+              ? 'border-slate-500 bg-slate-100'
+              : 'border-slate-200 bg-white hover:border-slate-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <span className="w-3.5 h-3.5 rounded-full bg-slate-400 shadow-sm"></span>
+            <span className="text-sm font-semibold text-slate-700">Causas terminadas</span>
+          </div>
+          <div className="mt-1 text-3xl font-bold text-slate-600 tabular-nums">{fueraMonitoreo.length}</div>
+          <div className="text-xs text-slate-500 mt-0.5">Rechazo, incompetencia, cese de medida o cerradas por vos.</div>
+        </button>
+      </div>
+
+      {/* Sub-filtros de las causas VIGENTES por urgencia. "Traslados" y "Seguimiento" son
+          cortes transversales (una causa puede caer en ellos con cualquier nivel). Todos
+          operan solo sobre vigentes. */}
+      {filtroUrgencia !== 'fuera' && (
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-7 gap-3">
         <KpiCard
           label="Traslados curador" value={traslados.length}
           active={filtroUrgencia === 'traslados'}
@@ -902,17 +968,8 @@ export default function Dashboard() {
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'estables' ? 'todas' : 'estables')}
           tone="green" Icono={IconCheck}
         />
-        {/* Solo aparece si hay causas fuera de monitoreo (relevadas o con sentencia de
-            rechazo). No suma a las urgencias; es un corte aparte para revisar. */}
-        {fueraMonitoreo.length > 0 && (
-          <KpiCard
-            label="Fuera de monitoreo" value={fueraMonitoreo.length}
-            active={filtroUrgencia === 'fuera'}
-            onClick={() => setFiltroUrgencia(filtroUrgencia === 'fuera' ? 'todas' : 'fuera')}
-            tone="neutral" Icono={IconInbox}
-          />
-        )}
       </div>
+      )}
 
       {/* RESULTADO DEL FILTRO: aparece JUSTO debajo de los KPI cuando Paula aprieta uno.
           Antes el resultado se renderizaba al fondo y "no pasaba nada" visible: había que
