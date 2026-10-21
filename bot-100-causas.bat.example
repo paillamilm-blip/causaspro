@@ -11,7 +11,7 @@ REM   datos. Con esto cubris las 100 que necesitas.
 REM
 REM COMO USAR:
 REM   1. Configura tus datos UNA VEZ con bot-mantenimiento.bat (doble clic:
-REM      te pregunta RUT, Clave Unica y llave de Supabase, y las guarda en .env).
+REM      te pregunta RUT, Clave Unica, llave anon y llave de Supabase, y las guarda en .env).
 REM   2. Copia este archivo como "bot-100-causas.bat"
 REM      (quitale el ".example" del final). NO hay que editarlo.
 REM   3. Doble clic en "bot-100-causas.bat".
@@ -136,7 +136,7 @@ echo.
 echo   Todavia no estan guardados tu RUT ni tu Clave Unica.
 echo.
 echo   Hace doble clic UNA VEZ en:  bot-mantenimiento.bat
-echo   Te va a pedir los 3 datos y los guarda.
+echo   Te va a pedir los 4 datos y los guarda.
 echo.
 echo   Despues volve a hacer doble clic en este archivo.
 echo.

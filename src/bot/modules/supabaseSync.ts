@@ -61,6 +61,365 @@ const MARCA_REVISAR_LETRA = '[REVISAR LETRA]'
  *  desacoplados — si cambia allá, cambiar acá (hay un test que verifica que coincidan). */
 const MARCA_TERMINADA = '[TERMINADA]'
 
+// ============================================================
+// ESTADO DE ESCANEO (cola oficial — schema-001-cobertura.sql)
+// ------------------------------------------------------------
+// Desde la migración, `causas.escaneo_estado` es la fuente de verdad de
+// "¿cuántas faltan?": pendiente | ok | sin_datos | error | descatalogada.
+// Las marcas en `notas` siguen existiendo (son contexto humano-legible), pero
+// la SELECCIÓN de lote pasa a mirar el estado. Todo este bloque es fail-safe:
+// si la migración todavía no se corrió (columnas inexistentes, Postgres 42703),
+// las escrituras se ignoran en silencio y el flujo viejo sigue funcionando.
+// ============================================================
+
+export type EscaneoEstado = 'pendiente' | 'en_progreso' | 'ok' | 'sin_datos' | 'error' | 'descatalogada'
+
+/**
+ * Escribe el estado de escaneo de una causa. `contarScan=true` suma al contador
+ * y fija ultima_escaneada (se usa al terminar un intento de scrapeo real).
+ * Lee el contador actual primero; es best-effort, nunca rompe la corrida.
+ */
+export async function setEscaneoEstado(
+  causaId: string,
+  estado: EscaneoEstado,
+  opts: { runId?: string; contarScan?: boolean } = {},
+): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const update: Record<string, any> = { escaneo_estado: estado }
+    if (opts.contarScan) {
+      update.ultima_escaneada = new Date().toISOString()
+      const { data } = await sb.from('causas').select('escaneos_totales').eq('id', causaId).limit(1)
+      const previos = (data && data[0]?.escaneos_totales) ?? 0
+      update.escaneos_totales = (parseInt(previos, 10) || 0) + 1
+    }
+    if (opts.runId) update.ultima_run_id = opts.runId
+    const { error } = await sb.from('causas').update(update).eq('id', causaId)
+    if (error && (error as any).code !== '42703') {
+      log('warn', `  No se pudo actualizar escaneo_estado de ${causaId}: ${error.message}`)
+    }
+  } catch {
+    // silencioso a propósito: la trazabilidad de cola no puede tumbar el scrapeo
+  }
+}
+
+/**
+ * Deja rastro POR CAUSA de lo que una corrida hizo (o intentó). Es lo que permite
+ * responder "¿el lote anterior avanzó o repitió?" y alimentar el progreso en vivo.
+ */
+export async function logRunItem(
+  runId: string,
+  causaId: string | null,
+  rit: string,
+  resultado: 'ok' | 'sin_movimientos' | 'no_encontrada' | 'error' | 'no_intentada',
+  movimientosNuevos = 0,
+  error?: string,
+): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { error: e } = await sb.from('bot_run_items').insert({
+      run_id: runId,
+      causa_id: causaId,
+      rit,
+      resultado,
+      movimientos_nuevos: movimientosNuevos,
+      error: error ? String(error).slice(0, 2000) : null,
+    })
+    if (e && (e as any).code !== '42P01') {
+      log('warn', `  No se pudo registrar bot_run_item ${rit}: ${e.message}`)
+    }
+  } catch {
+    // tabla inexistente (migración pendiente) → ignorar
+  }
+}
+
+/**
+ * Progreso en VIVO de la corrida: upsert de bot_runs sobre run_id (único) en lugar
+ * de esperar al insert final. El dashboard hace polling de esto.
+ */
+export async function upsertBotRunProgreso(status: BotRunStatus): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { error } = await sb
+      .from('bot_runs')
+      .upsert(
+        {
+          run_id: status.run_id,
+          started_at: status.started_at,
+          total_causas: status.total_causas,
+          procesadas: status.procesadas,
+          exitosas: status.exitosas,
+          fallidas: status.fallidas,
+        },
+        { onConflict: 'run_id' },
+      )
+    if (error && (error as any).code !== '42P10') {
+      log('warn', `  Progreso de run no guardado: ${error.message}`)
+    }
+  } catch {
+    // silencioso: el registro final (saveBotRunStatus) sigue cubriendo la corrida
+  }
+}
+
+/** Refresca el ranking al terminar la corrida: mata los 15 min de latencia del cron. */
+export async function refrescarRanking(): Promise<void> {
+  const sb = initSupabase()
+  try {
+    const { error } = await sb.rpc('refresh_ranking')
+    if (error) log('warn', `  refresh_ranking(): ${error.message}`)
+  } catch {
+    // función inexistente → el pg_cron de 15 min sigue cubriendo
+  }
+}
+
+/**
+ * RECUPERACIÓN de la cola: si una corrida anterior murió (CTRL+C, corte de luz, navegador
+ * tumbado) dejó causas en 'en_progreso' que nadie va a cerrar, y 'en_progreso' NO está en
+ * la cola de selección → esas causas quedarían invisible para siempre. Al arrancar, antes
+ * de armar el lote, se devuelven a 'pendiente'.
+ *
+ * Se hace en dos pasos (leer ids → filtrar en JS → update masivo) en vez de un `.or()` de
+ * PostgREST porque el `run_id` va dentro del filtro y los filtros OR con valores arbitrarios
+ * se rompen con puntos y comas.
+ */
+export async function reclamarColaAbandonada(runId: string): Promise<number> {
+  const sb = initSupabase()
+  try {
+    const { data: colgadas, error } = await sb
+      .from('causas')
+      .select('id, ultima_run_id')
+      .eq('escaneo_estado', 'en_progreso')
+      .limit(1000)
+    if (error) {
+      if ((error as any).code !== '42703') log('warn', `  No se pudo leer la cola en_progreso: ${error.message}`)
+      return 0
+    }
+    const aReclamar = (colgadas || [])
+      .filter(c => ((c as any).ultima_run_id ?? null) !== runId)
+      .map(c => c.id as string)
+    if (aReclamar.length === 0) return 0
+    return updatePorIdEnBloques(aReclamar, { escaneo_estado: 'pendiente' })
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * UPDATE por `id` en bloques de 100. PostgREST manda el filtro `id=in(...)` en la URL: con
+ * 2000 UUID son ~76 KB de query string y la pasarela (Supabase/Vercel) corta el request con
+ * un error confuso ("something failed" sin mensaje). De a 100 va bien y falla poco.
+ */
+async function updatePorIdEnBloques(
+  ids: string[],
+  payload: Record<string, unknown>,
+): Promise<number> {
+  const sb = initSupabase()
+  let ok = 0
+  for (let i = 0; i < ids.length; i += 100) {
+    const lote = ids.slice(i, i + 100)
+    const { data, error } = await sb.from('causas').update(payload).in('id', lote).select('id')
+    if (error) {
+      if ((error as any).code === '42703') return ok // columna aún no existe: nada por hacer
+      log('warn', `  Update por bloques falló (${lote.length} causas): ${error.message}`)
+      continue
+    }
+    ok += (data || []).length
+  }
+  return ok
+}
+
+/**
+ * REVITALIZAR la cola: una causa 'ok' no vuelve a 'pendiente' por sí sola nunca, así que
+ * sin este paso la cola se vacía y el panel dice "0 pendientes" para siempre... aunque los
+ * movimientos del portal sigan avanzando. Justo ahí es donde se pierde una audiencia o un
+ * traslado.
+ *
+ * Este paso re-encola las 'ok'/'sin_datos' cuyo último escaneo es más viejo que
+ * BOT_DIAS_RENOVACION (7 por defecto). Con la cola actualizada:
+ *   · 'pendientes' en el panel vuelve a ser verdad ("causas que falta traer"),
+ *   · v_cola_escaneo y la selección del bot coinciden (mismo criterio en los dos lados),
+ *   · el refresco periódico sigue pasando como siempre, solo que ahora es visible.
+ */
+export async function reencolarVencidas(dias = Number(process.env.BOT_DIAS_RENOVACION || 7)): Promise<number> {
+  const sb = initSupabase()
+  try {
+    const corte = new Date(Date.now() - dias * 24 * 60 * 60 * 1000).toISOString()
+    const { data, error } = await sb
+      .from('causas')
+      .select('id, notas')
+      .in('escaneo_estado', ['ok', 'sin_datos'])
+      .lt('ultima_escaneada', corte)
+      .limit(2000)
+    if (error) {
+      // 42703 = columna aún no existe (migración sin aplicar): silencio, el legacy alcanza.
+      if ((error as any).code !== '42703') log('warn', `  No se pudieron leer las causas vencidas: ${error.message}`)
+      return 0
+    }
+    // Mismo filtro de ruido que usa la selección: si una causa [NO EN PORTAL] o [TERMINADA]
+    // pasara a 'pendiente', el panel la contaría como pendiente y el bot se negaría a
+    // procesarla para siempre.
+    const ids = (data || [])
+      .filter((c: any) => {
+        const n: string = c.notas || ''
+        return !n.includes(MARCA_NO_EN_PORTAL) && !n.includes(MARCA_REVISAR)
+          && !n.includes(MARCA_REVISAR_LETRA) && !n.includes(MARCA_TERMINADA)
+      })
+      .map((c: any) => c.id as string)
+    if (ids.length === 0) return 0
+    return updatePorIdEnBloques(ids, { escaneo_estado: 'pendiente' })
+  } catch {
+    return 0
+  }
+}
+
+// ------------------------------------------------------------
+// MODO INVENTARIO (conciliación portal ↔ base de datos)
+// ------------------------------------------------------------
+
+/** Una fila leída del listado "Mis Causas > Familia" del portal. */
+export interface FilaInventario {
+  rit: string
+  caratulado?: string | null
+  estado_procesal?: string | null
+}
+
+/**
+ * Normaliza un RIT quitándole la LETRA (solo número-año). Es la comparación honesta para
+ * conciliar: la letra es la parte menos fiable del dato (P↔X vinculadas, causas que cambian
+ * de materia) y los RIT de la curadora muchas veces se anotan sin letra.
+ *
+ * ⚠️ Debe coincidir con la columna generada `rit_sin_letra` de schema-001-cobertura.sql.
+ */
+export function ritSinLetra(rit: string): string {
+  return (rit || '').toUpperCase().replace(/\s+/g, '').replace(/[^0-9-]/g, '')
+    .replace(/^-+/, '').replace(/-+$/, '')
+}
+
+/**
+ * Escribe el inventario del portal. `corridaEn` es el MISMO timestamp para todas las filas
+ * de una corrida: es lo que las agrupa y lo que define cuál es "el último inventario".
+ *
+ * NO llamarlo si el barrido quedó incompleto (corte por horario, límite o sesión perdida):
+ * un inventario parcial se leería como "estas causas ya no están en el portal" y marcaría
+ * desapariciones falsas. Es mejor no escribir nada ese día.
+ *
+ * @returns false si no se pudo escribir (tabla sin crear, error de la BD).
+ */
+export async function guardarInventarioPortal(
+  filas: FilaInventario[],
+  corridaEn: string,
+): Promise<boolean> {
+  const sb = initSupabase()
+
+  const unicos = new Map<string, FilaInventario>()
+  for (const f of filas) {
+    const rit = (f.rit || '').trim().toUpperCase()
+    if (rit && !unicos.has(rit)) unicos.set(rit, { ...f, rit })
+  }
+
+  const registros = Array.from(unicos.values()).map(f => {
+    const p = parseRIT(f.rit)
+    return {
+      rit: f.rit,
+      rol: p ? Number(p.numero) : null,
+      anio: p ? Number(p.año) : null,
+      caratulado: f.caratulado ?? null,
+      estado_portal: f.estado_procesal ?? null,
+      detectado_en: corridaEn,
+    }
+  })
+  if (registros.length === 0) return false
+
+  for (let i = 0; i < registros.length; i += 200) {
+    const lote = registros.slice(i, i + 200)
+    const { error } = await sb.from('inventario_portal')
+      .upsert(lote, { onConflict: 'rit,detectado_en' })
+    if (error) {
+      if ((error as any).code === '42P01') {
+        log('warn', '  No existe la tabla inventario_portal: ejecutá schema-001-cobertura.sql en Supabase para habilitar el modo inventario.')
+      } else {
+        log('warn', `  El inventario no se pudo guardar (${lote.length} filas): ${error.message}`)
+      }
+      return false
+    }
+  }
+  return true
+}
+
+/**
+ * Marca como desaparecidas las causas que estaban en el inventario ANTERIOR y no aparecieron
+ * en éste. Solo tiene sentido después de un barrido completo: por eso el llamador la usa
+ * únicamente cuando el recorrido de años terminó sin cortes.
+ *
+ * NO borra la fila ni le cambia el estado a la causa: deja `desaparecida_desde` para que la
+ * conciliación distinga "el portal ya no la muestra" de "nunca la vi". Una causa archivada
+ * deja de aparecer en Mis Causas sin estar terminada, así que esto es un aviso, no una baja.
+ */
+export async function marcarDesaparecidas(
+  corridaEn: string,
+  ritsVistos: Set<string>,
+): Promise<number> {
+  const sb = initSupabase()
+  try {
+    const { data: anterior } = await sb
+      .from('inventario_portal')
+      .select('detectado_en')
+      .lt('detectado_en', corridaEn)
+      .order('detectado_en', { ascending: false })
+      .limit(1)
+    if (!anterior || anterior.length === 0) return 0
+
+    const { data: filas, error } = await sb
+      .from('inventario_portal')
+      .select('id, rit')
+      .eq('detectado_en', anterior[0].detectado_en)
+      .is('desaparecida_desde', null)
+      .limit(5000)
+    if (error || !filas || filas.length === 0) return 0
+
+    const ids = filas
+      .filter((f: any) => !ritsVistos.has(String(f.rit).toUpperCase()))
+      .map((f: any) => f.id as string)
+    if (ids.length === 0) return 0
+
+    let ok = 0
+    for (let i = 0; i < ids.length; i += 100) {
+      const { data } = await sb.from('inventario_portal')
+        .update({ desaparecida_desde: corridaEn })
+        .in('id', ids.slice(i, i + 100))
+        .select('id')
+      ok += (data || []).length
+    }
+    return ok
+  } catch {
+    return 0
+  }
+}
+
+/**
+ * RITs (sin letra) ya cargados en la base, para que el bot diga en consola cuántas causas
+ * del portal todavía no están en ella. Null si la consulta falló.
+ */
+export async function getRitsSinLetraEnBd(): Promise<Set<string> | null> {
+  const sb = initSupabase()
+  try {
+    const enBd = new Set<string>()
+    for (let pagina = 0; pagina < 20; pagina++) {
+      const { data, error } = await sb
+        .from('causas')
+        .select('rit')
+        .not('rit', 'is', null)
+        .range(pagina * 1000, pagina * 1000 + 999)
+      if (error) { log('warn', `  No se pudo leer la base para conciliar: ${error.message}`); return null }
+      for (const c of data || []) enBd.add(ritSinLetra(String(c.rit)))
+      if ((data || []).length < 1000) break
+    }
+    return enBd
+  } catch {
+    return null
+  }
+}
+
 /**
  * Obtiene las causas a scrapear, PRIORIZANDO las que aún NO tienen datos (movimientos),
  * para que cada tanda ataque causas nuevas y no re-scrapee las ya hechas.
@@ -77,6 +436,14 @@ const MARCA_TERMINADA = '[TERMINADA]'
 export async function getCausasToScrape(limit: number, priorizarUrgentes: boolean): Promise<CausaToScrape[]> {
   const sb = initSupabase()
 
+  // Ruido sigue siendo ruido: las marcas legibles en notas ([REVISAR], [TERMINADA]…)
+  // excluyen aunque el estado diga pendiente (una causa TERMINADA no se re-escanea).
+  const esRuidoNotas = (notas: string | null) =>
+    (notas || '').includes(MARCA_NO_EN_PORTAL)
+    || (notas || '').includes(MARCA_REVISAR)
+    || (notas || '').includes(MARCA_REVISAR_LETRA)
+    || (notas || '').includes(MARCA_TERMINADA)
+
   // Fallback: consulta original (por si algo del camino optimizado falla).
   const fallback = async (): Promise<CausaToScrape[]> => {
     let q = sb.from('causas').select('id, rit').not('rit', 'is', null)
@@ -87,7 +454,31 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
   }
 
   try {
-    // 1) ids de causas que YA tienen movimientos (para no re-scrapear lo hecho).
+    // 0) CAMINO NUEVO: cola oficial por escaneo_estado (requiere schema-001-cobertura.sql).
+    //    'pendiente'/'error' primero, nunca escaneadas antes que escaneadas hace mucho.
+    //    Si la columna no existe todavía (42703), seguimos con el camino legacy abajo.
+    const seleccionCola: CausaToScrape[] = []
+    const { data: cola, error: errCola } = await sb
+      .from('causas')
+      .select('id, rit, notas')
+      .in('escaneo_estado', ['pendiente', 'error'])
+      .order('ultima_escaneada', { ascending: true, nullsFirst: true })
+      .order('pendientes_desde', { ascending: true, nullsFirst: false })
+      .limit(limit)
+    if (!errCola && errCola === null) {
+      for (const c of (cola || [])) {
+        if (esRuidoNotas((c as any).notas ?? null)) continue
+        seleccionCola.push({ id: c.id, rit: c.rit })
+      }
+      if (seleccionCola.length >= limit) {
+        log('info', `  Cola oficial: ${seleccionCola.length} pendientes/error (las más antiguas primero).`)
+        return seleccionCola.slice(0, limit)
+      }
+    } else if ((errCola as any)?.code !== '42703') {
+      log('warn', `  Consulta de cola falló (${errCola?.message}); usando selección legacy.`)
+    }
+
+    // 1) (legacy/complemento) ids de causas que YA tienen movimientos, para refresco.
     //    Se paginan los movimientos y se arma un Set de causa_id.
     const conMovimientos = new Set<string>()
     for (let desde = 0; ; desde += 1000) {
@@ -127,20 +518,18 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
     // hermana), no mas reintentos. Caso real: X-2772-2023 y P-8656-2023, donde el portal
     // solo tiene P-2772-2023 y C-8656-2023; FIX_LETRAS ya creo y vinculo las hermanas, que
     // SI se scrapean, asi que el expediente real queda monitoreado igual.
-    const esRuido = (c: { notas: string | null }) =>
-      (c.notas || '').includes(MARCA_NO_EN_PORTAL)
-      || (c.notas || '').includes(MARCA_REVISAR)
-      || (c.notas || '').includes(MARCA_REVISAR_LETRA)
-      || (c.notas || '').includes(MARCA_TERMINADA)
-    const ruido = causas.filter(esRuido).length
+    const ruido = causas.filter(c => esRuidoNotas(c.notas)).length
 
     // Prioridad 1: sin movimientos y sin marca de ruido.
-    const sinDatos = causas.filter(c => !conMovimientos.has(c.id) && !esRuido(c))
+    const sinDatos = causas.filter(c => !conMovimientos.has(c.id) && !esRuidoNotas(c.notas))
     // Prioridad 2: con movimientos (refresco), sin ruido.
-    const conDatos = causas.filter(c => conMovimientos.has(c.id) && !esRuido(c))
+    const conDatos = causas.filter(c => conMovimientos.has(c.id) && !esRuidoNotas(c.notas))
 
-    const seleccion = [...sinDatos, ...conDatos].slice(0, limit)
-    log('info', `  Cola: ${sinDatos.length} sin datos, ${conDatos.length} con datos, ${ruido} marcadas [NO EN PORTAL]. Se procesan ${seleccion.length}.`)
+    // Completar el cupo que la cola oficial no llenó (o todo, si aún no hay cola).
+    const enCola = new Set(seleccionCola.map(c => c.id))
+    const legacy = [...sinDatos, ...conDatos].filter(c => !enCola.has(c.id))
+    const seleccion = [...seleccionCola, ...legacy].slice(0, limit)
+    log('info', `  Selección: ${seleccionCola.length} de la cola oficial + refresco. Cola: ${sinDatos.length} sin datos, ${conDatos.length} con datos, ${ruido} en cuarentena por notas. Se procesan ${seleccion.length}.`)
     return seleccion.map(c => ({ id: c.id, rit: c.rit }))
   } catch (e: any) {
     log('warn', `  Selección optimizada falló (${e?.message ?? e}); usando orden simple.`)
@@ -158,6 +547,11 @@ export async function marcarCausaNoEnPortal(causaId: string): Promise<void> {
   try {
     const { data } = await sb.from('causas').select('notas').eq('id', causaId).limit(1)
     const notas: string = (data && data[0]?.notas) || ''
+    // Equivalente oficial en la cola: sale de pendientes como 'descatalogada' (el trigger
+    // limpia pendientes_desde). Se hace TAMBIÉN si la nota ya estaba: una causa heredada del
+    // Excel puede tener [NO EN PORTAL] en notas y el estado 'pendiente' puesto por el
+    // backfill, y sin esto quedaría cuenta de más en "pendientes" para siempre.
+    await setEscaneoEstado(causaId, 'descatalogada')
     if (notas.includes(MARCA_NO_EN_PORTAL)) {
       // Ya marcada: solo actualizar updated_at para mantenerla al fondo de la cola.
       await sb.from('causas').update({ updated_at: new Date().toISOString() }).eq('id', causaId)
@@ -195,8 +589,18 @@ export async function registrarIntentoFallido(causaId: string, maxIntentos = 3):
   try {
     const { data } = await sb.from('causas').select('notas').eq('id', causaId).limit(1)
     const notas: string = (data && data[0]?.notas) || ''
-    // Si ya está fuera del loop (marcada [NO EN PORTAL] o ya en [REVISAR]), no hay nada que contar.
-    if (notas.includes(MARCA_NO_EN_PORTAL) || notas.includes(MARCA_REVISAR)) return false
+    // Si ya está fuera del loop (marcada [NO EN PORTAL] o ya en [REVISAR]), no hay nada que
+    // contar. Se reaprovecha el paso para PONER EL ESTADO que le corresponde: una causa
+    // heredada puede traer la marca en notas y seguir en 'pendiente' (el backfill no puede
+    // saberlo), y sin esto el panel contaría como pendiente algo que el bot ya descartó.
+    if (notas.includes(MARCA_NO_EN_PORTAL)) {
+      await setEscaneoEstado(causaId, 'descatalogada')
+      return false
+    }
+    if (notas.includes(MARCA_REVISAR)) {
+      await setEscaneoEstado(causaId, 'error')
+      return false
+    }
 
     const m = notas.match(RE_INTENTOS)
     const previos = m ? parseInt(m[1], 10) || 0 : 0
@@ -215,6 +619,9 @@ export async function registrarIntentoFallido(causaId: string, maxIntentos = 3):
         ? `${sinContador}\n${MARCA_REVISAR} el bot no la encontró tras ${actual} intentos (revisar manualmente: puede ser ruido/archivada o flakiness del portal).`
         : `${MARCA_REVISAR} el bot no la encontró tras ${actual} intentos (revisar manualmente: puede ser ruido/archivada o flakiness del portal).`
       await sb.from('causas').update({ notas: nuevas, updated_at: new Date().toISOString() }).eq('id', causaId)
+      // Cuarentena también en la cola oficial: 'error' queda visible en el panel como
+      // "N causas con error" en vez de desaparecer detrás de una nota.
+      await setEscaneoEstado(causaId, 'error')
       return true
     }
 
@@ -283,6 +690,9 @@ export async function limpiarMarcasNoEnPortal(): Promise<number> {
         .join('\n')
         .trim()
       await sb.from('causas').update({ notas: limpio || null, updated_at: new Date().toISOString() }).eq('id', c.id)
+      // Y reengancharla a la cola oficial: si no hacemos esto, la causa queda marcada
+      // como 'descatalogada' para siempre y el limpiar Marcas NO la devuelve a pendientes.
+      await setEscaneoEstado(c.id, 'pendiente')
       limpiadas++
     }
   } catch (e: any) {
@@ -338,29 +748,22 @@ export async function saveCausaData(data: CausaScrapedData, analysis: UrgencyAna
 }
 
 /**
- * Sincroniza movimientos (solo inserta nuevos, evita duplicados)
+ * Sincroniza movimientos (evita duplicados).
+ *
+ * DOS CAMINOS, deliberadamente:
+ *   A) Con schema-001-cobertura.sql aplicado: `upsert ... onConflict('causa_id,uniq_clave')`
+ *      con ignoreDuplicates. Una sola escritura, sin SELECT previo por causa, y la base
+ *      garantiza la unicidad (antes la dedupe dependía de que el `fecha|tramite` del bot
+ *      coincidiera byte a byte con el de la fila leída, y dos corridas podían duplicar si
+ *      el texto cambiaba de espacios).
+ *   B) Sin migración (o si el upsert falla por constraint/columna inexistente): el camino
+ *      viejo — leer existentes, filtrar, insertar.
+ *
+ * El código de error distingue: 42P10 = no hay constraint único; 42703 = columna
+ * uniq_clave inexistente. Ambos significan "migración no corrida" → caer al viejo.
  */
 async function syncMovimientos(sb: SupabaseClient, data: CausaScrapedData): Promise<void> {
-  // Obtener movimientos existentes para evitar duplicados
-  const { data: existing } = await sb
-    .from('movimientos')
-    .select('fecha, tramite')
-    .eq('causa_id', data.causa_id)
-  
-  const existingSet = new Set(
-    (existing || []).map(m => `${m.fecha}|${m.tramite}`)
-  )
-  
-  // Filtrar solo movimientos nuevos
-  const nuevos = data.movimientos.filter(m => {
-    const key = `${m.fecha}|${m.tramite}`
-    return !existingSet.has(key)
-  })
-  
-  if (nuevos.length === 0) return
-  
-  // Insertar en lotes
-  const records = nuevos.map(m => ({
+  const mapear = (nuevos: typeof data.movimientos) => nuevos.map(m => ({
     causa_id: data.causa_id,
     fecha: m.fecha,
     etapa: m.etapa || null,
@@ -369,7 +772,56 @@ async function syncMovimientos(sb: SupabaseClient, data: CausaScrapedData): Prom
     es_traslado_curador: m.es_traslado_curador,
     fuente: 'pjud_bot',
   }))
-  
+
+  // ---- Camino A: upsert con constraint único (una escritura, sin SELECT por causa). ----
+  try {
+    let insertados = 0
+    let fallo = false
+    for (let i = 0; i < data.movimientos.length; i += 100) {
+      const batch = mapear(data.movimientos.slice(i, i + 100))
+      const { data: creados, error } = await sb
+        .from('movimientos')
+        .upsert(batch, { onConflict: 'causa_id,uniq_clave', ignoreDuplicates: true })
+        .select('id')
+      if (error) {
+        const code = (error as any)?.code
+        if (code === '42P10' || code === '42703') break  // migración pendiente → camino B
+        fallo = true
+        log('warn', `Error insertando movimientos de ${data.rit}: ${error.message}`)
+        break
+      }
+      insertados += (creados || []).length
+    }
+    if (!fallo) {
+      if (insertados > 0) log('info', `  +${insertados} movimientos nuevos para ${data.rit}`)
+      return
+    }
+  } catch {
+    // se cae al camino viejo abajo
+  }
+
+  // ---- Camino B (legacy): leer, filtrar en memoria, insertar. ----
+  // Obtener movimientos existentes para evitar duplicados
+  const { data: existing } = await sb
+    .from('movimientos')
+    .select('fecha, tramite')
+    .eq('causa_id', data.causa_id)
+
+  const existingSet = new Set(
+    (existing || []).map(m => `${m.fecha}|${m.tramite}`)
+  )
+
+  // Filtrar solo movimientos nuevos
+  const nuevos = data.movimientos.filter(m => {
+    const key = `${m.fecha}|${m.tramite}`
+    return !existingSet.has(key)
+  })
+
+  if (nuevos.length === 0) return
+
+  // Insertar en lotes
+  const records = mapear(nuevos)
+
   for (let i = 0; i < records.length; i += 100) {
     const batch = records.slice(i, i + 100)
     const { error } = await sb.from('movimientos').insert(batch)
@@ -377,39 +829,66 @@ async function syncMovimientos(sb: SupabaseClient, data: CausaScrapedData): Prom
       log('warn', `Error insertando movimientos de ${data.rit}: ${error.message}`)
     }
   }
-  
+
   log('info', `  +${nuevos.length} movimientos nuevos para ${data.rit}`)
 }
 
 /**
- * Sincroniza audiencias (inserta nuevas, actualiza existentes)
+ * Sincroniza audiencias (inserta nuevas, no duplica).
+ * Igual que syncMovimientos: upsert con onConflict si la migración está aplicada, y
+ * si no, el filtro en memoria de siempre.
  */
 async function syncAudiencias(sb: SupabaseClient, data: CausaScrapedData): Promise<void> {
+  const registros = data.audiencias.map(a => ({
+    causa_id: data.causa_id,
+    fecha: a.fecha,
+    tipo: a.tipo,
+    notas: a.estado ? `Estado: ${a.estado}${a.sala ? ` | Sala: ${a.sala}` : ''}` : null,
+  }))
+
+  try {
+    const { data: creadas, error } = await sb
+      .from('audiencias')
+      .upsert(registros, { onConflict: 'causa_id,uniq_clave', ignoreDuplicates: true })
+      .select('id')
+    const code = (error as any)?.code
+    if (!error) {
+      const n = (creadas || []).length
+      if (n > 0) log('info', `  +${n} audiencias nuevas para ${data.rit}`)
+      return
+    }
+    if (code !== '42P10' && code !== '42703') {
+      log('warn', `Error insertando audiencias de ${data.rit}: ${error.message}`)
+      return
+    }
+    // migración no corrida → sigue con el camino legacy
+  } catch {
+    // se cae al camino viejo abajo
+  }
+
   // Obtener audiencias existentes
   const { data: existing } = await sb
     .from('audiencias')
     .select('id, fecha, tipo')
     .eq('causa_id', data.causa_id)
-  
+
   const existingMap = new Map(
     (existing || []).map(a => [`${a.fecha}|${a.tipo}`, a.id])
   )
-  
+
   // Separar en nuevas y existentes
   const nuevas = data.audiencias.filter(a => {
     const key = `${a.fecha}|${a.tipo}`
     return !existingMap.has(key)
   })
-  
+
   if (nuevas.length > 0) {
-    const records = nuevas.map(a => ({
+    const { error } = await sb.from('audiencias').insert(nuevas.map(a => ({
       causa_id: data.causa_id,
       fecha: a.fecha,
       tipo: a.tipo,
       notas: a.estado ? `Estado: ${a.estado}${a.sala ? ` | Sala: ${a.sala}` : ''}` : null,
-    }))
-    
-    const { error } = await sb.from('audiencias').insert(records)
+    })))
     if (error) {
       log('warn', `Error insertando audiencias de ${data.rit}: ${error.message}`)
     } else {
@@ -475,12 +954,17 @@ export async function saveBotError(
 }
 
 /**
- * Guarda el estado de una ejecución del bot, incluyendo las métricas de
+ * Guarda el estado FINAL de una ejecución del bot, incluyendo las métricas de
  * auto-aprendizaje (duración, velocidad, tasa de éxito).
  *
+ * ES UN UPSERT sobre run_id, no un insert. Desde que el orquestador va publicando
+ * progreso en vivo (upsertBotRunProgreso), la fila de la corrida YA existe cuando
+ * llegamos acá; con `insert` el cierre fallaba por unique y se PERDÍA el registro
+ * completo de la sesión.
+ *
  * Robustez: si las columnas nuevas todavía no existen en la BD (no se corrió
- * schema-bot-aprendizaje.sql), reintenta el insert solo con las columnas base
- * para no perder el registro de la sesión.
+ * schema-bot-aprendizaje.sql), reintenta solo con las columnas base para no perder
+ * el registro de la sesión.
  */
 export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
   const sb = initSupabase()
@@ -507,7 +991,20 @@ export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
     bloqueo_detectado: status.bloqueo_detectado ?? false,
   }
 
-  const { error } = await sb.from('bot_runs').insert(conMetricas)
+  // Si run_id NO tiene constraint/índice único (migración de cobertura no corrida),
+  // el upsert devuelve 42P10. En ese caso NO tiramos la corrida: caemos al insert
+  // simple de siempre, que en esa base vieja es la única forma de registrarla.
+  const escribe = async (payload: Record<string, any>) => {
+    const up = await sb.from('bot_runs').upsert(payload, { onConflict: 'run_id' })
+    if (!up.error) return null
+    if ((up.error as any)?.code === '42P10') {
+      const ins = await sb.from('bot_runs').insert(payload)
+      return ins.error
+    }
+    return up.error
+  }
+
+  const error = await escribe(conMetricas)
   if (!error) return
 
   // Solo degradamos a "columnas base" si el error es COLUMNA INEXISTENTE (Postgres 42703),
@@ -519,7 +1016,7 @@ export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
     return
   }
 
-  const { error: baseErr } = await sb.from('bot_runs').insert(base)
+  const baseErr = await escribe(base)
   if (baseErr) {
     log('warn', `No se pudo guardar estado del bot (columnas base): ${baseErr.message}`)
   } else {
@@ -549,15 +1046,24 @@ export async function saveStepMetric(metric: BotStepMetric): Promise<void> {
 }
 
 /**
- * Marca una causa como "última vez scrapeada"
+ * Marca una causa como "última vez scrapeada" y oficializa su estado de cola.
+ *   movimientosEncontrados > 0 → 'ok'; == 0 → 'sin_datos' (el portal la tiene PERO sin
+ *   movimientos: NO es "falta escanear", y esa distinción es la que faltaba para que
+ *   el contador de pendientes fuera honesto).
  */
-export async function markCausaScraped(causaId: string): Promise<void> {
+export async function markCausaScraped(causaId: string, movimientosEncontrados = 0, runId?: string): Promise<void> {
   const sb = initSupabase()
   
   await sb
     .from('causas')
     .update({ updated_at: new Date().toISOString() })
     .eq('id', causaId)
+
+  await setEscaneoEstado(
+    causaId,
+    movimientosEncontrados > 0 ? 'ok' : 'sin_datos',
+    { contarScan: true, runId },
+  )
 }
 
 
@@ -716,11 +1222,18 @@ export async function upsertCausaHermana(
       return { id: existente[0].id, creada: false }
     }
     const { rol, anio } = rolAnioDeRit(rit)
-    const { data, error } = await sb
+    // origen: 'portal' = la creó el bot al descubrir la hermana (no el Excel ni el pegado).
+    // Si la columna no existe todavía (migración pendiente) el insert con `origen` falla con
+    // 42703; se reintenta SIN esa columna para no perder la creación de la hermana.
+    const base = { rit, rol, anio, tipo: tipoSeguro, caratulado: caratulado || null }
+    let { data, error } = await sb
       .from('causas')
-      .insert({ rit, rol, anio, tipo: tipoSeguro, caratulado: caratulado || null })
+      .insert({ ...base, origen: 'portal' })
       .select('id')
       .limit(1)
+    if (error && (error as any).code === '42703') {
+      ({ data, error } = await sb.from('causas').insert(base).select('id').limit(1))
+    }
     if (error) {
       log('warn', `  No se pudo crear la causa hermana ${rit}: ${error.message}`)
       return { id: null, creada: false }

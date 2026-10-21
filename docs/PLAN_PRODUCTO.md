@@ -165,7 +165,7 @@ Ejemplo de la pantalla principal ("Qué necesitas decidir hoy"):
 | **Sync inteligente a Supabase** | `src/bot/modules/supabaseSync.ts` | Inserta solo movimientos nuevos (anti-duplicados), logs | ⭐⭐⭐⭐ Robusto |
 | **Config anti-detección** | `src/bot/config/index.ts` | Delays humanos, horario laboral, límite por sesión, user-agent | ⭐⭐⭐⭐ Mitiga riesgo de CAPTCHA |
 | **Modelo de datos** | `schema*.sql` | causas, movimientos, audiencias, medidas, bot_runs | ⭐⭐⭐ Base sólida para extender |
-| **Ingesta por email (IMAP)** | `src/email/` | Lee correos del PJUD y parsea | ⭐⭐⭐ Fuente alternativa al scraping (menos riesgo de bloqueo) |
+| **Ingesta por pegado** | `src/lib/asignaciones*.ts` + `/asignaciones` | Parsea la tabla del correo de asignación y la guarda | ⭐⭐⭐ Alta causas sin tocar el portal |
 
 ### Hallazgo clave
 `detection.ts` **ya calcula** lo que definimos como corazón del producto:
@@ -178,7 +178,7 @@ El copiloto **no se construye de cero: se evoluciona** desde este módulo.
 
 ```
 +- CAPA 1: INGESTA (ya existe) ----------------------+
-|  Bot Playwright OJV  +  Ingesta email IMAP         |
+|  Bot Playwright OJV  +  Pegado de asignaciones     |
 |  -> alimenta la BD con movimientos frescos         |
 +---------------------+-------------------------------+
                      v
@@ -244,8 +244,10 @@ Rangos estimados de mercado (NO confirmados — pendiente validar con los compet
   desafío técnico y de negocio, pero también el foso defensivo** (si se resuelve bien,
   es difícil de copiar).
 - **Mitigación existente:** delays 10–25s, horario laboral 8–18h, límite por sesión,
-  user-agent real. **Alternativa de menor riesgo:** priorizar la ingesta por email (IMAP)
-  sobre el scraping cuando sea posible.
+  user-agent real. **Alternativa de menor riesgo:** la ingesta por pegado (`/asignaciones`)
+  no toca el portal, así que el bot puede escanear menos causas por sesión. El interceptor
+  IMAP que se planteó acá quedó dado de baja el 21-oct-2026 (Exchange Online ya no acepta
+  autenticación básica; ver `docs/ASIGNACIONES.md`).
 
 ### Decisiones abiertas
 1. ¿Diferenciador principal: cobro/cuotas, resumen IA, o portal del cliente?

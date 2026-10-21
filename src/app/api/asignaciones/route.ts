@@ -4,16 +4,15 @@
 // POST /api/asignaciones
 //   body: { contenido, contenidoTexto?, confirmar? }
 //
-// Reemplaza al interceptor IMAP, que NO puede funcionar: el correo de la
-// curadora está en Microsoft 365 y Microsoft eliminó la autenticación básica
-// (usuario+contraseña) para IMAP/POP en Exchange Online, que es justo lo que
-// usaba src/email/modules/imapClient.ts. La vía automática sería Microsoft
-// Graph con OAuth, que requiere que TI de cajmetro registre una aplicación.
+// Nace del interceptor IMAP, que NO podía funcionar: el correo de la curadora está en
+// Microsoft 365 y Microsoft eliminó la autenticación básica (usuario+contraseña) para
+// IMAP/POP en Exchange Online. La vía automática sería Microsoft Graph con OAuth, que
+// requiere que TI de cajmetro registre una aplicación. El interceptor quedó dado de
+// baja; esta ruta conserva su parser y su sync.
 //
-// Mientras eso no exista, la curadora copia el correo y lo pega acá. Se
-// reutiliza TAL CUAL la lógica ya construida y probada del interceptor:
-// el parser de la tabla (parseAsignaciones) y el sync a Supabase
-// (syncAsignaciones). Lo único que cambia es de dónde llega el texto.
+// Mientras eso no exista, la curadora copia el correo y lo pega acá. Se reutiliza TAL
+// CUAL la lógica ya construida y probada: el parser de la tabla (parseAsignaciones) y
+// el sync a Supabase (syncAsignaciones). Lo único que cambia es de dónde llega el texto.
 //
 // Flujo de DOS PASOS a propósito: primero `confirmar: false` devuelve una
 // vista previa que NO escribe nada (así la curadora ve qué se detectó y qué
@@ -23,9 +22,9 @@
 
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
-// Se importa de @/lib y NUNCA de @/email: ese módulo es un CLI que arrastra imapflow y
-// rompe el build en Vercel (verificado por bisección — fallaba incluso importando el
-// parser sin modificar). La lógica pura vive en src/lib/ justamente por eso.
+// La lógica pura vive en @/lib, separada del CLI del bot a propósito: importar desde un
+// módulo de CLI rompía el build en Vercel (verificado por bisección — fallaba incluso
+// importando el parser sin modificar).
 import { parseAsignaciones } from '@/lib/asignacionesParser'
 import { syncAsignaciones } from '@/lib/asignacionesSync'
 import type { Asignacion } from '@/lib/asignacionesParser'
@@ -111,8 +110,11 @@ export async function POST(req: NextRequest) {
   // texto plano. Se parsean las dos y se usa la que detecte más asignaciones, porque según
   // desde dónde se copie (Outlook escritorio, web, Android) una u otra puede venir vacía.
   const porHtml = parseAsignaciones(contenido)
-  const porTexto = contenidoTexto ? parseAsignaciones(contenidoTexto) : { asignaciones: [], origen: 'vacio' as const }
+  const porTexto = contenidoTexto ? parseAsignaciones(contenidoTexto) : { asignaciones: [], origen: 'vacio' as const, descartes: [] as string[] }
   const mejor = porTexto.asignaciones.length > porHtml.asignaciones.length ? porTexto : porHtml
+  // "Descartes": tokens con pinta de RIT que el parser NO reconoció. Se muestran SIEMPRE:
+  // lo que se descarta en silencio es exactamente cómo se pierde el control del inventario.
+  const descartes = [...new Set([...(porHtml.descartes ?? []), ...(porTexto.descartes ?? [])])]
 
   if (mejor.asignaciones.length === 0) {
     return NextResponse.json({
@@ -120,6 +122,7 @@ export async function POST(req: NextRequest) {
       pista: 'Revisá que hayas copiado la TABLA del correo (la que tiene RIT, FECHA AUD, FECHA ING y CURADOR). Tip: en el correo hacé Ctrl+A y después Ctrl+C para copiar todo.',
       asignaciones: [],
       origen: 'vacio',
+      no_reconocidas: descartes,
     }, { status: 422 })
   }
 
@@ -163,6 +166,7 @@ export async function POST(req: NextRequest) {
       nuevas,
       existentes: previa.length - nuevas,
       sin_fecha_audiencia: previa.filter((a) => !a.fecha_audiencia).length,
+      no_reconocidas: descartes,
     }, { headers: { 'Cache-Control': 'no-store' } })
   }
 
@@ -174,7 +178,7 @@ export async function POST(req: NextRequest) {
       email_id: `pegado_${Date.now().toString(36)}`,
       fecha: new Date().toISOString().split('T')[0],
       remitente: 'pegado manualmente en CausasPro',
-    })
+    }, { descartes })
     return NextResponse.json({
       modo: 'guardado',
       origen: mejor.origen,
@@ -183,6 +187,7 @@ export async function POST(req: NextRequest) {
       causas_existentes: resultado.causas_existentes,
       audiencias_creadas: resultado.audiencias_creadas,
       errores: resultado.errores,
+      no_reconocidas: descartes,
       asignaciones: previa,
     }, { headers: { 'Cache-Control': 'no-store' } })
   } catch (e: any) {

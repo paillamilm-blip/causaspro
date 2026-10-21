@@ -33,6 +33,7 @@ interface Previa {
   nuevas: number
   existentes: number
   sin_fecha_audiencia: number
+  no_reconocidas?: string[]
 }
 
 interface Guardado {
@@ -40,6 +41,28 @@ interface Guardado {
   causas_existentes: number
   audiencias_creadas: number
   errores: string[]
+  no_reconocidas?: string[]
+}
+
+/**
+ * Bloque de "líneas no reconocidas": tokens con pinta de RIT que el parser descartó.
+ * Se muestran SIEMPRE (en previa y guardado). Regla de producto: algo que el sistema
+ * no entiende y calla es exactamente cómo se pierde el control del inventario.
+ */
+function DescartesAviso({ items }: { items?: string[] }) {
+  if (!items || items.length === 0) return null
+  return (
+    <div className="mt-3 pt-3 border-t border-amber-200">
+      <p className="text-sm font-medium text-amber-800">
+        ⚠️ No pude reconocer {items.length} {items.length === 1 ? 'línea' : 'líneas'} como RIT
+        (revisá si alguna era una causa que quedó afuera):
+      </p>
+      <ul className="text-xs text-amber-700 list-disc list-inside mt-1 font-mono">
+        {items.slice(0, 20).map((d, i) => <li key={i}>{d}</li>)}
+        {items.length > 20 && <li>… y {items.length - 20} más</li>}
+      </ul>
+    </div>
+  )
 }
 
 /** Muestra una fecha ISO (yyyy-mm-dd) como dd/mm/yyyy, o un guion si no hay. */
@@ -129,6 +152,7 @@ export default function AsignacionesPage() {
           </ol>
           <p className="text-xs text-blue-700 mt-3">
             Podés hacerlo con correos viejos también: si una causa ya estaba cargada, no se duplica.
+            Y si tenés solo una <strong>lista de RIT</strong> (uno por línea, con o sin letra), pegala tal cual: también la reconoce.
           </p>
         </section>
 
@@ -246,6 +270,7 @@ export default function AsignacionesPage() {
                 </tbody>
               </table>
             </div>
+            <DescartesAviso items={previa.no_reconocidas} />
           </section>
         )}
 
@@ -266,6 +291,7 @@ export default function AsignacionesPage() {
                 </ul>
               </div>
             )}
+            <DescartesAviso items={guardado.no_reconocidas} />
             <div className="flex items-center gap-2 mt-4 flex-wrap">
               <Link href="/" className="bg-green-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-green-700 transition">
                 Ver el dashboard
@@ -275,7 +301,8 @@ export default function AsignacionesPage() {
               </button>
             </div>
             <p className="text-xs text-green-700 mt-3">
-              Las causas nuevas quedan sin datos del portal. Corré <strong>bot-mantenimiento.bat</strong> para que el bot les traiga los movimientos.
+              Las {guardado.causas_nuevas} causas nuevas entraron <strong>automáticamente a la cola de escaneo</strong>
+              (quedan "pendientes"). La cantidad pendiente se ve en el dashboard; corré el bot para vaciar la cola.
             </p>
           </section>
         )}

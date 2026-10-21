@@ -27,7 +27,9 @@ guardando todo en Supabase.
   del usuario (`correr-bot-playwright.bat`, modo `test_single`) y en GitHub Actions
   (`.github/workflows/bot-pjud.yml`).
 - **BD:** Supabase (Postgres). Schemas en la raíz: `schema*.sql`.
-- **Email:** módulo IMAP (`src/email/`) para sincronizar asignaciones.
+- **Ingesta:** pegado de las causas asignadas en `/asignaciones` (`src/app/api/asignaciones/`).
+  El módulo IMAP (`src/email/`) se dio de baja el 21-oct-2026: Exchange Online no acepta
+  autenticación usuario+contraseña, así que nunca pudo leer el buzón.
 
 ## Convenciones de trabajo (preferencias del usuario)
 

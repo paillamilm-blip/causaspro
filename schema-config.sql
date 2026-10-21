@@ -1,5 +1,5 @@
 -- ============================================================
--- CAUSASPRO - Tabla de configuración (credenciales PJUD + IMAP)
+-- CAUSASPRO - Tabla de configuración (credenciales PJUD)
 -- Ejecutar en: https://supabase.com/dashboard/project/ggwpikokzhckjpwyltye/sql/new
 -- ============================================================
 
@@ -20,10 +20,6 @@ CREATE TABLE IF NOT EXISTS configuracion (
 INSERT INTO configuracion (clave, valor, encriptado, descripcion) VALUES
     ('pjud_rut', NULL, FALSE, 'RUT para login en Oficina Judicial Virtual (formato: 12345678-9)'),
     ('pjud_password', NULL, TRUE, 'Contraseña del portal PJUD'),
-    ('imap_host', NULL, FALSE, 'Servidor IMAP del correo (ej: mail.cajmetro.cl)'),
-    ('imap_user', NULL, FALSE, 'Email completo (ej: usuario@cajmetro.cl)'),
-    ('imap_password', NULL, TRUE, 'Contraseña del correo'),
-    ('imap_port', '993', FALSE, 'Puerto IMAP (993 para SSL)'),
     ('bot_max_causas', '25', FALSE, 'Máximo de causas por sesión del bot'),
     ('bot_horario_1', '13:30', FALSE, 'Primera ejecución del bot (hora Chile)'),
     ('bot_horario_2', '02:00', FALSE, 'Segunda ejecución del bot (hora Chile)'),
@@ -51,5 +47,10 @@ EXCEPTION WHEN OTHERS THEN
     RETURN NULL;
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- El interceptor de correo (IMAP) quedó dado de baja: las causas entran
+-- pegándolas en /asignaciones. Esto borra las claves residuales de bases
+-- donde este script ya se había ejecutado antes. Es seguro de repetir.
+DELETE FROM configuracion WHERE clave LIKE 'imap_%';
 
 -- ✅ LISTO

@@ -576,7 +576,11 @@ async function selectAllInDropdown(page: Page, dropdownLabel: string): Promise<v
 // IMPORTANTE: Esperar a que el formulario de Familia cargue antes de interactuar
 // ORDEN CORRECTO: 1) Familia tab, 2) Filtros, 3) Tipo Causa (5/5), 4) Estado (12/12), 5) Año, 6) Buscar
 // ============================================================
-export async function searchByYear(page: Page, year: string): Promise<CausaFoundInPortal[]> {
+export async function searchByYear(
+  page: Page,
+  year: string,
+  opciones?: { mantenerRut?: boolean },
+): Promise<CausaFoundInPortal[]> {
   log('info', `  Buscando causas del año ${year}...`)
   
   try {
@@ -592,27 +596,36 @@ export async function searchByYear(page: Page, year: string): Promise<CausaFound
     }
     await sleep(2000)
 
-    // PASO 2.5: Limpiar campo RUT (auto-rellenado con RUT del curador tras login)
-    // Las causas NO estan asociadas al RUT sino al RIT asignado por la jefa.
-    // Si el RUT queda con valor, la busqueda filtra por ese RUT y retorna 0 resultados.
-    // El formulario tiene 2 inputs de RUT: el numero principal y el digito verificador.
-    log('info', '  Limpiando campo Rut (no filtrar por RUT del curador)...')
-    await page.evaluate(() => {
-      const inputs = document.querySelectorAll('input')
-      for (const input of inputs) {
-        if ((input as HTMLElement).offsetParent === null) continue // Solo visibles
-        const name = (input.getAttribute('name') || '').toLowerCase()
-        const id = (input.getAttribute('id') || '').toLowerCase()
-        const ph = (input.getAttribute('placeholder') || '').toLowerCase()
-        // Match inputs related to RUT: main number field and verification digit
-        if (name.includes('rut') || id.includes('rut') || ph.includes('rut') ||
-            name.includes('dv') || id.includes('dv')) {
-          (input as HTMLInputElement).value = ''
-          input.dispatchEvent(new Event('input', { bubbles: true }))
-          input.dispatchEvent(new Event('change', { bubbles: true }))
+    // PASO 2.5: Campo RUT (auto-rellenado con el RUT del curador tras el login).
+    // Teoría histórica: las causas NO están asociadas al RUT sino al RIT que asigna la jefa,
+    // así que si el RUT queda con valor la búsqueda filtraría por él y daría 0 resultados.
+    // Contra-evidencia (.kiro/steering/estado-proyecto.md, PR #20): el RUT se autorellena
+    // con el del curador y NO hay que tocarlo; de hecho limpiarlo es lo que produce el
+    // listado de TODO el portal (~17.500 filas), que es justo lo que dispara el CAPTCHA.
+    // Nadie lo comprobó en vivo, así que se decide por parámetro: `mantenerRut` lo deja intacto
+    // (lo usa el modo inventario, que quiere SOLO las causas de ella). Por defecto se
+    // limpia, o sea el comportamiento de siempre queda idéntico.
+    if (opciones?.mantenerRut) {
+      log('info', '  RUT del curador: SE MANTIENE (filtro puesto a propósito, modo inventario).')
+    } else {
+      log('info', '  Limpiando campo Rut (no filtrar por RUT del curador)...')
+      await page.evaluate(() => {
+        const inputs = document.querySelectorAll('input')
+        for (const input of inputs) {
+          if ((input as HTMLElement).offsetParent === null) continue // Solo visibles
+          const name = (input.getAttribute('name') || '').toLowerCase()
+          const id = (input.getAttribute('id') || '').toLowerCase()
+          const ph = (input.getAttribute('placeholder') || '').toLowerCase()
+          // Match inputs related to RUT: main number field and verification digit
+          if (name.includes('rut') || id.includes('rut') || ph.includes('rut') ||
+              name.includes('dv') || id.includes('dv')) {
+            (input as HTMLInputElement).value = ''
+            input.dispatchEvent(new Event('input', { bubbles: true }))
+            input.dispatchEvent(new Event('change', { bubbles: true }))
+          }
         }
-      }
-    })
+      })
+    }
     await sleep(500)
     
     // PASO 3: Tipo Causa → seleccionar TODAS las opciones del <select multiple> nativo.

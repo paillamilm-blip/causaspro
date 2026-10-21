@@ -1,9 +1,19 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
+import { estaAutorizado, excedeRateLimit } from '@/lib/apiAuth'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+// Diagnóstico interno: conteos por tabla, RIT y fechas de audiencia. Se sirve con
+// service_role, así que SIN token cualquiera que conociera la URL pública leería metadatos
+// de causas de menores. Fail-closed como el resto de las rutas.
+export async function GET(req: NextRequest) {
+  if (!estaAutorizado(req)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
+  if (excedeRateLimit(req, 'admin-diagnostico', 10, 60_000)) {
+    return NextResponse.json({ error: 'Demasiadas consultas, esperá un momento' }, { status: 429 })
+  }
   try {
     const supabase = createAdminClient()
 

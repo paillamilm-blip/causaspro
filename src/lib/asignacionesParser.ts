@@ -2,16 +2,12 @@
 // CAUSASPRO - Parser de la tabla de ASIGNACIONES del correo de la jefa
 // Formato: RIT | FECHA AUD | FECHA ING | CURADOR
 // ------------------------------------------------------------
-// Vive en src/lib/ (lado WEB) y NO en src/email/ a propósito.
+// Vive en src/lib/ (lado WEB) y NO junto al bot a propósito.
 //
-// `src/email/` es un módulo de CLI que se ejecuta con `tsx src/email/index.ts` y arrastra
-// `imapflow`. Cuando una ruta de Next importaba desde ahí, el build de Vercel fallaba
-// (verificado por bisección: hasta importar el parser SIN modificar lo rompía). Además el
-// repo ya separa deliberadamente el bot de la web (ver la nota de "espejado" en
-// materiasFamilia.ts), así que esta es la ubicación coherente.
-//
-// El CLI de correo sigue usándolo importándolo desde acá: la dependencia va en una sola
-// dirección (src/email → src/lib), nunca al revés.
+// Lo consume la ruta /api/asignaciones. Cuando vivió junto al interceptor de correo
+// —un módulo de CLI que arrastra `imapflow`— el build de Vercel fallaba solo con
+// importarlo (verificado por bisección). El interceptor quedó dado de baja, pero la
+// separación web / CLI-bot se mantiene por lo mismo.
 // ============================================================
 
 /** Una fila de la tabla de asignaciones, ya normalizada. */
@@ -29,7 +25,7 @@ export interface Asignacion {
  * | RIT          | FECHA AUD   | FECHA ING   | CURADOR      |
  * | P-8141-2026  | 20/08/2026  | 10/08/2026  | PAULA VARGAS |
  */
-export function parseAsignacionesFromHtml(html: string): Asignacion[] {
+export function parseAsignacionesFromHtml(html: string, descartes?: string[]): Asignacion[] {
   const asignaciones: Asignacion[] = []
   
   if (!html) return asignaciones
@@ -63,7 +59,12 @@ export function parseAsignacionesFromHtml(html: string): Asignacion[] {
       if (cells.length <= ritCol) continue
       
       const rit = cleanRIT(cells[ritCol])
-      if (!rit) continue  // Saltar filas sin RIT válido
+      if (!rit) {
+        // Celda con algo escrito pero RIT inválido: reportar, no descartar en silencio.
+        const bruto = (cells[ritCol] || '').trim()
+        if (bruto && descartes && !descartes.includes(bruto)) descartes.push(bruto)
+        continue
+      }
       
       const fechaAud = fechaAudCol >= 0 ? parseChileanDate(cells[fechaAudCol]) : null
       const fechaIng = fechaIngCol >= 0 ? parseChileanDate(cells[fechaIngCol]) : null
@@ -98,7 +99,7 @@ export function parseAsignacionesFromHtml(html: string): Asignacion[] {
  * El ORDEN de las fechas se deduce del encabezado si aparece (FECHA AUD / FECHA ING); si no
  * hay encabezado, se asume el formato del correo de la jefa: primero AUD, después ING.
  */
-export function parseAsignacionesFromText(texto: string): Asignacion[] {
+export function parseAsignacionesFromText(texto: string, descartes?: string[]): Asignacion[] {
   const asignaciones: Asignacion[] = []
   if (!texto) return asignaciones
 
@@ -108,8 +109,12 @@ export function parseAsignacionesFromText(texto: string): Asignacion[] {
   const posIng = plano.search(/FECHA\s*ING/)
   const ingresoPrimero = posIng >= 0 && posAud >= 0 && posIng < posAud
 
-  // RIT en cualquier parte de la línea: letra + número + año, con guion normal o largo.
-  const RE_RIT = /\b([A-Z])\s*[-–—]\s*(\d{1,6})\s*[-–—]\s*(\d{4})\b/i
+  // RIT en cualquier parte de la línea: letra OPCIONAL (1-3 chars: P, C, X, FA...),
+  // número y año de siglo (19|20)xx, con guion normal o largo.
+  const RE_RIT = /\b(?:([A-Z]{1,3})\s*[-–—]\s*)?(\d{1,6})\s*[-–—]\s*((?:19|20)\d{2})\b/i
+  // Token "parece RIT pero el parser lo rechazó" (año fuera de siglo, etc.): se reporta
+  // a la usuaria en vez de descartarse en silencio — lo que no se detecta no se cobra.
+  const RE_PARECE_RIT = /\b(?:[A-Z]{1,3}\s*[-–—]?)?\d{1,6}\s*[-–—]\s*\d{4}\b/
   // Fechas dd/mm/yyyy, dd-mm-yyyy o dd.mm.yyyy
   const RE_FECHA = /\b\d{1,2}[/\-.]\d{1,2}[/\-.]\d{4}\b/g
 
@@ -118,9 +123,28 @@ export function parseAsignacionesFromText(texto: string): Asignacion[] {
     if (!linea) continue
 
     const mRit = linea.match(RE_RIT)
-    if (!mRit) continue
-    const rit = cleanRIT(`${mRit[1]}-${mRit[2]}-${mRit[3]}`)
-    if (!rit) continue
+    if (!mRit) {
+      const sospechosa = linea.match(RE_PARECE_RIT)
+      if (sospechosa && descartes && !descartes.includes(sospechosa[0])) {
+        descartes.push(sospechosa[0])
+      }
+      continue
+    }
+    // Un RIT SIN letra solo se acepta si la línea es EXCLUSIVAMENTE ese RIT (modo lista).
+    // Evita falsos positivos como "12-08-2026" (fecha con guiones) leído como rol 8.
+    const esRITsuelto = /^(\d{1,6})[-–—]((?:19|20)\d{2})$/.test(linea)
+    if (!mRit[1] && !esRITsuelto) {
+      const sospechosa = linea.match(RE_PARECE_RIT)
+      if (sospechosa && descartes && !descartes.includes(sospechosa[0])) {
+        descartes.push(sospechosa[0])
+      }
+      continue
+    }
+    const rit = cleanRIT(`${mRit[1] ? mRit[1] + '-' : ''}${mRit[2]}-${mRit[3]}`)
+    if (!rit) {
+      if (descartes && !descartes.includes(mRit[0].trim())) descartes.push(mRit[0].trim())
+      continue
+    }
 
     const fechas = linea.match(RE_FECHA) || []
     const f1 = fechas[0] ? parseChileanDate(fechas[0]) : null
@@ -157,18 +181,20 @@ export function parseAsignacionesFromText(texto: string): Asignacion[] {
 export function parseAsignaciones(contenido: string): {
   asignaciones: Asignacion[]
   origen: 'tabla-html' | 'texto' | 'vacio'
+  descartes: string[]
 } {
   const limpio = (contenido || '').trim()
-  if (!limpio) return { asignaciones: [], origen: 'vacio' }
+  if (!limpio) return { asignaciones: [], origen: 'vacio', descartes: [] }
 
   let origen: 'tabla-html' | 'texto' | 'vacio' = 'tabla-html'
   let encontradas = parseAsignacionesFromHtml(limpio)
+  const descartes: string[] = []
 
   if (encontradas.length === 0) {
     // Sin tabla HTML utilizable → probar como texto. Se quitan los tags para que el texto
     // quede legible si lo pegado era HTML pero sin una <table> reconocible.
     const comoTexto = /<[a-z][\s\S]*>/i.test(limpio) ? htmlATexto(limpio) : limpio
-    encontradas = parseAsignacionesFromText(comoTexto)
+    encontradas = parseAsignacionesFromText(comoTexto, descartes)
     origen = encontradas.length > 0 ? 'texto' : 'vacio'
   }
 
@@ -185,7 +211,7 @@ export function parseAsignaciones(contenido: string): {
     })
   }
 
-  return { asignaciones: [...porRit.values()], origen }
+  return { asignaciones: [...porRit.values()], origen, descartes }
 }
 
 /**
@@ -274,8 +300,10 @@ function findColumnIndex(headers: string[], possibleNames: string[]): number {
 }
 
 /**
- * Limpia y valida un RIT
- * Acepta: "P-8141-2026", "P–8141–2026" (dash largo), "P- 8141-2026"
+ * Limpia y valida un RIT.
+ * Acepta: "P-8141-2026", "P–8141–2026" (dash largo), "P- 8141-2026",
+ *         letras de 1-3 chars ("FA-123-2026") y RIT SIN letra ("8141-2026",
+ *         como venía en algunos Excel: el tipo lo corrigue el bot después).
  */
 function cleanRIT(raw: string): string | null {
   if (!raw) return null
@@ -285,12 +313,19 @@ function cleanRIT(raw: string): string | null {
     .replace(/–/g, '-')         // Dash largo → corto
     .replace(/—/g, '-')         // Em dash → corto
     .replace(/\u00A0/g, '')     // Non-breaking space
+    .replace(/^-+/, '')         // Dash huérfano de un RIT sin letra
     .toUpperCase()
   
-  // Validar formato: LETRA-NUMERO-AÑO
-  const match = clean.match(/^([A-Z])-(\d{1,6})-(\d{4})$/)
+  // Formato LETRA(1-3)-NÚMERO-AÑO
+  const match = clean.match(/^([A-Z]{1,3})-(\d{1,6})-(\d{4})$/)
   if (match) {
     return `${match[1]}-${match[2]}-${match[3]}`
+  }
+
+  // Formato sin letra: NÚMERO-AÑO
+  const matchSinLetra = clean.match(/^(\d{1,6})-(\d{4})$/)
+  if (matchSinLetra) {
+    return `${matchSinLetra[1]}-${matchSinLetra[2]}`
   }
   
   // Intentar formato sin guiones: P81412026

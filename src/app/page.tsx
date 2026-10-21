@@ -5,6 +5,13 @@ import UploadExcel from '@/components/UploadExcel'
 import Dashboard from '@/components/Dashboard'
 import Link from 'next/link'
 
+/** Las APIs que escriben o borran piden token desde que se cerró /api/admin/reset.
+ *  Es el mismo NEXT_PUBLIC_REPORTE_TOKEN que ya usa /asignaciones. */
+function qsToken() {
+  const t = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+  return t ? `?token=${encodeURIComponent(t)}` : ''
+}
+
 export default function Home() {
   const [hasCausas, setHasCausas] = useState<boolean | null>(null)
   const [causasCount, setCausasCount] = useState(0)
@@ -20,7 +27,7 @@ export default function Home() {
         console.error('Error checking causas:', error.message)
         // Si hay error de conexión, intentar con fetch directo
         try {
-          const res = await fetch('/api/admin/reset')
+          const res = await fetch(`/api/admin/reset${qsToken()}`)
           const data = await res.json()
           if (data.datos_actuales?.causas > 0) {
             setCausasCount(data.datos_actuales.causas)
@@ -44,9 +51,9 @@ export default function Home() {
 
   async function handleReset() {
     if (!confirm('⚠️ ¿Estás segura? Esto borra TODAS las causas y datos. Es irreversible.')) return
-    if (!confirm('🚨 ÚLTIMA CONFIRMACIÓN: ¿Borrar todo?')) return
+    if (!confirm('🚨 ÚLTIMA CONFIRMACIÓN: ¿Borrar todo? Se van también los movimientos y audiencias que trajo el bot y las asignaciones que pegaste.')) return
     
-    const res = await fetch('/api/admin/reset', { method: 'DELETE' })
+    const res = await fetch(`/api/admin/reset${qsToken()}`, { method: 'DELETE' })
     const data = await res.json()
     if (data.ok) {
       alert('✅ Todo borrado. Puedes subir un nuevo archivo.')

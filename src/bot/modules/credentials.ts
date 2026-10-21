@@ -89,63 +89,6 @@ export async function getPJUDCredentials(): Promise<Credentials | null> {
 }
 
 /**
- * Obtiene credenciales IMAP para el interceptor de correos
- */
-export async function getIMAPCredentials(): Promise<{ host: string; user: string; password: string; port: number } | null> {
-  // Variables de entorno primero
-  if (process.env.IMAP_HOST && process.env.IMAP_USER && process.env.IMAP_PASSWORD) {
-    return {
-      host: process.env.IMAP_HOST,
-      user: process.env.IMAP_USER,
-      password: process.env.IMAP_PASSWORD,
-      port: parseInt(process.env.IMAP_PORT || '993'),
-    }
-  }
-  
-  // Leer de Supabase
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL
-  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
-  
-  if (!url || !key) return null
-  
-  const supabase = createClient(url, key)
-  const encryptKey = process.env.CONFIG_ENCRYPT_KEY || key.slice(0, 32)
-  
-  try {
-    const { data: configs } = await supabase
-      .from('configuracion')
-      .select('clave, valor, encriptado')
-      .in('clave', ['imap_host', 'imap_user', 'imap_password', 'imap_port'])
-    
-    if (!configs) return null
-    
-    const configMap: Record<string, string> = {}
-    
-    for (const c of configs) {
-      if (!c.valor) continue
-      
-      if (c.encriptado) {
-        configMap[c.clave] = await decryptValue(c.valor, supabase, encryptKey) || ''
-      } else {
-        configMap[c.clave] = c.valor
-      }
-    }
-    
-    if (!configMap.imap_host || !configMap.imap_user || !configMap.imap_password) return null
-    
-    return {
-      host: configMap.imap_host,
-      user: configMap.imap_user,
-      password: configMap.imap_password,
-      port: parseInt(configMap.imap_port || '993'),
-    }
-  } catch {
-    return null
-  }
-}
-
-
-/**
  * Desencripta un valor usando el prefijo para determinar el método:
  * - "pgp:..." → desencriptar con pgcrypto RPC
  * - "b64:..." → decodificar base64

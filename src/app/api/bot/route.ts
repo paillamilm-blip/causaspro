@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { estaAutorizado } from '@/lib/apiAuth'
 
 export const dynamic = 'force-dynamic'
 
@@ -18,7 +19,12 @@ export const dynamic = 'force-dynamic'
  * - Localmente: npx tsx src/bot/index.ts
  * - Servidor: cron job en VPS/Railway/Render
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  // Dice SI el servidor tiene credenciales del portal cargadas: es un mapa de ataque
+  // para cualquiera que sepa la URL. Va con token como el resto de las rutas.
+  if (!estaAutorizado(req)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
   const hasCredentials = !!(process.env.PJUD_RUT && process.env.PJUD_PASSWORD)
   const hasSupabase = !!(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY)
   
@@ -48,11 +54,7 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
-  // Verificar auth básica (solo admin puede disparar el bot)
-  const authHeader = req.headers.get('authorization')
-  const expectedToken = process.env.BOT_API_TOKEN || process.env.SUPABASE_SERVICE_ROLE_KEY
-  
-  if (!authHeader || !authHeader.includes(expectedToken?.slice(0, 20) || 'NO_TOKEN')) {
+  if (!estaAutorizado(req)) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
   }
   
@@ -66,15 +68,20 @@ export async function POST(req: NextRequest) {
   }
   
   // En Vercel, no podemos ejecutar Playwright (serverless = timeout corto)
-  // Retornamos instrucciones para ejecución externa
+  // Retornamos instrucciones para ejecución externa.
+  // OJO: se devuelven los NOMBRES de las variables, nunca sus valores. Este cuerpo viaja por
+  // HTTPS y queda en logs: la ClaveÚnica de la curadora no tiene que salir del servidor.
   return NextResponse.json({
     message: 'Bot no se puede ejecutar en Vercel (serverless limitado)',
     alternativas: [
       '1. Ejecutar localmente: npx tsx src/bot/index.ts',
       '2. Deploy en Railway/Render como worker',
-      '3. GitHub Actions con cron schedule',
-      '4. VPS con crontab',
+      '3. VPS con crontab',
     ],
-    comando: `cd causaspro && PJUD_RUT="${process.env.PJUD_RUT}" PJUD_PASSWORD="***" npx tsx src/bot/index.ts`,
+    comando: 'cd causaspro && set PJUD_RUT=<tu RUT> && set PJUD_PASSWORD=<tu clave> && npx tsx src/bot/index.ts',
+    notas: [
+      'En Windows lo práctico es ejecutar bot-mantenimiento.bat, que ya carga el .env local.',
+      'Requiere NEXT_PUBLIC_SUPABASE_URL y SUPABASE_SERVICE_ROLE_KEY en el entorno del que lo corre.',
+    ],
   })
 }

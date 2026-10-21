@@ -66,6 +66,14 @@ export interface ParseResult {
   hoja: string
   /** Total filas procesadas */
   totalFilas: number
+  /**
+   * Filas que el parser NO pudo usar (no tienen RIT propio ni heredado de la fila
+   * anterior). Se devuelven como aviso, no se descartan en silencio: en la migración
+   * única del Excel, "el archivo tenía 400 filas y entraron 380" tiene que poder
+   * explicarse sin tener que abrir el Excel otra vez. Va limitado a las primeras
+   * muestras para no inflar la respuesta.
+   */
+  filasSinRit: string[]
 }
 
 // ============================================================
@@ -314,6 +322,7 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParseResult {
     columnasDetectadas: [],
     hoja: wb.SheetNames[0] || 'N/A',
     totalFilas: 0,
+    filasSinRit: [],
   }
 }
 
@@ -378,6 +387,8 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
   const adultosList: AdultoRaw[] = []
   const audienciasList: AudienciaRaw[] = []
   let lastRit: string | undefined
+  /** Muestras de filas descartadas por no tener RIT (ver ParseResult.filasSinRit). */
+  const filasSinRit: string[] = []
   
   // Los headers limpios (sin vacíos)
   const cleanHeaders = headers.filter(h => h && h.trim())
@@ -393,7 +404,19 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
     } else {
       rit = lastRit
     }
-    if (!rit) continue
+    if (!rit) {
+      // Fila útil pero sin RIT propio ni heredado: se informa (hasta 20 muestras) en vez
+      // de desaparecer. Es la diferencia entre "entraron 380 de 400" y poder decir CUÁLES.
+      if (filasSinRit.length < 20) {
+        const muestra = row
+          .filter((c: any) => c !== null && c !== undefined && String(c).trim() !== '')
+          .slice(0, 3)
+          .map((c: any) => String(c).trim().slice(0, 30))
+          .join(' / ')
+        filasSinRit.push(`fila ${i + 1}${muestra ? `: ${muestra}` : ''}`)
+      }
+      continue
+    }
     
     // ==========================================
     // GUARDAR TODAS LAS COLUMNAS en datos_extra
@@ -503,6 +526,7 @@ function parseRows(rows: any[][], sheetName: string): ParseResult | null {
     columnasDetectadas: cleanHeaders,
     hoja: sheetName,
     totalFilas: rows.length - headerRow - 1,
+    filasSinRit,
   }
 }
 
@@ -537,6 +561,19 @@ export function parseExcelRows(rows: any[][], sheetName: string): ParseResult {
     audiencias: [],
     columnasDetectadas: [],
     hoja: sheetName,
-    totalFilas: 0,
+    totalFilas: rows.length,
+    // Si el parser no encontró la columna RIT, TODAS las filas son irreconocibles:
+    // se avisa con las primeras muestras para que la usuaria vea qué leyó mal el archivo.
+    filasSinRit: rows
+      .slice(0, 20)
+      .map((r, idx) => {
+        const muestra = (r || [])
+          .filter((c: any) => c !== null && c !== undefined && String(c).trim() !== '')
+          .slice(0, 3)
+          .map((c: any) => String(c).trim().slice(0, 30))
+          .join(' / ')
+        return muestra ? `fila ${idx + 1}: ${muestra}` : null
+      })
+      .filter((l): l is string => l !== null),
   }
 }
