@@ -971,13 +971,55 @@ async function runFixLetras(
             log(creada ? 'success' : 'info', creada ? `     + creada hermana ${h.rit} y vinculada.` : `     ↔ hermana ${h.rit} ya existía; vinculada.`)
           }
         } else {
-          // La letra de la BD NO está entre las del portal (o no hay letra propia):
-          // ambiguo de verdad. NO adivinar: marcar para revisión humana.
-          ambiguas++
-          status.fallidas++ // no resuelto automáticamente: queda para revisión humana
-          const detalle = `número ${ritSinLetra} tiene varias letras en el portal: ${canonUnicos.map(c => c.rit).join(', ')}, y ninguna coincide con la letra actual (${letraBd || 'sin letra'}). Confirmar manualmente.`
-          await marcarRevisionLetra(causa.id, detalle)
-          log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${canonUnicos.map(c => c.rit).join(', ')}).`)
+          // La letra de la BD NO está entre las del portal. Acá hay dos cosas distintas y la
+          // regla también lo es:
+          //
+          // · Hermana de la MISMA familia (P↔X): la curadora confirmó que comparten el caso,
+          //   así que se crea y se vincula igual que arriba. Que el portal no liste la letra
+          //   de la BD es esperable (esa etapa ya cerró), y el expediente real queda igual
+          //   monitoreado porque la hermana SÍ se escanea.
+          // · Hermana de OTRA materia (C, E, Z…): NO se toca. Una causa puede cambiar de
+          //   materia conservando número y año, así que podría ser el mismo expediente o uno
+          //   distinto; lo único que los distingue son las partes, y eso lo decide la curadora.
+          //
+          // Sin esta distinción TODO caía en "marcar para revisión" aunque la hermana P/X
+          // estuviera a la vista: en la corrida del 22-oct-2026 fueron 6 de 15 causas.
+          const mismaFamilia = hermanos.filter(h => esPosibleCausaHermana(causa.rit, [h.rit]))
+          const otraMateria = hermanos.filter(h => !esPosibleCausaHermana(causa.rit, [h.rit]))
+
+          for (const h of mismaFamilia) {
+            const tipoH = inferirTipoRIT(h.rit)
+            const { id: idH, creada } = await upsertCausaHermana(h.rit, tipoH, null)
+            const rel = describeVinculo(causa.rit, h.rit)
+            await vincularCausaEnNotas(causa.id, h.rit, rel)
+            if (idH) await vincularCausaEnNotas(idH, causa.rit, rel)
+            log(creada ? 'success' : 'info', `     ${creada ? '+ creada' : '↔ ya existía;'} hermana ${h.rit}, vinculada.`)
+          }
+
+          if (otraMateria.length > 0) {
+            // Queda algo que el bot no puede decidir → revisión humana, aunque ya haya
+            // vinculado la hermana de la misma familia.
+            ambiguas++
+            status.fallidas++
+            const detalle = `número ${ritSinLetra} tiene en el portal ${otraMateria.map(h => h.rit).join(', ')}, de otra materia. Podría ser el mismo caso que cambió de materia o un expediente distinto con el mismo número: confirmar comparando las partes.`
+              + (mismaFamilia.length > 0
+                ? ` (La hermana ${mismaFamilia.map(h => h.rit).join(', ')}, de la misma familia, ya se creó/vinculó.)`
+                : '')
+            await marcarRevisionLetra(causa.id, detalle)
+            log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${otraMateria.map(h => h.rit).join(', ')}).`)
+          } else if (mismaFamilia.length > 0) {
+            relacionadas++
+            status.exitosas++
+            await marcarRevisionLetra(causa.id, `el portal no lista ${causa.rit} pero sí su hermana ${mismaFamilia.map(h => h.rit).join(', ')} (misma familia): se creó/vinculó y el expediente queda monitoreado por ahí. Verificar relación.`)
+            log('success', `  🔗 ${causa.rit}: vinculada con ${mismaFamilia.map(h => h.rit).join(', ')} (no se pisa ninguna).`)
+          } else {
+            // El portal no devolvió nada usable: ambiguo de verdad. NO adivinar.
+            ambiguas++
+            status.fallidas++
+            const detalle = `número ${ritSinLetra} tiene varias letras en el portal: ${canonUnicos.map(c => c.rit).join(', ')}, y ninguna coincide con la letra actual (${letraBd || 'sin letra'}). Confirmar manualmente.`
+            await marcarRevisionLetra(causa.id, detalle)
+            log('warn', `  ⚠️ ${causa.rit}: AMBIGUO → marcada para revisión (${canonUnicos.map(c => c.rit).join(', ')}).`)
+          }
         }
       } else if (encontradas.length === 0) {
         noEncontradas++
