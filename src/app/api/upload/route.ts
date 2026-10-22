@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
 import { parseExcelRows } from '@/lib/parseExcel'
+import { marcarTerminada } from '@/lib/monitoreo'
 import { estaAutorizado, excedeRateLimit } from '@/lib/apiAuth'
 
 export const dynamic = 'force-dynamic'
@@ -15,23 +16,27 @@ export const maxDuration = 60
 // endpoint queda como la MIGRACIÓN ÚNICA (traer el inventario histórico) y, por
 // si acaso, para re-traer un archivo viejo. Eso cambia los requisitos:
 //
-//   1. NO BORRA. Antes, para no duplicar NNA/adultos/audiencias en cada re-subida,
-//      borraba los hijos de las causas existentes y los volvía a insertar. Con el
-//      pegado y el bot escribiendo en esas mismas tablas, ese DELETE destruye
-//      datos que el Excel jamás tuvo: las audiencias agendadas por asignación y
-//      las scrapeadas del portal. Se cambió por "los hijos de una causa ya
-//      migrada NO se tocan".
-//   2. ESCRIBE origen/cola por default: las causas nuevas nacen con
+//   1. REESCRIBE NNA y adultos, y NO toca audiencias. La subida anterior atribuyó mal los
+//      niños (las celdas con varios RIT heredaban el RIT del renglón de arriba), así que
+//      ahora se borran y reinsertan los de las causas que están en el archivo. Es seguro:
+//      esas dos tablas tienen un solo escritor (este endpoint). Las audiencias NO se
+//      importan: las escriben también el bot y el pegado de asignaciones, y ahí la fuente
+//      de verdad es el portal — las del Excel son fechas viejas.
+//   2. AZUL = CERRADA. La curadora marca las causas terminadas pintando la fila de azul, y
+//      el color manda sobre el texto de la columna de estado. Se traduce a la marca
+//      [TERMINADA] en `notas` (append-only, mismo canal que usa el botón de monitoreo),
+//      que es lo que la saca de la cola del bot y de la métrica de pendientes.
+//   3. ESCRIBE origen/cola por default: las causas nuevas nacen con
 //      escaneo_estado='pendiente' (default de la BD tras schema-001-cobertura.sql),
 //      así entran solas a la cola del bot.
-//   3. IDS POR (rol,anio): el Excel suele traer "4596-2024" sin letra y en la BD
+//   4. IDS POR (rol,anio): el Excel suele traer "4596-2024" sin letra y en la BD
 //      está "P-4596-2024". Con match exacto se creaba una causa DUPLICADA del
 //      mismo expediente. Ahora, si el RIT no tiene letra, se busca por número+año
 //      y solo se enlaza si hay EXACTAMENTE una coincidencia (si hay dos, se avisa:
 //      es la ambigüedad P↔X y la decide la curadora).
-//   4. DEJA LO QUE RECIBIÓ en carga_lotes (baseline de la migración) y puede
+//   5. DEJA LO QUE RECIBIÓ en carga_lotes (baseline de la migración) y puede
 //      DEVOLVER UN DIFF sin escribir (`dryRun`), para revisar el archivo antes.
-//   5. AUTENTICACIÓN: antes no tenía ninguna y cualquiera podía escribir y borrar
+//   6. AUTENTICACIÓN: antes no tenía ninguna y cualquiera podía escribir y borrar
 //      en la base desde la URL pública de Vercel.
 // ============================================================
 
@@ -79,8 +84,15 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `El archivo tiene ${rows.length} filas (máximo ${MAX_FILAS}).` }, { status: 413 })
       }
 
+      // El COLOR de la fila no viaja en el JSON: el navegador lee el archivo con cellStyles
+      // y manda un booleano por fila (las azules = causas cerradas). Se valida el largo para
+      // que un body recortado no corra los índices y cierre la causa equivocada.
+      const filasCerradas = Array.isArray(body?.filasCerradas) && body.filasCerradas.length === rows.length
+        ? body.filasCerradas.map((x: any) => x === true)
+        : undefined
+
       try {
-        parseResult = parseExcelRows(rows, sheetName || 'Hoja1')
+        parseResult = parseExcelRows(rows, sheetName || 'Hoja1', filasCerradas)
       } catch (parseErr: any) {
         return NextResponse.json({ error: `Error procesando datos: ${parseErr.message}` }, { status: 400 })
       }
@@ -110,7 +122,10 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const { causas, nna, adultos, audiencias } = parseResult
+    // Las `audiencias` del Excel NO se destructuran ni se escriben: el PORTAL es la fuente
+    // de verdad para las audiencias y el bot ya las trae. Las del archivo están vencidas
+    // (1124 fechas en el pasado) y cargarlas ensucia la agenda con audiencias que ya fueron.
+    const { causas, nna, adultos } = parseResult
 
     if (causas.length === 0) {
       return NextResponse.json({
@@ -123,6 +138,11 @@ export async function POST(req: NextRequest) {
 
     const supabase = createAdminClient()
 
+    // La marca de terminada lleva fecha y motivo legibles: dentro de un mes la curadora tiene
+    // que poder distinguir "la cerré yo a mano" de "venía azul en el Excel de la migración".
+    const HOY = new Date().toISOString().split('T')[0]
+    const MOTIVO_CIERRE = 'cerrada por la migración del Excel (fila azul)'
+
     // ------------------------------------------------------------
     // 1. ¿Cuáles ya están en la base?
     //    a) match exacto de RIT, y
@@ -131,11 +151,22 @@ export async function POST(req: NextRequest) {
     // ------------------------------------------------------------
     const rits = causas.map(c => c.rit)
     const idPorRit: Record<string, string> = {}
+    // `notas` se trae acá porque es un canal COMPARTIDO con el bot: para marcar una causa
+    // como terminada hay que leer lo que ya tiene y AGREGAR una línea, nunca reemplazar.
+    const notasPorId: Record<string, string | null> = {}
 
-    for (let i = 0; i < rits.length; i += 100) {
-      const batch = rits.slice(i, i + 100)
-      const { data } = await supabase.from('causas').select('id, rit').in('rit', batch)
-      for (const c of data || []) idPorRit[c.rit] = c.id
+    // Con el Excel real de la curadora esto son ~1900 RIT = 20 consultas. En serie no
+    // entran en el maxDuration de la función, así que van en paralelo.
+    const lotesRit: string[][] = []
+    for (let i = 0; i < rits.length; i += 100) lotesRit.push(rits.slice(i, i + 100))
+    const respuestasRit = await Promise.all(
+      lotesRit.map(lote => supabase.from('causas').select('id, rit, notas').in('rit', lote))
+    )
+    for (const { data } of respuestasRit) {
+      for (const c of data || []) {
+        idPorRit[c.rit] = c.id
+        notasPorId[c.id] = c.notas ?? null
+      }
     }
 
     /** RIT del Excel sin letra → RIT con letra ya cargado en la BD. */
@@ -144,24 +175,25 @@ export async function POST(req: NextRequest) {
     const ambiguos: string[] = []
     const sinLetra = causas.filter(c => !idPorRit[c.rit] && c.rol != null && c.anio != null)
     for (let i = 0; i < sinLetra.length; i += 50) {
-      for (const c of sinLetra.slice(i, i + 50)) {
-        const { data } = await supabase
-          .from('causas')
-          .select('id, rit')
-          .eq('rol', c.rol!)
-          .eq('anio', c.anio!)
-          .limit(3)
-        const filas = data || []
+      const lote = sinLetra.slice(i, i + 50)
+      const respuestas = await Promise.all(lote.map(c =>
+        supabase.from('causas').select('id, rit, notas').eq('rol', c.rol!).eq('anio', c.anio!).limit(3)
+      ))
+      lote.forEach((c, k) => {
+        const filas = respuestas[k].data || []
         if (filas.length === 1) {
           idPorRit[c.rit] = filas[0].id
           enlacePorRol[c.rit] = filas[0].rit
+          // También hay que traer sus notas: si no, marcarla terminada partiría de un campo
+          // vacío y pisaría las marcas del bot ([VÍNCULO], [NO EN PORTAL]) de esa causa.
+          notasPorId[filas[0].id] = filas[0].notas ?? null
         } else if (filas.length > 1) {
           // Dos expedientes con el mismo número y año (hermanas P↔X): no se elige
           // desde el código. Se trata como causa nueva?? NO — crearía un tercer
           // expediente. Se deja FUERA y se avisa para decisión humana.
           ambiguos.push(`${c.rit}: la base tiene ${filas.map(f => f.rit).join(', ')}`)
         }
-      }
+      })
     }
 
     const causasNuevas = causas.filter(c => !idPorRit[c.rit])
@@ -172,6 +204,11 @@ export async function POST(req: NextRequest) {
       rit_en_base: enlacePorRol[c.rit] ?? c.rit,
     }))
 
+    // Causas cuya fila estaba pintada de AZUL en el Excel: la curadora las da por cerradas.
+    // El parser ya resolvió la duda (un RIT que también aparece en una fila sin pintar NO
+    // entra acá), así que esto es solo contarlas.
+    const causasCerradas = causas.filter(c => c.cerrada_en_excel === true)
+
     const diff = {
       filas_totales: parseResult.totalFilas,
       causas_en_archivo: causas.length,
@@ -181,7 +218,11 @@ export async function POST(req: NextRequest) {
       ambiguos,
       filas_sin_rit: (parseResult.filasSinRit || []).length,
       muestras_filas_sin_rit: (parseResult.filasSinRit || []).slice(0, 20),
-      hijos_en_archivo: nna.length + adultos.length + audiencias.length,
+      // Las audiencias del Excel NO se importan (el portal es la fuente de verdad y el bot
+      // ya las escribe), así que acá solo se cuenta lo que de verdad se va a escribir.
+      hijos_en_archivo: nna.length + adultos.length,
+      cerradas_por_color: causasCerradas.length,
+      muestras_color_dudoso: (parseResult.colorDudoso || []).slice(0, 40),
     }
 
     // El Excel suele traer el RIT SIN LETRA; estas son las filas que se enlazaron con
@@ -224,9 +265,11 @@ export async function POST(req: NextRequest) {
         estado: c.estado || null,
         programa_vigente: c.programa_vigente || null,
         saj: c.saj || null,
-        // OJO: NO se escribe `notas`. Es el canal de control del bot
-        // ([NO EN PORTAL], [REVISAR…], [VÍNCULO]) y una migración no debe pisarlo.
-        notas: c.notas || null,
+        // `notas` es el canal de control del bot ([NO EN PORTAL], [REVISAR…], [VÍNCULO]).
+        // Una causa recién creada no tiene nada ahí, así que lo único que se escribe es la
+        // marca de terminada cuando el Excel la traía en azul: es lo que la saca de la cola
+        // del bot y de la métrica de pendientes.
+        notas: c.cerrada_en_excel ? marcarTerminada(null, HOY, MOTIVO_CIERRE) : (c.notas || null),
         datos_extra: sanitizeJson(c.datos_extra) || {},
         columnas_origen: c.columnas_origen || [],
         // `origen` y `escaneo_estado` se dejan a los DEFAULT de la BD
@@ -261,33 +304,63 @@ export async function POST(req: NextRequest) {
 
     // ------------------------------------------------------------
     // 3. Actualizar las existentes: SOLO campos del Excel.
-    //    NO toca `notas` (canal del bot), NO toca `escaneo_estado` (una causa ya
-    //    escaneada no vuelve a pendiente por subir el archivo), y NO borra hijos.
+    //    NO toca `escaneo_estado` (una causa ya escaneada no vuelve a pendiente por subir el
+    //    archivo). En `notas` únicamente AGREGA la marca de terminada cuando la fila venía
+    //    azul: las marcas del bot ([NO EN PORTAL], [VÍNCULO], [REVISAR LETRA]) se conservan.
+    //    Van en paralelo por lotes — con el Excel real son ~600 existentes y una por una no
+    //    entran en el maxDuration de la función.
     // ------------------------------------------------------------
     let causasActualizadas = 0
-    for (const c of causasExistentes) {
-      const update: Record<string, any> = { updated_at: new Date().toISOString() }
-      if (c.estado) update.estado = c.estado
-      if (c.programa_vigente) update.programa_vigente = c.programa_vigente
-      if (c.datos_extra) update.datos_extra = sanitizeJson(c.datos_extra)
-      if (c.columnas_origen) update.columnas_origen = c.columnas_origen
+    for (let i = 0; i < causasExistentes.length; i += 40) {
+      const lote = causasExistentes.slice(i, i + 40)
+      const resultados = await Promise.all(lote.map(c => {
+        const id = idPorRit[c.rit]
+        const update: Record<string, any> = { updated_at: new Date().toISOString() }
+        if (c.estado) update.estado = c.estado
+        if (c.programa_vigente) update.programa_vigente = c.programa_vigente
+        if (c.datos_extra) update.datos_extra = sanitizeJson(c.datos_extra)
+        if (c.columnas_origen) update.columnas_origen = c.columnas_origen
 
-      const { error } = await supabase.from('causas').update(update).eq('id', idPorRit[c.rit])
-      if (!error) causasActualizadas++
+        // null = ya estaba marcada, entonces no se escribe notas (append-only de verdad).
+        if (c.cerrada_en_excel) {
+          const nuevas = marcarTerminada(notasPorId[id], HOY, MOTIVO_CIERRE)
+          if (nuevas !== null) update.notas = nuevas
+        }
+
+        return supabase.from('causas').update(update).eq('id', id).then(r => !r.error)
+      }))
+      causasActualizadas += resultados.filter(Boolean).length
     }
 
     // ------------------------------------------------------------
-    // 4. Hijos: se insertan SOLO para las causas que se crearon ahora.
-    //    Una causa que ya estaba tiene sus NNA/adultos/audiencias ya migrados, y
-    //    re-insertarlos duplica (bug histórico) o borrarlos destruye lo que
-    //    escribieron el pegado y el bot. Por eso la regla nueva es simple:
-    //    los hijos de las existentes NO se tocan.
+    // 4. Hijos (NNA y adultos): REPARACIÓN COMPLETA, no solo las causas nuevas.
+    //    Por qué se borra: en la subida anterior las celdas con varios RIT ("X-5305-2023
+    //    P-5935-2023", que en este Excel son más que las de uno solo) no calzaban con el
+    //    parser, y cada una de esas filas heredaba el RIT del renglón anterior. Los niños
+    //    quedaron colgados de la causa equivocada — y de ahí salen el reporte y la minuta
+    //    que se presentan al tribunal.
+    //    Por qué es seguro: `nna` y `adultos` tienen UN SOLO escritor, este endpoint. El bot
+    //    no las toca y no hay pantalla para editarlas, así que borrar por causa_id y volver
+    //    a insertar es una reparación, no una pérdida. El borrado se limita a las causas que
+    //    ESTÁN en el archivo.
+    //    Las AUDIENCIAS quedan fuera del todo: las escriben también el bot y el pegado de
+    //    asignaciones, y ahí la fuente de verdad es el portal.
     // ------------------------------------------------------------
-    const esCausaNueva = (rit: string) => !idPorRit[rit] && !!ritToId[rit]
+    const idsArchivo = causas
+      .map(c => ritToId[c.rit])
+      .filter((x): x is string => typeof x === 'string' && !!x)
 
-    let nnaCount = 0
+    // En lotes: un IN con ~1900 uuid arma una URL que PostgREST rechaza.
+    for (let i = 0; i < idsArchivo.length; i += 200) {
+      const lote = idsArchivo.slice(i, i + 200)
+      await Promise.all([
+        supabase.from('nna').delete().in('causa_id', lote),
+        supabase.from('adultos').delete().in('causa_id', lote),
+      ])
+    }
+
     const nnaRecords = nna
-      .filter(n => esCausaNueva(n._rit) && ritToId[n._rit])
+      .filter(n => ritToId[n._rit])
       .map(n => ({
         ...n,
         causa_id: ritToId[n._rit],
@@ -296,47 +369,26 @@ export async function POST(req: NextRequest) {
       }))
       .map(({ _rit, ...rest }) => rest)
 
-    for (let i = 0; i < nnaRecords.length; i += 100) {
-      const batch = nnaRecords.slice(i, i + 100)
-      const { data } = await supabase.from('nna').insert(batch).select('id')
-      nnaCount += data?.length || 0
-    }
-
-    let adultosCount = 0
     const adultosRecords = adultos
-      .filter(a => esCausaNueva(a._rit) && ritToId[a._rit])
+      .filter(a => ritToId[a._rit])
       .map(({ _rit, ...rest }) => ({ ...rest, causa_id: ritToId[_rit] }))
 
-    for (let i = 0; i < adultosRecords.length; i += 100) {
-      const batch = adultosRecords.slice(i, i + 100)
-      const { data } = await supabase.from('adultos').insert(batch).select('id')
-      adultosCount += data?.length || 0
+    /** Inserta por lotes en paralelo y devuelve cuántas filas aceptó la base. */
+    async function insertarLotes(tabla: 'nna' | 'adultos', registros: any[]): Promise<number> {
+      const lotes: any[][] = []
+      for (let i = 0; i < registros.length; i += 100) lotes.push(registros.slice(i, i + 100))
+      const respuestas = await Promise.all(
+        lotes.map(lote => supabase.from(tabla).insert(lote).select('id'))
+      )
+      return respuestas.reduce((acc, r) => acc + (r.data?.length || 0), 0)
     }
 
-    let audienciasCount = 0
-    const audienciasRecords = audiencias
-      .filter(a => esCausaNueva(a._rit) && ritToId[a._rit] && a.fecha && isValidDate(a.fecha))
-      .map(a => ({ causa_id: ritToId[a._rit], fecha: a.fecha!, tipo: 'audiencia' }))
+    const nnaCount = await insertarLotes('nna', nnaRecords)
+    const adultosCount = await insertarLotes('adultos', adultosRecords)
 
-    for (let i = 0; i < audienciasRecords.length; i += 100) {
-      const batch = audienciasRecords.slice(i, i + 100)
-      // upsert por (causa_id, uniq_clave) si la migración ya está aplicada; si no
-      // (42P10/42703), insert simple — que es el comportamiento de siempre.
-      const { data, error } = await supabase
-        .from('audiencias')
-        .upsert(batch, { onConflict: 'causa_id,uniq_clave', ignoreDuplicates: true })
-        .select('id')
-      if (error) {
-        const fallback = await supabase.from('audiencias').insert(batch).select('id')
-        audienciasCount += fallback.data?.length || 0
-      } else {
-        audienciasCount += data?.length || 0
-      }
-    }
-
-    const hijosOmitidos = (nna.length - nnaRecords.length)
-      + (adultos.length - adultosRecords.length)
-      + (audiencias.length - audienciasRecords.length)
+    // Filas de NNA/adultos que el archivo traía pero no se escribieron: su RIT no se pudo
+    // resolver a un id (causa rechazada por la base o RIT ambiguo). Se informa, no se pierde.
+    const hijosOmitidos = (nna.length - nnaRecords.length) + (adultos.length - adultosRecords.length)
 
     // ------------------------------------------------------------
     // 5. Baseline de la migración en carga_lotes (best effort: si la tabla aún
@@ -352,6 +404,7 @@ export async function POST(req: NextRequest) {
         ...(parseResult.filasSinRit || []),
         ...ambiguos,
         ...causasFallidas.map(f => `${f.rit}: ${f.motivo}`),
+        ...(parseResult.colorDudoso || []).map(r => `${r}: fila azul y fila sin marcar (no se cerró sola)`),
       ].slice(0, 200),
     }).then(r => !r.error, () => false)
 
@@ -366,7 +419,7 @@ export async function POST(req: NextRequest) {
         causas_fallidas: causasFallidas.length,
         nna: nnaCount,
         adultos: adultosCount,
-        audiencias: audienciasCount,
+        cerradas: causasCerradas.length,
         hijos_omitidos: hijosOmitidos,
         columnasDetectadas: parseResult.columnasDetectadas || [],
         hoja: parseResult.hoja || '',
@@ -378,7 +431,8 @@ export async function POST(req: NextRequest) {
       // El Excel se jubiló: esto es lo que hay que decirle a la usuaria después de la
       // migración, en la propia respuesta, para que no vuelva a subir el archivo.
       despues: [
-        'Las causas nuevas quedaron PENDIENTES de escaneo: corré bot-mantenimiento.bat y el bot les trae los movimientos.',
+        `${causasCerradas.length} causas venían en fila azul: quedaron marcadas como TERMINADAS y ya no entran a la cola del bot. Si alguna sigue viva, abrila desde su ficha.`,
+        'Las causas que quedaron vivas están PENDIENTES de escaneo: corré bot-mantenimiento.bat y el bot les trae los movimientos del portal.',
         'De acá en más las causas se cargan pegando el correo en /asignaciones. No hace falta volver a subir el Excel.',
       ],
       registro_lote: lote ? 'carga_lotes' : 'carga_lotes no disponible (falta schema-001-cobertura.sql)',
@@ -396,7 +450,7 @@ function statsVacias(p: { columnasDetectadas: string[]; hoja: string; totalFilas
     causas_fallidas: 0,
     nna: 0,
     adultos: 0,
-    audiencias: 0,
+    cerradas: 0,
     hijos_omitidos: 0,
     columnasDetectadas: p.columnasDetectadas || [],
     hoja: p.hoja || '',

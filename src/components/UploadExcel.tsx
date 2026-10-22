@@ -2,6 +2,7 @@
 import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import * as XLSX from 'xlsx'
+import { filasCerradasPorColor } from '@/lib/parseExcel'
 
 interface Stats {
   causas: number
@@ -9,8 +10,8 @@ interface Stats {
   causas_fallidas?: number
   nna: number
   adultos: number
-  audiencias: number
   hijos_omitidos?: number
+  cerradas?: number
   columnasDetectadas?: string[]
   hoja?: string
   totalFilas?: number
@@ -27,6 +28,10 @@ interface Diff {
   filas_sin_rit: number
   muestras_filas_sin_rit: string[]
   hijos_en_archivo: number
+  /** Causas cuya fila estaba pintada de AZUL en el Excel = cerradas/terminadas. */
+  cerradas_por_color: number
+  /** RIT que aparece en una fila azul Y en una no azul: no se cierra solo, lo decide ella. */
+  muestras_color_dudoso: string[]
 }
 
 interface Respuesta {
@@ -59,7 +64,11 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
   const [error, setError] = useState<string | null>(null)
   // Las filas ya están leídas en el navegador: se guardan para no volver a parsear
   // el archivo al confirmar (y para que lo que se confirma sea EXACTAMENTE lo revisado).
-  const [filas, setFilas] = useState<{ rows: any[][]; sheetName: string; fileName: string } | null>(null)
+  // `filasCerradas` va junto porque el COLOR no sobrevive al JSON: si no se manda acá,
+  // el servidor no tiene forma de saber que la fila estaba azul.
+  const [filas, setFilas] = useState<{
+    rows: any[][]; sheetName: string; fileName: string; filasCerradas: boolean[]
+  } | null>(null)
 
   const llamar = useCallback(async (confirmar: boolean) => {
     if (!filas) return
@@ -107,7 +116,10 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
       // PASO 1: parsear en el navegador (evita el límite de 4.5 MB de Vercel).
       setStatus('Detectando columnas...')
       const buffer = await file.arrayBuffer()
-      const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
+      // cellStyles: true es lo que permite ver el RELLENO de cada celda. La curadora marca
+      // las causas cerradas pintando la fila de azul, así que sin esto esa información se
+      // pierde antes de llegar al servidor y todo el histórico entraría como "vivo".
+      const wb = XLSX.read(buffer, { type: 'array', cellDates: true, cellStyles: true })
       const sheetName = wb.SheetNames[0]
       const ws = wb.Sheets[sheetName]
       const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
@@ -117,7 +129,12 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
         return
       }
 
-      const datos = { rows, sheetName, fileName: file.name }
+      const datos = {
+        rows,
+        sheetName,
+        fileName: file.name,
+        filasCerradas: filasCerradasPorColor(ws),
+      }
       setFilas(datos)
 
       // PASO 2: REVISIÓN (dryRun). Todavía no se escribió nada.
@@ -200,15 +217,13 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
               <div className="bg-green-50 rounded p-2">📁 {result.stats.causas} causas nuevas</div>
               <div className="bg-blue-50 rounded p-2">🔄 {result.stats.causas_actualizadas || 0} ya estaban</div>
               <div className="bg-green-50 rounded p-2">👶 {result.stats.nna} NNA</div>
-              <div className="bg-green-50 rounded p-2">📅 {result.stats.audiencias} audiencias</div>
+              <div className="bg-slate-100 rounded p-2">🔒 {result.stats.cerradas || 0} cerradas (fila azul)</div>
             </div>
-            {result.stats.hijos_omitidos ? (
-              <p className="text-xs text-gray-500">
-                {result.stats.hijos_omitidos} filas de NNA/adultos/audiencias del archivo{' '}
-                <strong>no se escribieron</strong>: pertenecen a causas que ya estaban cargadas,
-                y sus datos actuales (del bot y de las asignaciones) valen más que el Excel.
-              </p>
-            ) : null}
+            <p className="text-xs text-gray-500">
+              Las causas en fila <strong>azul</strong> quedaron marcadas como terminadas: el bot deja de
+              escanearlas y no cuentan como pendientes. Podés reabrir cualquiera desde su ficha.
+              Las <strong>audiencias del Excel no se cargaron</strong>: las del portal mandan.
+            </p>
             {result.causasFallidas && result.causasFallidas.length > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                 <p className="text-sm font-medium text-amber-800">
@@ -239,15 +254,30 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
             </p>
             <ul className="text-sm text-gray-700 space-y-1">
               <li>• Filas del archivo: <strong>{preview.diff.filas_totales}</strong></li>
-              <li>• Causas reconocidas: <strong>{preview.diff.causas_en_archivo}</strong></li>
+              <li>• Causas reconocidas: <strong>{preview.diff.causas_en_archivo}</strong>
+                <span className="text-gray-400"> (los expedientes vinculados de una misma celda cuentan por separado)</span></li>
               <li>• <strong className="text-green-700">{preview.diff.nuevas}</strong> serían nuevas ·{' '}
                 <strong className="text-blue-700">{preview.diff.existentes}</strong> ya estaban cargadas</li>
               {preview.diff.enlazadas_por_rol > 0 && (
                 <li>• {preview.diff.enlazadas_por_rol} sin letra en el Excel se enlazaron con la causa
                   que ya tiene letra en la base (ej. 4596-2024 → P-4596-2024)</li>
               )}
-              <li>• Hijos (NNA/adultos/audiencias) en el archivo: {preview.diff.hijos_en_archivo}</li>
+              <li>• <strong className="text-slate-700">🔒 {preview.diff.cerradas_por_color}</strong> en fila azul
+                → se marcan como terminadas y salen de la cola del bot</li>
+              <li>• NNA y adultos responsables en el archivo: {preview.diff.hijos_en_archivo}</li>
             </ul>
+
+            {preview.diff.muestras_color_dudoso?.length > 0 && (
+              <div className="bg-slate-50 border border-slate-200 rounded-lg p-3">
+                <p className="text-sm font-medium text-slate-700">
+                  Estas causas están en azul en una fila pero también aparecen en una fila sin marcar.
+                  No se cierran solas — si alguna está terminada, cerrala desde su ficha:
+                </p>
+                <ul className="text-xs text-slate-600 list-disc list-inside mt-1 max-h-32 overflow-auto">
+                  {preview.diff.muestras_color_dudoso.slice(0, 30).map((r, i) => <li key={i}>{r}</li>)}
+                </ul>
+              </div>
+            )}
 
             {preview.diff.filas_sin_rit > 0 && (
               <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
