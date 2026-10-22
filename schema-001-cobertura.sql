@@ -94,7 +94,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_movimientos_causa_uniq
 WITH ranked AS (
   SELECT id, row_number() OVER (
     PARTITION BY causa_id,
-                 coalesce(to_char((fecha AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD'), '-'),
+                 coalesce(to_char(date '1970-01-01' + floor(extract(epoch from (fecha - timestamptz '1970-01-01')) / 86400)::int, 'YYYY-MM-DD'), '-'),
                  lower(btrim(coalesce(tipo,'')))
     ORDER BY created_at ASC, id ASC) AS rn
   FROM audiencias
@@ -104,9 +104,15 @@ DELETE FROM audiencias WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
 -- OJO: audiencias.fecha es TIMESTAMPTZ; su ::text cambia de formato según cómo se insertó
 -- ('2026-08-20' vs '2026-08-20 00:00:00+00'). Se normaliza a fecha pura para que la
 -- clave la escriba igual el correo pegado que el bot.
+-- La fecha pura se calcula como días desde epoch en UTC. NO se puede usar
+-- (fecha AT TIME ZONE 'UTC')::date ni fecha::date en una columna generada: sobre
+-- TIMESTAMPTZ esas conversiones son STABLE (dependen de la TimeZone de la sesión) y
+-- Postgres las rechaza con 42P17 "generation expression is not immutable". La resta de
+-- dos TIMESTAMPTZ y el epoch de un INTERVAL sí son IMMUTABLE, así que el día UTC sale
+-- de ahí sin tocar la configuración de la sesión.
 ALTER TABLE audiencias DROP COLUMN IF EXISTS uniq_clave;
 ALTER TABLE audiencias ADD COLUMN uniq_clave TEXT
-  GENERATED ALWAYS AS (coalesce(to_char((fecha AT TIME ZONE 'UTC')::date, 'YYYY-MM-DD'),'-')
+  GENERATED ALWAYS AS (coalesce(to_char(date '1970-01-01' + floor(extract(epoch from (fecha - timestamptz '1970-01-01')) / 86400)::int, 'YYYY-MM-DD'),'-')
     || '|' || lower(btrim(coalesce(tipo,'')))) STORED;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_audiencias_causa_uniq
   ON audiencias(causa_id, uniq_clave);
