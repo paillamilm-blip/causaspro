@@ -76,44 +76,71 @@ FOR EACH ROW EXECUTE FUNCTION trg_causas_cola_fn();
 -- 2) DEDUP DE MOVIMIENTOS Y AUDIENCIAS + IDENTITY PARA UPSERT
 --    (necesario para que el bot use upsert onConflict y sea idempotente)
 -- ------------------------------------------------------------
--- 2a. Movimientos: borrar duplicados exactos (causa+fecha+tramite), la más antigua gana.
+-- POR QUÉ TRIGGERS Y NO COLUMNAS GENERADAS
+-- Postgres exige que la expresión de una GENERATED ALWAYS AS sea IMMUTABLE, y
+-- to_char() es STABLE (depende de lc_time) igual que cualquier conversión de
+-- TIMESTAMPTZ. Da lo mismo el tipo real de `fecha` en cada base: con una columna
+-- generada esto revienta con 42P17. Un trigger no tiene esa restricción.
+-- `SET timezone = 'UTC'` fija el día aunque la sesión que inserta esté en otra zona.
+
+-- 2a. Movimientos: clave = día + trámite.
+ALTER TABLE movimientos DROP COLUMN IF EXISTS uniq_clave;
+ALTER TABLE movimientos ADD COLUMN uniq_clave TEXT;
+
+CREATE OR REPLACE FUNCTION trg_movimientos_uniq_fn() RETURNS TRIGGER
+LANGUAGE plpgsql SET timezone = 'UTC' AS $$
+BEGIN
+  NEW.uniq_clave := coalesce(to_char(NEW.fecha::date, 'YYYY-MM-DD'), '-')
+                 || '|' || lower(btrim(coalesce(NEW.tramite, '')));
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_movimientos_uniq ON movimientos;
+CREATE TRIGGER trg_movimientos_uniq BEFORE INSERT OR UPDATE ON movimientos
+FOR EACH ROW EXECUTE FUNCTION trg_movimientos_uniq_fn();
+
+-- Rellena las filas existentes: el trigger BEFORE UPDATE recalcula la clave, así que
+-- el valor del SET no importa y la expresión vive en un solo lugar.
+UPDATE movimientos SET uniq_clave = NULL WHERE uniq_clave IS NULL;
+
+-- Borrar duplicados exactos (misma causa + misma clave), la más antigua gana.
 WITH ranked AS (
   SELECT id, row_number() OVER (
-    PARTITION BY causa_id, coalesce(fecha::text,''), lower(btrim(tramite))
+    PARTITION BY causa_id, uniq_clave
     ORDER BY created_at ASC, id ASC) AS rn
   FROM movimientos
 )
 DELETE FROM movimientos WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
 
-ALTER TABLE movimientos ADD COLUMN IF NOT EXISTS uniq_clave TEXT
-  GENERATED ALWAYS AS (coalesce(fecha::text,'-') || '|' || lower(btrim(tramite))) STORED;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_movimientos_causa_uniq
   ON movimientos(causa_id, uniq_clave);
 
--- 2b. Audiencias: mismo patrón (causa+fecha normalizada+tipo).
+-- 2b. Audiencias: mismo patrón (causa + día + tipo).
+ALTER TABLE audiencias DROP COLUMN IF EXISTS uniq_clave;
+ALTER TABLE audiencias ADD COLUMN uniq_clave TEXT;
+
+CREATE OR REPLACE FUNCTION trg_audiencias_uniq_fn() RETURNS TRIGGER
+LANGUAGE plpgsql SET timezone = 'UTC' AS $$
+BEGIN
+  NEW.uniq_clave := coalesce(to_char(NEW.fecha::date, 'YYYY-MM-DD'), '-')
+                 || '|' || lower(btrim(coalesce(NEW.tipo, '')));
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS trg_audiencias_uniq ON audiencias;
+CREATE TRIGGER trg_audiencias_uniq BEFORE INSERT OR UPDATE ON audiencias
+FOR EACH ROW EXECUTE FUNCTION trg_audiencias_uniq_fn();
+
+UPDATE audiencias SET uniq_clave = NULL WHERE uniq_clave IS NULL;
+
 WITH ranked AS (
   SELECT id, row_number() OVER (
-    PARTITION BY causa_id,
-                 coalesce(to_char(date '1970-01-01' + floor(extract(epoch from (fecha - timestamptz '1970-01-01')) / 86400)::int, 'YYYY-MM-DD'), '-'),
-                 lower(btrim(coalesce(tipo,'')))
+    PARTITION BY causa_id, uniq_clave
     ORDER BY created_at ASC, id ASC) AS rn
   FROM audiencias
 )
 DELETE FROM audiencias WHERE id IN (SELECT id FROM ranked WHERE rn > 1);
 
--- OJO: audiencias.fecha es TIMESTAMPTZ; su ::text cambia de formato según cómo se insertó
--- ('2026-08-20' vs '2026-08-20 00:00:00+00'). Se normaliza a fecha pura para que la
--- clave la escriba igual el correo pegado que el bot.
--- La fecha pura se calcula como días desde epoch en UTC. NO se puede usar
--- (fecha AT TIME ZONE 'UTC')::date ni fecha::date en una columna generada: sobre
--- TIMESTAMPTZ esas conversiones son STABLE (dependen de la TimeZone de la sesión) y
--- Postgres las rechaza con 42P17 "generation expression is not immutable". La resta de
--- dos TIMESTAMPTZ y el epoch de un INTERVAL sí son IMMUTABLE, así que el día UTC sale
--- de ahí sin tocar la configuración de la sesión.
-ALTER TABLE audiencias DROP COLUMN IF EXISTS uniq_clave;
-ALTER TABLE audiencias ADD COLUMN uniq_clave TEXT
-  GENERATED ALWAYS AS (coalesce(to_char(date '1970-01-01' + floor(extract(epoch from (fecha - timestamptz '1970-01-01')) / 86400)::int, 'YYYY-MM-DD'),'-')
-    || '|' || lower(btrim(coalesce(tipo,'')))) STORED;
 CREATE UNIQUE INDEX IF NOT EXISTS uq_audiencias_causa_uniq
   ON audiencias(causa_id, uniq_clave);
 
