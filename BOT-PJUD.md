@@ -146,6 +146,37 @@ Después, **un doble clic por día** y listo.
 
 ---
 
+## 📦 ¿Están todas mis causas? — `bot-inventario.bat` (1 vez por mes)
+
+El mantenimiento diario responde *"¿lo cargado está al día?"*. **No puede** responder
+*"¿me falta alguna causa?"*: la cola de pendientes solo conoce las causas que ya están en
+tu base. Una causa que el tribunal te asignó y nunca pegaste no se escanea, no se avisa y
+no existe para el sistema.
+
+`bot-inventario.bat` es el clic que cierra ese agujero:
+
+- El bot lee el listado **Mis Causas > Familia** año por año y anota en `inventario_portal`
+  qué causas ve el portal. **No baja movimientos** ni toca el estado de escaneo.
+- Compara contra tu base y el panel muestra, bajo la métrica única, si el portal tiene
+  causas que vos no (`faltan N`), con cuáles son para que las pegues en **Asignaciones**.
+- Como lista sin entrar a detalles, tarda minutos y no consume el límite de 25 causas.
+- Reutiliza el mismo lock y el horario 8–18 h de `bot-mantenimiento.bat`.
+
+**Protecciones del modo** (por qué no puede guardar cualquier cosa):
+
+| Si… | El modo |
+|---|---|
+| El listado acumula más de `BOT_INVENTARIO_MAX_FILAS` (1200) causas | **aborta sin escribir**: es el portal entero, no tus causas (el filtro por RUT no aplicó) |
+| El barrido devuelve 0 causas | **no guarda** un inventario vacío (la conciliación leería "desaparecieron todas") |
+| El barrido se corta a mitad (horario, sesión) | no marca desaparecidas ni reemplaza el último inventario bueno |
+| Querés probar sin el filtro de RUT | `set BOT_INVENTARIO_SIN_RUT=1` antes del `call` |
+
+> El inventario viejo se nota: el panel dice "comparado con el inventario de hace 40 días",
+> y lo asignado después de esa fecha no está contabilizado. Es un aviso, no una baja: una
+> causa archivada deja de aparecer en Mis Causas sin estar terminada.
+
+---
+
 ## ⚙️ Ajustes del `.bat` (opcional)
 
 | Querés… | Editá en `bot-100-causas.bat` |
@@ -177,6 +208,7 @@ Después, **un doble clic por día** y listo.
 npm run bot          :: corrida normal (hasta 100 causas cargadas, invisible)
 npm run bot:test     :: prueba: 5 causas, navegador VISIBLE (primera vez)
 npm run bot:urgent   :: solo causas urgentes (más rápido)
+set BOT_INVENTARIO=1 && npm run bot   :: solo anota qué causas ve el portal (no movimientos)
 ```
 > `test` y `urgent` usan `cross-env`, así funcionan igual en Windows, Mac y Linux.
 
@@ -191,6 +223,9 @@ Variables de entorno que reconoce el bot:
 | `BOT_USE_SYSTEM_CHROME=1` | Usar el Chrome instalado en vez del de Playwright |
 | `CHROME_PATH=...` | Ruta explícita a chrome.exe |
 | `BOT_MAX_DETAILS` | Máx. de detalles a scrapear por sesión (default 50) |
+| `BOT_INVENTARIO=1` | Modo inventario: solo anota qué causas ve el portal, NO toca movimientos ni `escaneo_estado` |
+| `BOT_INVENTARIO_MAX_FILAS` | Corte de seguridad (default 1200). Si un año devuelve más filas que esto, el bot ABORTA sin guardar nada |
+| `BOT_INVENTARIO_SIN_RUT=1` | Inventario SIN el filtro de RUT = listado de todo el portal. Muchísimo riesgo de CAPTCHA; usalo solo si querés ver causas de otros curadores |
 
 ---
 

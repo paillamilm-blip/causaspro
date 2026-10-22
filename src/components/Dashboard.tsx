@@ -7,9 +7,10 @@ import { estadoSeguimientoNna, agruparGestionesPorCausa } from '@/lib/seguimient
 import { estaTerminada, MARCA_TERMINADA, ETAPA_TERMINADA } from '@/lib/monitoreo'
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
-  IconAlert, IconDownload, IconChevron, IconClock, IconInbox,
+  IconAlert, IconChevron, IconClock, IconInbox,
   IconCheck, IconShield, IconSparkles, IconPause,
 } from './icons'
+import CoberturaPanel from './CoberturaPanel'
 import type { ComponentType, SVGProps } from 'react'
 
 type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
@@ -448,10 +449,9 @@ export default function Dashboard() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [asesorIA])
-  const [totalCausas, setTotalCausas] = useState(0)
   const [error, setError] = useState<string | null>(null)
-  // true si se cayó al fallback de tabla directa (sin la vista): en ese modo NO tenemos
-  // fecha_ultimo_movimiento/ultima_audiencia, así que la barra de progreso no aplica.
+  // true si se cayó al fallback de tabla directa (sin la vista): en ese modo el semáforo
+  // NO es real (todas salen 'Estable') y hay que avisarlo arriba.
   const [modoFallback, setModoFallback] = useState(false)
   // Marca de tiempo de la última carga exitosa (para el indicador "actualizado hace X").
   const [ultimaActualizacion, setUltimaActualizacion] = useState<Date | null>(null)
@@ -693,7 +693,6 @@ export default function Dashboard() {
         console.warn('No se pudieron cargar las causas terminadas según el portal:', e)
       }
       setCausas(data)
-      setTotalCausas(data.length)
       const ahoraFecha = new Date()
       setUltimaActualizacion(ahoraFecha) // registrar hora de la carga exitosa
       ultimaActualizacionRef.current = ahoraFecha
@@ -723,18 +722,12 @@ export default function Dashboard() {
     )
   })
 
-  // Progreso de llenado por el bot: una causa está "con datos del portal" si tiene
-  // al menos un movimiento (fecha_ultimo_movimiento) o una audiencia registrada.
-  // El PORCENTAJE se calcula solo sobre las causas que el bot SÍ puede cargar: se excluyen
-  // las que están fuera de su cola (ver noCargablePorBot) porque nunca van a tener datos →
-  // si contaran, la barra quedaría "clavada" sin poder llegar al 100%.
+  // Causas que el bot NO puede cargar (fuera de su cola). Se pasa al panel de cobertura solo
+  // como referencia: explica por qué el total de la barra es menor que la lista de la curadora.
+  // La métrica de escaneo REAL (pendientes/ok/error) la lee el panel de v_cobertura, no de acá:
+  // contar movimientos para decir "faltan causas" estaba mal — una causa puede estar escaneada
+  // y sin movimientos nuevos, y las relevadas clavaban la barra sin llegar nunca al 100%.
   const fueraDelPortal = causas.filter(noCargablePorBot).length
-  const totalEnPortal = totalCausas - fueraDelPortal
-  // Numerador y denominador se miden sobre el MISMO universo (causas que están en el portal),
-  // así el porcentaje nunca puede superar el 100% aunque una causa [NO EN PORTAL] conserve
-  // datos viejos de cuando sí estaba.
-  const conDatos = causas.filter(c => !noCargablePorBot(c) && (c.fecha_ultimo_movimiento || c.ultima_audiencia)).length
-  const pctDatos = totalEnPortal > 0 ? Math.round((conDatos / totalEnPortal) * 100) : 0
 
   // FUERA DE MONITOREO: causas donde relevaron la curaduría ([NO EN PORTAL]) o con
   // sentencia de rechazo. Se destacan aparte y NO generan alarmas (no cuentan en urgencias
@@ -971,6 +964,24 @@ export default function Dashboard() {
       </div>
       )}
 
+      {/* COBERTURA DEL BOT — la métrica única ("¿están todas cargadas y al día?"). Va arriba
+          del resultado del filtro para que nunca quede enterrada bajo la lista de causas.
+          Lee v_cobertura/v_run_activo (cola real del bot), no movimientos. */}
+      <CoberturaPanel fueraDeLaCola={fueraDelPortal} onRunTermino={loadCausas} />
+
+      {/* Semáforo degradado: si ni la vista ni /api/ranking respondieron, TODO sale "Estable"
+          y las urgencias de arriba NO son reales. Hay que decirlo, no dejarlo en silencio. */}
+      {modoFallback && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 flex items-start gap-2">
+          <IconAlert className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+          <p className="text-xs text-amber-800">
+            El semáforo de urgencias no se pudo calcular, así que todas figuran como 'Estable'.
+            Las causas igual están todas en pantalla; solo falta el color. Reintentá con
+            Actualizar en un momento.
+          </p>
+        </div>
+      )}
+
       {/* RESULTADO DEL FILTRO: aparece JUSTO debajo de los KPI cuando Paula aprieta uno.
           Antes el resultado se renderizaba al fondo y "no pasaba nada" visible: había que
           scrollear mucho. Ahora aparece acá arriba, con un encabezado que confirma qué se
@@ -1008,38 +1019,6 @@ export default function Dashboard() {
             </div>
           )}
         </div>
-      )}
-
-      {/* Progreso de llenado de datos por el bot (solo con la vista; el fallback de
-          tabla directa no trae fecha_ultimo_movimiento/ultima_audiencia). */}
-      {!modoFallback && (
-      <div className="bg-white rounded-xl p-4 border border-slate-200 shadow-sm">
-        <div className="flex items-center justify-between mb-2">
-          <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-            <IconDownload className="w-4 h-4 text-slate-400" />
-            Datos cargados desde el portal
-          </span>
-          <span className="text-sm font-semibold text-slate-700 tabular-nums">
-            {conDatos} de {totalEnPortal} <span className="text-slate-400">({pctDatos}%)</span>
-          </span>
-        </div>
-        <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-          <div
-            className="bg-slate-800 h-2 rounded-full transition-[width] duration-500 ease-out"
-            style={{ width: `${pctDatos}%` }}
-          />
-        </div>
-        {conDatos < totalEnPortal && (
-          <p className="text-xs text-slate-400 mt-1.5">
-            Faltan {totalEnPortal - conDatos} causas por revisar con el bot (movimientos/audiencias).
-          </p>
-        )}
-        {fueraDelPortal > 0 && (
-          <p className="text-xs text-slate-400 mt-1">
-            {fueraDelPortal} causas que el bot no puede cargar (relevadas, archivadas o con el RIT a revisar) no se cuentan acá.
-          </p>
-        )}
-      </div>
       )}
 
       {/* Leyenda del semáforo (íconos formales ligados al color). Solo en la vista general:

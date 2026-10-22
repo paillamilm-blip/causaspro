@@ -177,11 +177,12 @@ dashboard. **Toda escritura debe AGREGAR línea, nunca reemplazar el campo.** Un
 `update({ notas: '...' })` directo devuelve a la cola causas ya descartadas y borra los
 vínculos P↔X. Patrón a copiar: `agregarNota()` en `src/lib/asignacionesSync.ts`.
 
-#### 12. NUNCA importar `src/bot/` ni `src/email/` desde `src/app/`
-`src/email/` arrastra `imapflow` y `src/bot/` arrastra `playwright` + `fs`. Importarlos desde
+#### 12. NUNCA importar `src/bot/` (ni nada que arrastre dependencias pesadas) desde `src/app/`
+`src/email/` (IMAP, dado de baja el 21-oct-2026) arrastraba `imapflow`; `src/bot/` arrastra
+`playwright` + `fs`. Importarlos desde
 una ruta de Next **rompe el build en Vercel (~21 s)** aunque el build local pase perfecto
 (verificado con clon limpio, `npm install`, Node 18 y 22). La lógica compartida va en
-`src/lib/`, y la dependencia va en una sola dirección: `src/email → src/lib`, nunca al revés.
+`src/lib/`, y la dependencia va en una sola dirección: `src/bot → src/lib`, nunca al revés.
 
 #### 13. Si Vercel falla y el build local pasa, BISECAR — no adivinar
 Un deploy que falla en ~21 s no da logs accesibles. Lo que funciona: rama de prueba desde

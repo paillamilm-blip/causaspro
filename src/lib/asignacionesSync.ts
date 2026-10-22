@@ -2,9 +2,9 @@
 // CAUSASPRO - Guardado de asignaciones en Supabase
 // Crea las causas nuevas y agenda las audiencias de la tabla del correo
 // ------------------------------------------------------------
-// Vive en src/lib/ por el mismo motivo que asignacionesParser.ts: importar `src/email/`
-// desde una ruta de Next rompe el build en Vercel (ese módulo es un CLI que arrastra
-// imapflow). El CLI de correo lo sigue usando importándolo desde acá.
+// Vive en src/lib/ por el mismo motivo que asignacionesParser.ts: cuando vivió junto al
+// interceptor de correo (un CLI que arrastraba imapflow) importarlo desde una ruta de Next
+// rompía el build en Vercel. El interceptor quedó dado de baja; la ubicación se mantiene.
 // ============================================================
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js'
@@ -24,6 +24,15 @@ export interface ResultadoSync {
   causas_existentes: number
   audiencias_creadas: number
   errores: string[]
+  /** Tokens que el parser reconoció como "parece RIT" pero rechazó (se muestran a la usuaria). */
+  descartes?: string[]
+}
+
+/** Deriva (rol, anio) desde un RIT ya limpio: "P-8141-2026" | "8141-2026" → {8141, 2026}. */
+function partirRit(rit: string): { rol: number | null; anio: number | null } {
+  const m = rit.match(/^(?:[A-Z]{1,3}-)?(\d{1,6})-(\d{4})$/)
+  if (!m) return { rol: null, anio: null }
+  return { rol: parseInt(m[1]), anio: parseInt(m[2]) }
 }
 
 /**
@@ -86,7 +95,8 @@ function getSupabase(): SupabaseClient {
  */
 export async function syncAsignaciones(
   asignaciones: Asignacion[],
-  emailMeta: { email_id: string; fecha: string; remitente: string }
+  emailMeta: { email_id: string; fecha: string; remitente: string },
+  opts?: { descartes?: string[] }
 ): Promise<ResultadoSync> {
   const sb = getSupabase()
   
@@ -99,46 +109,71 @@ export async function syncAsignaciones(
     causas_existentes: 0,
     audiencias_creadas: 0,
     errores: [],
+    descartes: opts?.descartes ?? [],
   }
   
   for (const asig of asignaciones) {
     try {
-      // 1. Verificar si la causa ya existe (por RIT)
-      // Traemos `notas` para poder AGREGAR sin borrar las marcas del bot (ver agregarNota).
-      const { data: existing } = await sb
+      // 1. Verificar si la causa ya existe. Primero por RIT exacto; si no, por (rol, anio),
+      //    que atrapa el caso "8141-2026" pegado sin letra cuando la BD tiene "P-8141-2026"
+      //    (y viceversa). Sin esto, cada pegado sin letra creaba una causa huérfana duplicada.
+      const { rol, anio } = partirRit(asig.rit)
+      const { data: byRit } = await sb
         .from('causas')
-        .select('id, notas')
+        .select('id, notas, rit, escaneo_estado')
         .eq('rit', asig.rit)
         .limit(1)
+
+      let existente = byRit && byRit.length > 0 ? byRit[0] : null
+      if (!existente && rol != null && anio != null) {
+        const { data: byRolAnio } = await sb
+          .from('causas')
+          .select('id, notas, rit, escaneo_estado')
+          .eq('rol', rol)
+          .eq('anio', anio)
+          .limit(2)
+        // Solo se vincula si hay EXACTAMENTE una causa con ese (rol, anio); con 2+
+        // (hermanas P↔X) no se puede saber cuál es sin letra y se trata como nueva.
+        if (byRolAnio && byRolAnio.length === 1) existente = byRolAnio[0]
+      }
       
       let causaId: string
       
-      if (existing && existing.length > 0) {
+      if (existente) {
         // Causa ya existe → solo agregar audiencia
-        causaId = existing[0].id
+        causaId = existente.id
         result.causas_existentes++
-        console.log(`  📌 ${asig.rit} ya existe → actualizar`)
+        console.log(`  📌 ${asig.rit} ya existe (${existente.rit}) → actualizar`)
         
         // Actualizar updated_at y AGREGAR la nota de reasignación conservando lo anterior.
         // Si la nota ya estaba (mismo correo pegado dos veces), no se reescribe `notas`.
         const linea = `${MARCA_ASIGNACION} reasignada por email del ${emailMeta.fecha}${asig.curador ? `. Curador: ${asig.curador}` : ''}`
-        const nuevasNotas = agregarNota((existing[0] as any).notas ?? null, linea)
+        const nuevasNotas = agregarNota((existente as any).notas ?? null, linea)
         await sb
           .from('causas')
           .update({
             updated_at: new Date().toISOString(),
             ...(nuevasNotas !== null ? { notas: nuevasNotas } : {}),
+            // Una causa dada de baja ([NO EN PORTAL]/descatalogada) que vuelve a ser
+            // asignada debe re-entrar a la cola del bot.
+            ...(((existente as any).escaneo_estado === 'descatalogada')
+              ? { escaneo_estado: 'pendiente' }
+              : {}),
           })
           .eq('id', causaId)
         
       } else {
-        // Causa nueva → crear
+        // Causa nueva → crear. escaneo_estado queda 'pendiente' por DEFAULT de la BD
+        // (post schema-001-cobertura): entra sola a la cola del bot, sin pasos manuales.
         const { data: newCausa, error: createErr } = await sb
           .from('causas')
           .insert({
             rit: asig.rit,
+            rol,
+            anio,
             tipo: inferirTipoDesdeRit(asig.rit),
             estado: 'Asignada por email',
+            origen: 'asignada',
             fecha_notificacion: asig.fecha_ingreso || new Date().toISOString().split('T')[0],
             // Causa nueva: no hay notas previas que conservar, así que se escribe directo.
             notas: `${MARCA_ASIGNACION} asignada por ${emailMeta.remitente} el ${emailMeta.fecha}${asig.curador ? `. Curador: ${asig.curador}` : ''}`,
@@ -157,34 +192,28 @@ export async function syncAsignaciones(
         console.log(`  ✅ ${asig.rit} NUEVA causa creada`)
       }
       
-      // 2. Crear audiencia si hay fecha
+      // 2. Crear audiencia si hay fecha. Idempotente vía upsert sobre el índice único
+      //    (causa_id, uniq_clave) agregado por schema-001-cobertura.sql: pegar el mismo
+      //    correo dos veces no duplica la audiencia aunque cambie el formato de la fecha.
       if (asig.fecha_audiencia) {
-        // Verificar que no exista ya una audiencia con esa fecha
-        const { data: existingAud } = await sb
+        const { error: audErr } = await sb
           .from('audiencias')
-          .select('id')
-          .eq('causa_id', causaId)
-          .eq('fecha', asig.fecha_audiencia)
-          .limit(1)
-        
-        if (!existingAud || existingAud.length === 0) {
-          const { error: audErr } = await sb
-            .from('audiencias')
-            .insert({
+          .upsert(
+            {
               causa_id: causaId,
               fecha: asig.fecha_audiencia,
               tipo: 'Audiencia (asignada por email)',
               notas: `Curador: ${asig.curador}. Fuente: email ${emailMeta.fecha}`,
-            })
-          
-          if (audErr) {
-            result.errores.push(`Error creando audiencia para ${asig.rit}: ${audErr.message}`)
-          } else {
-            result.audiencias_creadas++
-            console.log(`  📅 Audiencia ${asig.fecha_audiencia} creada para ${asig.rit}`)
-          }
+            },
+            { onConflict: 'causa_id,uniq_clave' }
+          )
+          .select('id')
+
+        if (audErr) {
+          result.errores.push(`Error creando audiencia para ${asig.rit}: ${audErr.message}`)
         } else {
-          console.log(`  ℹ️ Audiencia ${asig.fecha_audiencia} ya existía para ${asig.rit}`)
+          result.audiencias_creadas++
+          console.log(`  📅 Audiencia ${asig.fecha_audiencia} asegurada para ${asig.rit}`)
         }
       }
       
@@ -194,10 +223,31 @@ export async function syncAsignaciones(
     }
   }
   
-  // 3. Guardar log del procesamiento
+  // 3. Guardar log del procesamiento (email_logs) + baseline cuantitativo (carga_lotes).
   await saveEmailLog(sb, result)
+  await saveCargaLote(sb, result)
   
   return result
+}
+
+/**
+ * Baseline de cada pegado: cuántas filas venían, cuántas eran nuevas/existentes y qué
+ * tokens NO se reconocieron. Es el registro que permite responder "¿está todo cargado?"
+ * sin depender de la memoria de nadie. No rompe si la tabla aún no existe (migración pendiente).
+ */
+async function saveCargaLote(sb: SupabaseClient, result: ResultadoSync): Promise<void> {
+  try {
+    await sb.from('carga_lotes').insert({
+      origen: 'pegado',
+      descripcion: result.remitente,
+      filas_totales: result.asignaciones.length + (result.descartes?.length ?? 0),
+      nuevos: result.causas_nuevas,
+      existentes: result.causas_existentes,
+      no_reconocidos: result.descartes && result.descartes.length > 0 ? result.descartes : null,
+    })
+  } catch {
+    // silencioso a propósito: el registro no puede bloquear la carga real
+  }
 }
 
 /**

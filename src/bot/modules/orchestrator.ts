@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos, setEscaneoEstado, logRunItem, upsertBotRunProgreso, refrescarRanking, reclamarColaAbandonada, reencolarVencidas, guardarInventarioPortal, marcarDesaparecidas, getRitsSinLetraEnBd, ritSinLetra } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath, calcularTasaExito, esPosibleCausaHermana } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
@@ -230,7 +230,14 @@ export async function runBotSession(
     // BOT_FIX_LETRAS=1 → modo especial de mantenimiento: corrige la letra/tipo del RIT
     // de las causas de la BD contra el portal (fuente de verdad). NO scrapea movimientos.
     // Es OPT-IN y aislado: si la flag no está, el bot corre exactamente como siempre.
-    if (process.env.BOT_FIX_LETRAS === '1') {
+    // BOT_INVENTARIO=1 → modo INVENTARIO: barre el listado de "Mis Causas > Familia" año por
+    // año y guarda qué causas ve el portal en `inventario_portal`. Es la única forma de
+    // responder "¿están todas?": los pendientes del panel solo cuentan causas YA cargadas, así
+    // que una causa que nunca pegaste es invisible para la cola. NO scrapea movimientos.
+    if (process.env.BOT_INVENTARIO === '1') {
+      status.search_mode = 'inventario'
+      await runInventario(page, cfg, status)
+    } else if (process.env.BOT_FIX_LETRAS === '1') {
       status.search_mode = 'fix_letras'
       await runFixLetras(page, cfg, status)
     } else if (searchMode === 'listado') {
@@ -277,6 +284,10 @@ export async function runBotSession(
     }
 
     await saveBotRunStatus(status).catch(() => {})
+    // El ranking materializado lo refrescaba solo el pg_cron cada 15 min: el panel mostraba
+    // datos viejos justo después de una corrida. Al refrescarlo acá, lo scrapeado hace 5
+    // segundos ya está en la vista (y el cron queda como respaldo si esto falla).
+    await refrescarRanking().catch(() => {})
     
     log('info', `\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`)
     log('info', `📊 Resumen sesión ${runId}:`)
@@ -356,6 +367,19 @@ async function runBusquedaPorRit(
     }
     log('info', `🎯 BOT_RIT activo: procesando SOLO ${causas.length} causa(s): ${causas.map(c => c.rit).join(', ')}`)
   } else {
+    // 1) RECLAMAR la cola abandonada: si la corrida anterior murió a mitad (corte de luz,
+    //    CTRL+C, navegador tumbado) dejó causas en 'en_progreso' que nadie cerró. Como
+    //    'en_progreso' NO entra en la selección, esas causas desaparecerían del radar.
+    const reclamadas = await reclamarColaAbandonada(status.run_id).catch(() => 0)
+    if (reclamadas > 0) log('info', `  ♻️ ${reclamadas} causa(s) volvieron a 'pendiente' (quedaron colgadas de una corrida anterior).`)
+
+    // 2) REVITALIZAR: las 'ok' ya escaneadas hace más de BOT_DIAS_RENOVACION días vuelven a
+    //    'pendiente'. Sin esto la cola se vacía para siempre y el panel mostraría
+    //    "0 pendientes" mientras los movimientos del portal siguen avanzando (es exactamente
+    //    como se pierde una audiencia o un traslado sin enterarse).
+    const reencoladas = await reencolarVencidas().catch(() => 0)
+    if (reencoladas > 0) log('info', `  🔄 ${reencoladas} causa(s) vencidas volvieron a la cola (refresco de movimientos nuevos).`)
+
     // RECUPERACIÓN opt-in: BOT_LIMPIAR_NO_EN_PORTAL=1 quita todas las marcas [NO EN PORTAL]
     // antes de armar la cola, para reintentar causas que quedaron marcadas de más.
     if (process.env.BOT_LIMPIAR_NO_EN_PORTAL === '1') {
@@ -368,8 +392,12 @@ async function runBusquedaPorRit(
   status.total_causas = causas.length
   log('info', `📋 ${causas.length} causas cargadas a revisar (modo RIT, máx ${maxCausas})`)
 
+  // Progreso en vivo: publicar YA el arranque (con total_causas real) para que el panel
+  // muestre "corrida activa: 0 de 25" en vez de esperar al primer hito.
+  await upsertBotRunProgreso(status).catch(() => {})
+
   if (causas.length === 0) {
-    log('warn', 'No hay causas cargadas en la BD para revisar. Cargá causas por Excel primero.')
+    log('warn', 'No hay causas pendientes en la cola. O está todo escaneado, o no hay causas cargadas: pegá el correo de asignaciones en /asignaciones.')
     status.detenido_por = 'completado'
     return
   }
@@ -379,9 +407,19 @@ async function runBusquedaPorRit(
   let panelFallosConsecutivos = 0
   const PANEL_FALLOS_PARA_CORTAR = 3
 
-  for (const causa of causas) {
+  for (const [idx, causa] of causas.entries()) {
+    // Las causas de BOT_RIT que no están en la BD llegan con id "temp-*": NO es un UUID,
+    // así que no puede escribirse en ninguna FK. Se registra el rastro sin causa_id y
+    // NO se le cambia el estado de cola (no tiene).
+    const esTemporal = causa.id.startsWith('temp-')
+    const causaId = esTemporal ? null : causa.id
     status.procesadas++
     log('info', `  [${status.procesadas}/${causas.length}] ${causa.rit}...`)
+
+    // "Atendiéndose ahora": sale visualmente de pendientes y entra al bucket en_progreso.
+    // CADA camino de salida de este bloque fija después un estado terminal, y si el
+    // proceso muere a mitad, reclamarColaAbandonada() la devuelve al arrancar la próxima.
+    if (causaId) await setEscaneoEstado(causaId, 'en_progreso', { runId: status.run_id }).catch(() => {})
 
     try {
       // Buscar la causa por su RIT exacto (1 resultado, sin listado masivo).
@@ -430,8 +468,22 @@ async function runBusquedaPorRit(
           log('info', '     Se corta la tanda ACA. Las causas que faltan quedan intactas en la cola.')
           log('info', '     Volve a correr el bot: hace un login nuevo y sigue donde quedo.')
           status.detenido_por = 'sesion_perdida'
+          // Esta causa vuelve a 'pendiente' (no se le puede llamar fallo) y las que
+          // seguían en el lote se registran como 'no_intentada' para que el panel diga
+          // exactamente dónde se cortó la corrida.
+          if (causaId) await setEscaneoEstado(causaId, 'pendiente').catch(() => {})
+          await logRunItem(status.run_id, causaId, causa.rit, 'error', 0, 'sesión perdida: panel de Familia inaccesible').catch(() => {})
+          for (const restante of causas.slice(idx + 1)) {
+            await logRunItem(
+              status.run_id,
+              restante.id.startsWith('temp-') ? null : restante.id,
+              restante.rit, 'no_intentada', 0, 'la tanda se cortó antes de llegar',
+            ).catch(() => {})
+          }
           break
         }
+        if (causaId) await setEscaneoEstado(causaId, 'pendiente').catch(() => {})
+        await logRunItem(status.run_id, causaId, causa.rit, 'error', 0, 'panel de Familia inaccesible (causa no penalizada)').catch(() => {})
         await navigateToConsulta(page)
         await sleep(1500)
         continue
@@ -481,7 +533,12 @@ async function runBusquedaPorRit(
               ? `el portal tiene ${listado}. P y X con el mismo número son causas VINCULADAS (una es antecedente de la otra): vincular con BOT_FIX_LETRAS=1.`
               : `con ese número y año el portal tiene ${listado}, de otra materia. Puede ser el mismo caso que cambió de materia o una causa distinta: verificar las partes antes de vincular.`,
           ).catch(() => {})
+          // Estado 'error' + nota [REVISAR LETRA]: queda FUERA de la cola real (la filtra
+          // esRuidoNotas) pero VISISIBLE en el panel como "N causas con error", que es justo
+          // lo que se necesita para no andar en círculos: hay una decisión humana pendiente.
+          await setEscaneoEstado(causa.id, 'error', { runId: status.run_id }).catch(() => {})
         }
+        await logRunItem(status.run_id, causaId, causa.rit, 'no_encontrada', 0, `el portal lo tiene como ${listado}`).catch(() => {})
         await navigateToConsulta(page)
         await sleep(1500)
         continue
@@ -499,6 +556,7 @@ async function runBusquedaPorRit(
         if (!causa.id.startsWith('temp-')) {
           if (portalConfirmoNoExiste) {
             // El portal CONFIRMÓ que no existe → marca directa, deja de reintentarse.
+            // (marcarCausaNoEnPortal fija además el estado 'descatalogada' en la cola.)
             await marcarCausaNoEnPortal(causa.id).catch(() => {})
           } else {
             // Fallo TRANSITORIO (timeout, panel no cargó, resultado vacío sin mensaje
@@ -516,9 +574,18 @@ async function runBusquedaPorRit(
               // fuerte para que quede en el resumen de la corrida.
               log('warn', `  ⚠️ ${causa.rit}: ${maxIntentos} intentos fallidos consecutivos → CUARENTENA [REVISAR] (no se reintenta; revisar manualmente).`)
               status.errores.push(`${causa.rit}: EN CUARENTENA tras ${maxIntentos} intentos — revisar manualmente`)
+              // (registrarIntentoFallido ya dejó el estado en 'error'.)
+            } else {
+              // Sigue reintentable: volver a 'pendiente' con el contador arriba. Sin esto
+              // quedaría pegada en 'en_progreso' y desaparecía de la cola.
+              await setEscaneoEstado(causa.id, 'pendiente', { runId: status.run_id }).catch(() => {})
             }
           }
         }
+        await logRunItem(
+          status.run_id, causaId, causa.rit, 'no_encontrada', 0,
+          portalConfirmoNoExiste ? 'el portal confirmó que no existe' : 'no encontrada (fallo transitorio, se reintenta)',
+        ).catch(() => {})
         // (La métrica del paso 'busqueda' con exito=false ya la registró medirPaso.)
         // Volver al formulario limpio para la siguiente búsqueda
         await navigateToConsulta(page)
@@ -569,13 +636,21 @@ async function runBusquedaPorRit(
             + `${scrapedData.movimientos.length} mov, ${scrapedData.audiencias.length} aud, ${scrapedData.resoluciones.length} res`)
         } else {
           await saveCausaData(scrapedData, analysis)
-          await markCausaScraped(causa.id)
+          // movimientosEncontrados define ok vs sin_datos: "escaneada y sin movimientos"
+          // es un resultado VÁLIDO, no una causa que falte escanear.
+          await markCausaScraped(causa.id, scrapedData.movimientos.length, status.run_id)
           // Se encontró y scrapeó bien: limpiar cualquier contador de intentos fallidos
           // previo (borrón y cuenta nueva), para que un fallo transitorio pasado no la
           // marque de más en el futuro.
           await borrarContadorIntentos(causa.id).catch(() => {})
           status.exitosas++
         }
+        await logRunItem(
+          status.run_id, causaId, causa.rit,
+          scrapedData.movimientos.length > 0 ? 'ok' : 'sin_movimientos',
+          scrapedData.movimientos.length,
+          esDiagnosticoSinPersistir ? 'solo diagnóstico (id temporal), no persistido' : undefined,
+        ).catch(() => {})
 
         if (analysis.requiere_accion_inmediata) {
           log('warn', `  ${generateAlertSummary(analysis)}`)
@@ -583,6 +658,9 @@ async function runBusquedaPorRit(
       } else {
         status.fallidas++
         status.errores.push(`${causa.rit}: no se pudo abrir el detalle`)
+        // 'error' SÍ vuelve a la cola (se reintenta): es un fallo del bot/portal, no del dato.
+        if (causaId) await setEscaneoEstado(causaId, 'error', { runId: status.run_id, contarScan: true }).catch(() => {})
+        await logRunItem(status.run_id, causaId, causa.rit, 'error', 0, 'no se pudo abrir el detalle').catch(() => {})
       }
 
       // Volver al formulario para la siguiente causa (no history.back — pierde sesión)
@@ -593,6 +671,10 @@ async function runBusquedaPorRit(
       status.fallidas++
       status.errores.push(`${causa.rit}: ${err.message}`)
       log('warn', `  Error en ${causa.rit}: ${err.message}`)
+      // La causa NO se descarta: 'error' la mantiene en la cola (pendiente|error) para la
+      // próxima corrida. Solo se registraría descatalogada si el PORTAL lo confirmara.
+      if (causaId) await setEscaneoEstado(causaId, 'error', { runId: status.run_id, contarScan: true }).catch(() => {})
+      await logRunItem(status.run_id, causaId, causa.rit, 'error', 0, err?.message).catch(() => {})
       // Aprendizaje: si el error parece bloqueo/CAPTCHA, marcar la sesión.
       if (categorizarError(err?.message) === 'captcha') {
         status.bloqueo_detectado = true
@@ -614,10 +696,120 @@ async function runBusquedaPorRit(
       }
     }
 
+    // PROGRESO EN VIVO: cada 5 causas se publica el contador de la corrida. Es 1 upsert
+    // chico (no toca el ranking), así que el panel puede mostrar "12 de 25" sin esperar
+    // a que termine la tanda — que es justamente lo que se no-tenía cuando había que
+    // adivinar si el bot avanzaba o estaba clavado.
+    if (status.procesadas % 5 === 0) {
+      await upsertBotRunProgreso(status).catch(() => {})
+    }
+
     // Delay humanizado entre causas (anti-detección)
     await humanDelay(cfg.delayMin, cfg.delayMax)
   }
 
+  // Cierre del lote: publicar el conteo final (saveBotRunStatus del finally hace el
+  // definitivo, pero esto deja la corrida legible aunque el proceso tarde en cerrar).
+  await upsertBotRunProgreso(status).catch(() => {})
+
+  status.detenido_por = 'completado'
+}
+
+// ============================================================
+// MODO INVENTARIO (BOT_INVENTARIO=1)
+// Barre el listado "Mis Causas > Familia" año por año y guarda en `inventario_portal`
+// exactamente qué causas ve el portal. Con eso la conciliación puede decir, por primera
+// vez, si hay causas del portal que NUNCA se cargaron: la cola de pendientes solo cuenta
+// las que ya están en la base, así que una causa jamás pegada es invisible para ella.
+//
+// NO scrapea movimientos, NO toca escaneo_estado y NO crea causas (eso lo hace el pegado,
+// que es el ingreso oficial). Solo lee y compara.
+// ============================================================
+async function runInventario(
+  page: Page,
+  cfg: BotConfig,
+  status: BotRunStatus,
+): Promise<void> {
+  const anosEnv = (process.env.BOT_YEARS || '').trim()
+  const years = anosEnv
+    ? anosEnv.split(',').map((y: string) => y.trim()).filter(Boolean)
+    : (cfg.years || [])
+
+  // Umbral de sentido común. Si el listado trae más filas que esto, el filtro por RUT del
+  // curador NO se aplicó y se está viendo el portal entero (~17.500 causas ajenas): guardar
+  // eso produciría un inventario falso y la conciliación mentiría después. Abortar cuesta una
+  // corrida; guardar mal cuesta confianza.
+  const umbral = Number(process.env.BOT_INVENTARIO_MAX_FILAS || 1200)
+  // BOT_INVENTARIO_SIN_RUT=1 → limpia el RUT (el comportamiento histórico de searchByYear).
+  // Queda como resorte por si el filtro por RUT resultara dar 0 causas en el portal.
+  const mantenerRut = process.env.BOT_INVENTARIO_SIN_RUT !== '1'
+
+  log('info', `📦 INVENTARIO del portal: ${years.length} año(s) [${years.join(', ')}], RUT ${mantenerRut ? 'filtrado' : 'limpiado'}`)
+
+  // Un solo timestamp para toda la corrida: es lo que agrupa las filas y define "el último
+  // inventario" en las vistas de conciliación.
+  const corridaEn = new Date().toISOString()
+  const todas: CausaFoundInPortal[] = []
+
+  for (const year of years) {
+    const filas = await searchByYear(page, year, { mantenerRut })
+    log('info', `   ${year}: ${filas.length} causa(s) visibles en el portal`)
+    todas.push(...filas)
+
+    if (todas.length > umbral) {
+      status.detenido_por = 'error_critico'
+      status.errores.push(`inventario abortado: ${todas.length} filas > umbral ${umbral}`)
+      log('error', `   El listado acumula ${todas.length} causas (umbral ${umbral}): el filtro por RUT no aplicó.`)
+      log('error', '   NO se guarda nada. Si tus causas realmente son más, subí el umbral con BOT_INVENTARIO_MAX_FILAS.')
+      return
+    }
+
+    // Publicar progreso entre años: un barrido tarda varios minutos y el panel decide si la
+    // corrida está viva por escrituras recientes, no por magia.
+    await upsertBotRunProgreso(status).catch(() => {})
+    await sleep(3000)
+  }
+
+  status.total_causas = todas.length
+
+  if (todas.length === 0) {
+    status.detenido_por = 'error_critico'
+    status.errores.push('inventario vacío: el portal no devolvió causas')
+    log('error', '   El portal no devolvió NINGUNA causa. No se guarda un inventario vacío (la conciliación leería "desaparecieron todas").')
+    log('error', '   Probá con BOT_INVENTARIO_SIN_RUT=1: puede que tus causas no filtren por el RUT del curador.')
+    return
+  }
+
+  if (!(await guardarInventarioPortal(todas, corridaEn))) {
+    status.detenido_por = 'error_critico'
+    status.errores.push('no se pudo escribir inventario_portal')
+    return
+  }
+  status.procesadas = todas.length
+  status.exitosas = todas.length
+
+  const vistos = new Set(todas.map(f => f.rit.trim().toUpperCase()))
+  const desaparecidas = await marcarDesaparecidas(corridaEn, vistos)
+  if (desaparecidas > 0) {
+    log('info', `   🔍 ${desaparecidas} causa(s) del inventario anterior ya no aparecen en el portal (archivadas o dadas de baja). Quedan marcadas, no borradas.`)
+  }
+
+  // Resumen en consola: la respuesta a "¿están todas?", sin abrir la web.
+  const enBd = await getRitsSinLetraEnBd()
+  if (!enBd) {
+    log('warn', '   No se pudo leer la base para conciliar; el inventario quedó guardado igual.')
+  } else {
+    const faltan = Array.from(vistos).filter(r => !enBd.has(ritSinLetra(r)))
+    if (faltan.length === 0) {
+      log('success', `   ✅ Las ${vistos.size} causas que ve el portal ya están en tu base. No falta ninguna.`)
+    } else {
+      log('warn', `   ⚠️ ${faltan.length} causa(s) están en el portal pero NO en tu base:`)
+      log('warn', `      ${faltan.slice(0, 40).join(', ')}${faltan.length > 40 ? ' …' : ''}`)
+      log('info', '      Solución: buscá el correo de asignación de esas causas y pegalo en /asignaciones.')
+    }
+  }
+
+  log('info', `   Inventario ${corridaEn}: ${vistos.size} RIT distintos registrados.`)
   status.detenido_por = 'completado'
 }
 
@@ -701,6 +893,9 @@ async function runFixLetras(
 
   status.total_causas = causas.length
   log('info', `📋 FIX_LETRAS: ${causas.length} causa(s) a revisar (máx ${maxCausas}). NO se scrapean movimientos.`)
+  // Este modo NO toca escaneo_estado (no scrapea movimientos): solo publica progreso para
+  // que el panel no lo confunda con una corrida de escaneo detenida.
+  await upsertBotRunProgreso(status).catch(() => {})
 
   if (causas.length === 0) {
     log('warn', 'No hay causas para revisar letra. (¿Cargaste causas por Excel?)')
@@ -894,6 +1089,7 @@ async function runFixLetras(
       try { await navigateToConsulta(page); await sleep(1500) } catch {}
     }
 
+    if (status.procesadas % 5 === 0) await upsertBotRunProgreso(status).catch(() => {})
     await humanDelay(cfg.delayMin, cfg.delayMax)
   }
 
@@ -1026,7 +1222,7 @@ async function runListadoMasivo(
             const analysis = analyzeCausaUrgency(scrapedData)
             await saveCausaData(scrapedData, analysis)
             results.push(scrapedData)
-            await markCausaScraped(causaDb.id)
+            await markCausaScraped(causaDb.id, scrapedData.movimientos.length, status.run_id)
 
             if (analysis.requiere_accion_inmediata) {
               log('warn', `  ${generateAlertSummary(analysis)}`)

@@ -10,7 +10,7 @@ import './loadEnv'
 export { runBotSession, runUrgentOnly, runTestSingle } from './modules/orchestrator'
 export { analyzeCausaUrgency, generateAlertSummary } from './modules/detection'
 export { initSupabase, getCausasToScrape } from './modules/supabaseSync'
-export { getPJUDCredentials, getIMAPCredentials } from './modules/credentials'
+export { getPJUDCredentials } from './modules/credentials'
 export type { BotConfig, CausaScrapedData, BotRunStatus, ScrapeSessionResult } from './types'
 
 import type { BotConfig, ScrapeSessionResult } from './types'

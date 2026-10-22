@@ -1,13 +1,27 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import { createAdminClient } from '@/lib/supabase'
+import { estaAutorizado, excedeRateLimit } from '@/lib/apiAuth'
 
 export const dynamic = 'force-dynamic'
+export const runtime = 'nodejs'
 
 /**
  * DELETE /api/admin/reset - Borra TODAS las causas y datos relacionados
  * ⚠️ CUIDADO: Esto es irreversible
+ *
+ * ⚠️ AHORA PIDE TOKEN: este endpoint borraba la base ENTERA sin ninguna
+ * autenticación, y la app está desplegada en una URL pública de Vercel. Basta
+ * que un robot o cualquier persona que vea la dirección mande un DELETE para
+ * perder todos los expedientes, movimientos y audiencias. Se cerró con el mismo
+ * token fail-closed que usan /api/reporte y /api/asignaciones.
  */
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+  if (!estaAutorizado(req)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
+  if (excedeRateLimit(req, 'admin-reset', 2, 60_000)) {
+    return NextResponse.json({ error: 'Demasiados intentos. Esperá un minuto.' }, { status: 429 })
+  }
   try {
     const supabase = createAdminClient()
 
@@ -30,7 +44,10 @@ export async function DELETE() {
 /**
  * GET /api/admin/reset - Muestra conteo de datos actual
  */
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!estaAutorizado(req)) {
+    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
   try {
     const supabase = createAdminClient()
 

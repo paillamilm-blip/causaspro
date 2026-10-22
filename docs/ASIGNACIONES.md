@@ -21,7 +21,7 @@ Casi siempre es porque se copió solo una parte del correo. Volvé al correo y u
 
 ## Para el desarrollador: por qué NO es automático
 
-El módulo `src/email/` tiene un interceptor IMAP completo y funcionando… que **no puede conectarse al buzón de la curadora**.
+Existió un interceptor IMAP completo y funcionando (`src/email/`, dado de baja el 21-oct-2026) que **no podía conectarse al buzón de la curadora**.
 
 Registros DNS de `cajmetro.cl` (verificado 22-sep-2026):
 
@@ -31,19 +31,19 @@ autodiscover  → autodiscover.outlook.com
 SPF           → include:spf.protection.outlook.com
 ```
 
-El correo está en **Microsoft 365 (Exchange Online)**, y Microsoft [eliminó la autenticación básica](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online) (usuario + contraseña) para IMAP y POP. `src/email/modules/imapClient.ts` se conecta justamente con `IMAP_USER` + `IMAP_PASSWORD`.
+El correo está en **Microsoft 365 (Exchange Online)**, y Microsoft [eliminó la autenticación básica](https://learn.microsoft.com/en-us/exchange/clients-and-mobile-in-exchange-online/deprecation-of-basic-authentication-exchange-online) (usuario + contraseña) para IMAP y POP, que era justo el método que usaba ese interceptor.
 
-**No es un problema de configuración.** Ninguna combinación de `IMAP_HOST` o de contraseña lo resuelve: Exchange rechaza el método de autenticación, no las credenciales. Por eso el PR #81 (modo histórico) se cerró.
+**No era un problema de configuración.** Ninguna combinación de servidor o de contraseña lo resuelve: Exchange rechaza el método de autenticación, no las credenciales. Por eso el PR #81 (modo histórico) se cerró.
 
-> No usar la vía de reenviar los correos a un Gmail y leerlos por IMAP: implica sacar datos de causas de protección de menores del correo institucional hacia una cuenta personal, y muchos tenants bloquean el reenvío externo igual.
+> Si algún día se vuelve a la vía automática, el camino es **Microsoft Graph con OAuth**, y requiere que TI de cajmetro registre una aplicación en el tenant. No usar la vía de reenviar los correos a un Gmail y leerlos por IMAP: implica sacar datos de causas de protección de menores del correo institucional hacia una cuenta personal, y muchos tenants bloquean el reenvío externo igual.
 
 ### Qué se reutiliza
 
-La pantalla de pegado **no reimplementa nada**. El flujo comparte el código con el interceptor:
+La pantalla de pegado **no reimplementa nada**. Conserva el parser y el sync que construyó el interceptor, hoy en `src/lib/`:
 
 ```
-Correo pegado → parseAsignaciones()   (src/email/modules/htmlParser.ts)
-              → syncAsignaciones()    (src/email/modules/syncAsignaciones.ts)
+Correo pegado → parseAsignaciones()   (src/lib/asignacionesParser.ts)
+              → syncAsignaciones()    (src/lib/asignacionesSync.ts)
               → Supabase
 ```
 

@@ -1,0 +1,64 @@
+@echo off
+cd /d "%~dp0"
+title CausasPro - Inventario del portal
+
+REM ============================================================
+REM CausasPro - INVENTARIO DEL PORTAL (un solo clic)
+REM ============================================================
+REM
+REM QUE HACE: el bot mira el listado "Mis Causas > Familia" ano por ano y anota QUE
+REM causas ve el portal. Con eso la pantalla principal puede responder la pregunta
+REM que el mantenimiento diario NO puede responder:
+REM
+REM     "¿estan TODAS mis causas cargadas, o me falta alguna?"
+REM
+REM El contador de pendientes solo conoce las causas que YA estan en tu base. Una
+REM causa que el tribunal te asigno y nunca pegaste es invisible para el resto del
+REM sistema: no se escanea, no se avisa, no existe. Este clic es lo que la descubre.
+REM
+REM COMO SE USA: doble clic. Nada mas.
+REM
+REM NO trae movimientos ni toca nada de las causas: solo lee y compara. Por eso puede
+REM barrer todos los anos sin el limite de 25 causas del mantenimiento diario.
+REM
+REM CADENCIA: una vez por mes alcanza (o despues de una tanda grande de asignaciones).
+REM Si el inventario es viejo, el panel lo dice: "comparado con el inventario de hace
+REM 40 dias", y lo que se asigno despues de esa fecha no esta contado.
+REM Reutiliza el bot-mantenimiento.bat que ya tenes: el candado (que no corran dos bots a la
+REM vez), el horario 8-18 h y tus credenciales del .env. No pide datos de nuevo.
+REM ============================================================
+
+echo ============================================================
+echo   CausasPro - INVENTARIO DEL PORTAL
+echo   (el bot va a leer el listado de Mis Causas, no los movimientos)
+echo ============================================================
+echo.
+
+if not exist "%~dp0bot-mantenimiento.bat" goto :falta_base
+
+REM La unica diferencia con el mantenimiento diario es esta variable: el bot la ve
+REM y entra al modo inventario. Todo lo demas (login, horario, candado, .env) lo
+REM hace el mismo script de siempre, por call para que herede esta variable.
+set "BOT_INVENTARIO=1"
+
+call "%~dp0bot-mantenimiento.bat"
+
+set "BOT_INVENTARIO="
+exit /b 0
+
+REM ============================================================
+REM MENSAJE DE ERROR
+REM ============================================================
+:falta_base
+echo ------------------------------------------------------------
+echo   FALTA EL SCRIPT BASE
+echo ------------------------------------------------------------
+echo.
+echo   Este inventario reutiliza bot-mantenimiento.bat (ahi estan tus datos
+echo   y el candado anti-bloqueo). Ese archivo todavia no existe en esta carpeta.
+echo.
+echo   Como crearlo:  copy /y bot-mantenimiento.bat.example bot-mantenimiento.bat
+echo   y despues hace doble clic en bot-mantenimiento.bat una vez (te pide 4 datos).
+echo.
+pause
+exit /b 1

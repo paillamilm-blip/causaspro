@@ -8,13 +8,11 @@
     "start": "next start",
     "bot": "tsx src/bot/index.ts",
     "bot:test": "cross-env BOT_MODE=test_single tsx src/bot/index.ts",
-    "bot:urgent": "cross-env BOT_MODE=urgent_only tsx src/bot/index.ts",
-    "email": "tsx src/email/index.ts"
+    "bot:urgent": "cross-env BOT_MODE=urgent_only tsx src/bot/index.ts"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.45.0",
     "docx": "^8.5.0",
-    "imapflow": "^1.0.160",
     "next": "^14.2.0",
     "playwright": "^1.44.0",
     "react": "^18.3.0",

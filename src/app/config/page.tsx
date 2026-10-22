@@ -16,6 +16,8 @@ export default function ConfigPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
   const [formValues, setFormValues] = useState<Record<string, string>>({})
+  // Aviso del servidor: está cifrando con la clave de fábrica (visible en el repo).
+  const [advertencia, setAdvertencia] = useState<string | null>(null)
 
   useEffect(() => {
     loadConfig()
@@ -24,10 +26,18 @@ export default function ConfigPage() {
   async function loadConfig() {
     setLoading(true)
     try {
-      const res = await fetch('/api/config')
+      // /api/config quedó protegida con token (guarda el RUT y la ClaveÚnica del bot).
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const res = await fetch(`/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`)
       const data = await res.json()
+      if (!res.ok) {
+        setMessage({ type: 'error', text: data?.error || 'No autorizado: falta NEXT_PUBLIC_REPORTE_TOKEN en el build.' })
+        setLoading(false)
+        return
+      }
       if (data.configs) {
         setConfigs(data.configs)
+        setAdvertencia(data.advertencia_clave || null)
         // Inicializar form con valores existentes (no encriptados)
         const values: Record<string, string> = {}
         for (const c of data.configs) {
@@ -54,7 +64,8 @@ export default function ConfigPage() {
         }
       }
       
-      const res = await fetch('/api/config', {
+      const token = process.env.NEXT_PUBLIC_REPORTE_TOKEN
+      const res = await fetch(`/api/config${token ? `?token=${encodeURIComponent(token)}` : ''}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ configs: toSave }),
@@ -63,7 +74,12 @@ export default function ConfigPage() {
       const data = await res.json()
       
       if (data.ok) {
-        setMessage({ type: 'success', text: '✅ Configuración guardada correctamente' })
+        // `guardados` puede traer ❌ por clave: si hay alguno, el guardado fue PARCIAL
+        // y decir "guardado correctamente" sería mentir.
+        const fallidos = Object.entries(data.guardados || {}).filter(([, v]) => String(v).startsWith('❌'))
+        setMessage(fallidos.length
+          ? { type: 'error', text: `Se guardó parcialmente. Falló: ${fallidos.map(([k, v]) => `${k} (${v})`).join(', ')}` }
+          : { type: 'success', text: '✅ Configuración guardada correctamente' })
         loadConfig() // Recargar
       } else {
         setMessage({ type: 'error', text: `Error: ${data.error}` })
@@ -85,7 +101,6 @@ export default function ConfigPage() {
 
   // Agrupar configs por sección
   const pjudConfigs = configs.filter(c => c.clave.startsWith('pjud_'))
-  const imapConfigs = configs.filter(c => c.clave.startsWith('imap_'))
   const botConfigs = configs.filter(c => c.clave.startsWith('bot_') || c.clave === 'nombre_curador')
 
   return (
@@ -108,6 +123,13 @@ export default function ConfigPage() {
       </header>
 
       <main className="max-w-3xl mx-auto px-6 py-8 space-y-8">
+        {/* Aviso de seguridad: mientras no exista CONFIG_ENCRYPT_KEY el cifrado es simbólico */}
+        {advertencia && (
+          <div className="p-4 rounded-xl border bg-amber-50 border-amber-200 text-amber-800 text-sm">
+            {advertencia}
+          </div>
+        )}
+
         {/* Mensaje */}
         {message && (
           <div className={`p-4 rounded-xl border ${message.type === 'success' ? 'bg-green-50 border-green-200 text-green-700' : 'bg-red-50 border-red-200 text-red-700'}`}>
@@ -141,32 +163,6 @@ export default function ConfigPage() {
           </div>
         </section>
 
-        {/* Sección Email */}
-        <section className="bg-white rounded-xl border p-6">
-          <div className="flex items-center gap-2 mb-4">
-            <span className="text-2xl">📧</span>
-            <div>
-              <h2 className="font-bold text-gray-800">Correo electrónico (IMAP)</h2>
-              <p className="text-sm text-gray-500">Para interceptar emails de asignación de causas</p>
-            </div>
-          </div>
-          
-          <div className="space-y-4">
-            {imapConfigs.map(config => (
-              <ConfigField
-                key={config.clave}
-                config={config}
-                value={formValues[config.clave] || ''}
-                onChange={(val) => setFormValues(prev => ({ ...prev, [config.clave]: val }))}
-              />
-            ))}
-          </div>
-          
-          <div className="mt-4 p-3 bg-yellow-50 rounded-lg text-xs text-yellow-700">
-            <strong>💡 Tip:</strong> Si no sabes el servidor IMAP, prueba con <code>mail.tudominio.cl</code> o pregunta al área de TI de tu institución.
-          </div>
-        </section>
-
         {/* Sección Bot */}
         <section className="bg-white rounded-xl border p-6">
           <div className="flex items-center gap-2 mb-4">
@@ -195,19 +191,20 @@ export default function ConfigPage() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <div className="p-3 bg-gray-50 rounded-lg">
               <div className="font-medium text-gray-600">Bot PJUD</div>
-              <div className="text-xs text-gray-400">Ejecuta: 1:30 PM + 2:00 AM (Lun-Vie)</div>
+              <div className="text-xs text-gray-400">Corre en tu computadora con bot-mantenimiento.bat</div>
               <div className={`mt-1 text-xs font-medium ${pjudConfigs.some(c => c.tiene_valor) ? 'text-green-600' : 'text-red-500'}`}>
                 {pjudConfigs.some(c => c.tiene_valor) ? '✅ Credenciales configuradas' : '❌ Sin credenciales'}
               </div>
             </div>
             <div className="p-3 bg-gray-50 rounded-lg">
-              <div className="font-medium text-gray-600">Email Interceptor</div>
-              <div className="text-xs text-gray-400">Revisa: cada 30 min (Lun-Vie)</div>
-              <div className={`mt-1 text-xs font-medium ${imapConfigs.some(c => c.tiene_valor) ? 'text-green-600' : 'text-red-500'}`}>
-                {imapConfigs.some(c => c.tiene_valor) ? '✅ Email configurado' : '❌ Sin configurar'}
-              </div>
+              <div className="font-medium text-gray-600">Ingreso de causas</div>
+              <div className="text-xs text-gray-400">Pega tus asignaciones en la pantalla Asignaciones</div>
+              <div className="mt-1 text-xs font-medium text-green-600">✅ Activo</div>
             </div>
           </div>
+          <p className="mt-4 text-xs text-gray-400">
+            El semáforo de cobertura (cuántas causas faltan por escanear) está en la pantalla principal, no acá.
+          </p>
         </section>
 
         {/* Botón guardar (bottom) */}
@@ -260,10 +257,6 @@ function formatLabel(clave: string): string {
   const labels: Record<string, string> = {
     pjud_rut: '🪪 RUT (Portal PJUD)',
     pjud_password: '🔑 Contraseña (Portal PJUD)',
-    imap_host: '🖥️ Servidor IMAP',
-    imap_user: '📧 Email',
-    imap_password: '🔑 Contraseña del correo',
-    imap_port: '🔌 Puerto IMAP',
     bot_max_causas: '📊 Causas por sesión',
     bot_horario_1: '⏰ Horario ejecución 1',
     bot_horario_2: '⏰ Horario ejecución 2',
