@@ -36,6 +36,11 @@ interface Movimiento {
   descripcion: string | null; es_traslado_curador: boolean | null;
 }
 
+/** Expediente vinculado (par P↔X de la misma familia) resuelto a una causa de la base. */
+interface Hermana {
+  id: string; rit: string; tipo: string | null; estado: string | null; cerrada: boolean;
+}
+
 // Tipos de gestión de curaduría (los que Paula registra). El primero es el más frecuente.
 const TIPOS_GESTION = [
   'Entrevista al NNA',
@@ -54,6 +59,11 @@ export default function CausaDetalle() {
   const [audiencias, setAudiencias] = useState<Audiencia[]>([])
   const [gestiones, setGestiones] = useState<Gestion[]>([])
   const [movimientos, setMovimientos] = useState<Movimiento[]>([])
+  // Vínculo P↔X. En el Excel de la curadora los dos expedientes de un mismo NNA están en
+  // UNA celda; el parser los separa en dos causas y anota el hermano en datos_extra.
+  // Acá se resuelven a causas reales para poder saltar de una a la otra.
+  const [ritsVinculados, setRitsVinculados] = useState<string[]>([])
+  const [hermanas, setHermanas] = useState<Hermana[]>([])
   const [loading, setLoading] = useState(true)
   // Formulario de nueva gestión de curaduría.
   const [gestionTipo, setGestionTipo] = useState<string>(TIPOS_GESTION[0])
@@ -145,7 +155,27 @@ export default function CausaDetalle() {
       // sección muestra "sin movimientos" — no rompe el resto del detalle.
       supabase.from('movimientos').select('id, fecha, etapa, tramite, descripcion, es_traslado_curador').eq('causa_id', id).order('fecha', { ascending: false }),
     ])
-    if (c.data) setCausa(c.data)
+    if (c.data) {
+      setCausa(c.data)
+      // El hermano P↔X está anotado como texto en datos_extra; se busca en la base para
+      // saber si existe y poder linkearlo. Si no está cargado se muestra igual (sin link):
+      // la curadora necesita ver que el Excel anotaba dos expedientes, no que falte uno.
+      const rits = String(c.data.datos_extra?.rits_vinculados || '')
+        .split(',').map((s: string) => s.trim()).filter(Boolean)
+      setRitsVinculados(rits)
+      if (rits.length > 0) {
+        const h = await supabase
+          .from('causas')
+          .select('id, rit, tipo, estado, notas')
+          .in('rit', rits)
+        setHermanas((h.data || []).map((x: any) => ({
+          id: x.id, rit: x.rit, tipo: x.tipo, estado: x.estado,
+          cerrada: estaTerminada(x.notas),
+        })))
+      } else {
+        setHermanas([])
+      }
+    }
     if (n.data) setNnas(n.data)
     if (a.data) setAdultos(a.data)
     if (au.data) setAudiencias(au.data)
@@ -363,6 +393,40 @@ export default function CausaDetalle() {
             {causa.fecha_apertura && <InfoRow label="Fecha Apertura" value={formatFecha(causa.fecha_apertura)} />}
             {causa.saj && <InfoRow label="SAJ" value={causa.saj} />}
           </div>
+          {/* Vínculo P↔X: la curadora lo pidió explícitamente ("x y p tienen que aparecer
+              individual y mostrar la vinculación también"). Cada expediente es su propia
+              causa, pero desde acá se ve y se salta al hermano. */}
+          {ritsVinculados.length > 0 && (
+            <div className="mt-4 p-3 bg-indigo-50 border border-indigo-100 rounded-lg">
+              <span className="text-xs font-medium text-indigo-600 uppercase">Expedientes vinculados</span>
+              <p className="text-xs text-indigo-500 mt-0.5">
+                Misma familia: una causa de protección (P) suele convertirse en otra (X).
+                Cada una se escanea por separado.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                {ritsVinculados.map(rit => {
+                  const h = hermanas.find(x => x.rit === rit)
+                  return h ? (
+                    <Link
+                      key={rit}
+                      href={`/causa/${h.id}`}
+                      className="text-sm font-mono bg-white border border-indigo-200 text-indigo-800 rounded-lg px-3 py-1 hover:bg-indigo-100"
+                    >
+                      {h.rit}{h.cerrada ? ' · 🔒 terminada' : ''} →
+                    </Link>
+                  ) : (
+                    <span
+                      key={rit}
+                      title="El Excel anotaba este expediente junto al de esta causa, pero no está cargado en la base."
+                      className="text-sm font-mono bg-white border border-gray-200 text-gray-400 rounded-lg px-3 py-1"
+                    >
+                      {rit} · no cargada
+                    </span>
+                  )
+                })}
+              </div>
+            </div>
+          )}
           {materiaCausa && (
             <div className="mt-3 text-xs text-gray-500">{materiaCausa.descripcion}</div>
           )}

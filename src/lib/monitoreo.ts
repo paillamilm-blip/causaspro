@@ -47,10 +47,14 @@ export function estaTerminada(notas: string | null | undefined): boolean {
  * [ASIGNACIÓN]). Reemplazar el campo rompe la cola del bot y borra los vínculos P↔X, así que
  * SIEMPRE se agrega una línea. Devuelve `null` si ya estaba marcada (no hay nada que escribir).
  */
-export function marcarTerminada(notas: string | null | undefined, fechaISO: string): string | null {
+export function marcarTerminada(
+  notas: string | null | undefined,
+  fechaISO: string,
+  motivo = 'sacada de monitoreo por la curadora',
+): string | null {
   if (estaTerminada(notas)) return null
   const actual = (notas ?? '').trim()
-  const linea = `${MARCA_TERMINADA} sacada de monitoreo por la curadora el ${fechaISO}.`
+  const linea = `${MARCA_TERMINADA} ${motivo} el ${fechaISO}.`
   return actual ? `${actual}\n${linea}` : linea
 }
 

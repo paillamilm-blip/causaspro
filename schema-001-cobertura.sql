@@ -282,7 +282,36 @@ SELECT
   -- ("27 days 03:12:45") y hay que parsearlo en el navegador. Esto no.
   ROUND(EXTRACT(EPOCH FROM (now() - min(ultima_escaneada)
     FILTER (WHERE escaneo_estado <> 'descatalogada'))) / 86400.0, 1) AS rezago_maximo_dias,
-  now() AS medido_en
+  now() AS medido_en,
+  -- LAS DOS COLUMNAS DE ABAJO VAN AL FINAL A PROPÓSITO: CREATE OR REPLACE VIEW no permite
+  -- reordenar ni sacar columnas, solo agregar al final. En una base que ya tiene la vista,
+  -- ponerlas antes de medido_en haría fallar el reemplazo.
+
+  -- FUERA DE COLA: causas que el bot NUNCA va a reintentar porque están marcadas en `notas`
+  -- con alguna de las 4 marcas que también filtran getCausasToScrape() (esRuidoNotas) y
+  -- noCargablePorBot() en el panel. Mantener los tres criterios iguales:
+  --   [NO EN PORTAL]           → el portal confirmó que no está en Mis Causas
+  --   [REVISAR: no scrapeada]  → cuarentena tras N fallos transitorios
+  --   [REVISAR LETRA]          → el RIT de la base no coincide con el del portal
+  --   [TERMINADA]              → la curadora la cerró a mano
+  -- Solo cuentan las que ADEMÁS están en un estado de trabajo: una [TERMINADA] ya escaneada
+  -- ('ok') no le roba nada a la métrica y sacarla del denominador rompería el porcentaje.
+  count(*) FILTER (WHERE escaneo_estado IN ('pendiente','en_progreso','error')
+                   AND (upper(coalesce(notas, '')) LIKE '%[NO EN PORTAL]%'
+                     OR upper(coalesce(notas, '')) LIKE '%[REVISAR: NO SCRAPEADA]%'
+                     OR upper(coalesce(notas, '')) LIKE '%[REVISAR LETRA]%'
+                     OR upper(coalesce(notas, '')) LIKE '%[TERMINADA]%')) AS fuera_de_cola,
+  -- POR ESCANEAR: el número grande del panel. Es la cola REAL del bot (mismo criterio que
+  -- v_cola_escaneo) menos las que están fuera de cola. Sin esta columna el panel sumaba
+  -- con_error al total y las causas trabadas por letra lo inflaban para siempre: el bot no
+  -- las reintenta, así que ese número nunca podía llegar a 0 por más corridas que hiciera.
+  count(*) FILTER (WHERE (escaneo_estado IN ('pendiente','en_progreso','error')
+                          AND NOT (upper(coalesce(notas, '')) LIKE '%[NO EN PORTAL]%'
+                                OR upper(coalesce(notas, '')) LIKE '%[REVISAR: NO SCRAPEADA]%'
+                                OR upper(coalesce(notas, '')) LIKE '%[REVISAR LETRA]%'
+                                OR upper(coalesce(notas, '')) LIKE '%[TERMINADA]%'))
+                     OR (escaneo_estado IN ('ok','sin_datos')
+                         AND ultima_escaneada < NOW() - INTERVAL '7 days')) AS por_escanear
 FROM causas;
 
 -- Cola de trabajo que consume el bot (nunca escaneadas primero)

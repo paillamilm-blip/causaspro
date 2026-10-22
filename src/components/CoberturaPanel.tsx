@@ -40,6 +40,11 @@ interface CoberturaFila {
   escaneo_mas_antiguo: string | null
   rezago_maximo_dias: number | null
   medido_en: string | null
+  // Columnas nuevas de v_cobertura. OPCIONALES a propósito: el panel se despliega en Vercel
+  // antes de que la curadora pegue el SQL en Supabase, y en esa ventana la vista vieja no las
+  // trae. Si faltan, el panel cae al cálculo anterior en vez de mostrar cualquier cosa.
+  fuera_de_cola?: number
+  por_escanear?: number
 }
 
 interface RunFila {
@@ -306,11 +311,20 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
   const enProgreso = cob.en_progreso || 0
   const conError = cob.con_error || 0
   const fuera = cob.descatalogadas || 0
+  // Causas marcadas en `notas` que el bot ya NO reintenta ([REVISAR LETRA], cuarentena,
+  // [TERMINADA]…). Necesitan una decisión humana, no otra corrida: si contaran acá, el
+  // número grande nunca podría llegar a 0 por más que el bot trabajara.
+  const bloqueadas = cob.fuera_de_cola || 0
   // 'vencidas' y 'pendientes' no se pisan: el bot las re-encola al arrancar, así que una causa
   // vieja está en UNO de los dos bolsillos. Sumarlos da el trabajo total sin contar dos veces.
   const vencidas = cob.vencidas || 0
-  const pendientes = (cob.pendientes || 0) + enProgreso + conError + vencidas
-  const universo = Math.max(0, (cob.total_causas || 0) - fuera)
+  // Si la vista ya trae por_escanear, ESA es la cifra (la calcula Postgres con el mismo
+  // criterio que la cola del bot). Si no, la base todavía tiene la vista vieja y se suma acá.
+  const pendientes =
+    typeof cob.por_escanear === 'number'
+      ? cob.por_escanear
+      : (cob.pendientes || 0) + enProgreso + conError + vencidas
+  const universo = Math.max(0, (cob.total_causas || 0) - fuera - bloqueadas)
   const alDia = Math.max(0, (cob.ok || 0) + (cob.sin_datos || 0) - vencidas)
   const pct = universo > 0 ? Math.min(100, Math.round((alDia / universo) * 100)) : 0
   const ultimoRun = runs.find((r) => r.finished_at) || null
@@ -411,15 +425,16 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
           )}
           {conError > 0 && (
             <Chip etiqueta="Con error" valor={conError} clase="bg-red-50 text-red-700 border-red-200"
-              ayuda="El bot las buscó y falló (sesión, captcha, RIT cambiado). Reintenta solo; si falla varias veces se marcan [REVISAR]." />
+              ayuda="El último intento falló (sesión, captcha, RIT cambiado). El bot reintenta solo; las que ya necesitan tu decisión están en el chip amarillo y NO cuentan en el número grande." />
           )}
           {fuera > 0 && (
             <Chip etiqueta="Fuera del portal" valor={fuera} clase="bg-slate-100 text-slate-500 border-slate-200"
               ayuda="Ya no aparecen en tu lista del portal (te relevaron la curaduría o se cerraron). No se escanean ni se cuentan." />
           )}
-          {fueraDeLaCola > 0 && fueraDeLaCola !== fuera && (
-            <Chip etiqueta="RIT a revisar" valor={fueraDeLaCola} clase="bg-amber-50 text-amber-700 border-amber-200"
-              ayuda="Causas marcadas [REVISAR LETRA] o [REVISAR: no scrapeada]: el RIT de la base no coincide con el del portal." />
+          {(bloqueadas > 0 || (fueraDeLaCola > 0 && fueraDeLaCola !== fuera)) && (
+            <Chip etiqueta="Esperan tu decisión" valor={bloqueadas > 0 ? bloqueadas : fueraDeLaCola}
+              clase="bg-amber-50 text-amber-700 border-amber-200"
+              ayuda="El bot las marcó y ya NO las reintenta, porque ninguna corrida las puede resolver: el RIT de la base no coincide con el del portal ([REVISAR LETRA]), o están en cuarentena tras varios fallos ([REVISAR: no scrapeada]), o vos las cerraste ([TERMINADA]). Por eso no cuentan en el número grande." />
           )}
         </div>
 
