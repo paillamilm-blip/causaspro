@@ -73,7 +73,7 @@ Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key),
      33, con 15 min de descanso entre tandas. No cierres la ventana hasta
      `PROCESO COMPLETO`.
    - **Día a día** — doble clic en `bot-mantenimiento.bat` → 25 causas, una tanda, solo
-     entre 8 y 18 h (hora Chile).
+     entre 6 y 18 h (hora Chile).
    - Ajustes (tamaño de tanda, descanso, horario): ver `BOT-PJUD.md`.
 
 ### 🔴 IMPORTANTE — Rotar las keys expuestas

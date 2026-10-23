@@ -243,7 +243,7 @@ Rangos estimados de mercado (NO confirmados — pendiente validar con los compet
 - Escalar a muchos abogados = muchas más consultas al PJUD = más riesgo. **Es el mayor
   desafío técnico y de negocio, pero también el foso defensivo** (si se resuelve bien,
   es difícil de copiar).
-- **Mitigación existente:** delays 10–25s, horario laboral 8–18h, límite por sesión,
+- **Mitigación existente:** delays 10–25s, ventana horaria 6–18h, límite por sesión,
   user-agent real. **Alternativa de menor riesgo:** la ingesta por pegado (`/asignaciones`)
   no toca el portal, así que el bot puede escanear menos causas por sesión. El interceptor
   IMAP que se planteó acá quedó dado de baja el 21-oct-2026 (Exchange Online ya no acepta

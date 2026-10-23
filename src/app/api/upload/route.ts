@@ -278,26 +278,36 @@ export async function POST(req: NextRequest) {
         // causas nuevas entran solas a la cola del bot.
       }))
 
-      for (let i = 0; i < insertData.length; i += 50) {
-        const batch = insertData.slice(i, i + 50)
-        const { data, error } = await supabase.from('causas').insert(batch).select('id, rit')
+      // EN OLAS DE 6 LOTES A LA VEZ. Secuencial eran ~26 esperas encadenadas y la función
+      // se pasaba de los 60 s de maxDuration: la migración moría a mitad, con las causas
+      // cargadas y los NNA sin cargar (justo el estado que hace dudar de los números).
+      // Se acota a 6 para no abrir cientos de conexiones contra PostgREST.
+      const lotesNuevos: typeof insertData[] = []
+      for (let i = 0; i < insertData.length; i += 50) lotesNuevos.push(insertData.slice(i, i + 50))
 
-        if (error) {
+      for (let v = 0; v < lotesNuevos.length; v += 6) {
+        const ola = lotesNuevos.slice(v, v + 6)
+        const resultados = await Promise.all(ola.map(async (batch) => {
+          const { data, error } = await supabase.from('causas').insert(batch).select('id, rit')
+          if (!error) {
+            return { ok: data || [], fallidas: [] as { rit: string; motivo: string }[] }
+          }
+          // El lote entero fue rechazado. Se prueba fila por fila para poder decir CUÁL y
+          // POR QUÉ (el motivo exacto de la base), que es lo único que permite arreglarlo.
+          // Va secuencial a propósito: es el camino raro y no vale la pena abrir 50 conexiones.
+          const ok: { id: string; rit: string }[] = []
+          const fallidas: { rit: string; motivo: string }[] = []
           for (const single of batch) {
             const { data: sd, error: singleErr } = await supabase.from('causas').insert(single).select('id, rit')
-            if (sd && sd.length) {
-              for (const c of sd) { ritToId[c.rit] = c.id }
-              causasInsertadas += sd.length
-            } else {
-              causasFallidas.push({
-                rit: single.rit,
-                motivo: singleErr?.message || 'La base de datos rechazó la fila',
-              })
-            }
+            if (sd && sd.length) ok.push(...sd)
+            else fallidas.push({ rit: single.rit, motivo: singleErr?.message || 'La base de datos rechazó la fila' })
           }
-        } else if (data) {
-          for (const c of data) { ritToId[c.rit] = c.id }
-          causasInsertadas += data.length
+          return { ok, fallidas }
+        }))
+        for (const r of resultados) {
+          for (const c of r.ok) ritToId[c.rit] = c.id
+          causasInsertadas += r.ok.length
+          causasFallidas.push(...r.fallidas)
         }
       }
     }
@@ -350,14 +360,14 @@ export async function POST(req: NextRequest) {
       .map(c => ritToId[c.rit])
       .filter((x): x is string => typeof x === 'string' && !!x)
 
-    // En lotes: un IN con ~1900 uuid arma una URL que PostgREST rechaza.
-    for (let i = 0; i < idsArchivo.length; i += 200) {
-      const lote = idsArchivo.slice(i, i + 200)
-      await Promise.all([
-        supabase.from('nna').delete().in('causa_id', lote),
-        supabase.from('adultos').delete().in('causa_id', lote),
-      ])
-    }
+    // En lotes: un IN con ~1900 uuid arma una URL que PostgREST rechaza. Los lotes van todos
+    // a la vez (son ~10, o sea ~20 pedidos): uno atrás del otro sumaban varios segundos.
+    const lotesIds: string[][] = []
+    for (let i = 0; i < idsArchivo.length; i += 200) lotesIds.push(idsArchivo.slice(i, i + 200))
+    await Promise.all(lotesIds.flatMap(lote => [
+      supabase.from('nna').delete().in('causa_id', lote),
+      supabase.from('adultos').delete().in('causa_id', lote),
+    ]))
 
     const nnaRecords = nna
       .filter(n => ritToId[n._rit])
