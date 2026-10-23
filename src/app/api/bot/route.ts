@@ -47,7 +47,7 @@ export async function GET(req: NextRequest) {
         'El bot NO se puede ejecutar en Vercel (timeout limitado)',
         'Ejecutar localmente o en un VPS/Railway con cron',
         'Anti-detección: máximo 25 causas por sesión, delays 30-90s',
-        'Solo opera entre 8:00-18:00 hora Chile',
+        'Solo opera entre 6:00-18:00 hora Chile',
       ],
     },
   })

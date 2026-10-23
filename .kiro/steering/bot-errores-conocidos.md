@@ -171,7 +171,7 @@ activamente.
 **Soluciones / mitigaciones (prevención):**
 - ✅ **NO subir** el límite de ~25 causas por sesión (`maxCausasPorSesion`). Es el freno anti-detección más importante.
 - ✅ Mantener **delays aleatorios** de 10–25 s (o más) entre acciones (`delayMin`/`delayMax`).
-- ✅ Operar **solo en horario laboral chileno (8–18 h)** — el bot ya lo valida (`isWithinAllowedHours`).
+- ✅ Operar **solo dentro de una ventana diurna chilena (6–18 h)** — el bot ya lo valida (`isWithinAllowedHours`); se ajusta con `BOT_HORA_INICIO`/`BOT_HORA_FIN` sin tocar el código.
 - ✅ **Tipeo humano** carácter por carácter con velocidad variable (ya implementado en `login.ts`).
 - ✅ Repartir el trabajo en **varias corridas al día** (cron de GitHub Actions) en vez de una masiva.
 

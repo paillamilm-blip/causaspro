@@ -115,10 +115,20 @@ export const URGENCY_PATTERNS = {
   ],
 } as const
 
-/** Horarios permitidos para ejecutar el bot (anti-detección) */
+/**
+ * Horarios permitidos para ejecutar el bot (anti-detección).
+ *
+ * Se pueden cambiar SIN tocar este archivo: BOT_HORA_INICIO y BOT_HORA_FIN en el .bat,
+ * igual que BOT_MAX_CAUSAS. Un valor inválido (vacío, letra, fuera de 0-23) no rompe el
+ * arranque: se ignora y queda el default.
+ */
+const horaDelEnv = (valor: string | undefined, porDefecto: number): number => {
+  const n = parseInt(valor ?? '', 10)
+  return Number.isInteger(n) && n >= 0 && n <= 23 ? n : porDefecto
+}
+
 export const ALLOWED_HOURS = {
-  // Solo ejecutar en horario laboral chileno (simula uso normal)
-  start: 8,   // 8 AM Chile
-  end: 18,    // 6 PM Chile  
+  start: horaDelEnv(process.env.BOT_HORA_INICIO, 6),   // 6 AM Chile
+  end: horaDelEnv(process.env.BOT_HORA_FIN, 18),       // 6 PM Chile
   timezone: 'America/Santiago',
 } as const

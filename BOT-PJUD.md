@@ -127,8 +127,9 @@ Al terminar, revisá el panel en **https://causaspro.vercel.app**.
 Cuando la base ya está cargada, para el **día a día** usá `bot-mantenimiento.bat`:
 
 - Corre **UNA tanda de 25 causas** (trae las nuevas + refresca las más viejas).
-- **Solo corre entre 8 y 18 h (hora Chile)**: fuera de ese horario se auto-cancela.
+- **Solo corre entre 6 y 18 h (hora Chile)**: fuera de ese horario se auto-cancela.
   Correr "de día, como una persona" reduce el riesgo de que el portal marque el bot.
+  La ventana se cambia en el `.bat` (`BOT_HORA_INICIO` / `BOT_HORA_FIN`), sin tocar el código.
 - Bajo perfil: sin ráfagas de 100. Ideal **1 vez al día**.
 
 Se configura solo: la primera vez que le hacés doble clic te pide los 3 datos (Paso 4).
@@ -160,7 +161,7 @@ no existe para el sistema.
 - Compara contra tu base y el panel muestra, bajo la métrica única, si el portal tiene
   causas que vos no (`faltan N`), con cuáles son para que las pegues en **Asignaciones**.
 - Como lista sin entrar a detalles, tarda minutos y no consume el límite de 25 causas.
-- Reutiliza el mismo lock y el horario 8–18 h de `bot-mantenimiento.bat`.
+- Reutiliza el mismo lock y el horario 6–18 h de `bot-mantenimiento.bat`.
 
 **Protecciones del modo** (por qué no puede guardar cualquier cosa):
 
@@ -184,7 +185,7 @@ no existe para el sistema.
 | Cambiar el tamaño de tanda | `set BOT_MAX_CAUSAS=33` |
 | Cambiar el descanso | los `timeout /t 900` (900 s = 15 min) |
 | Más / menos tandas | copiá o borrá un bloque `==== TANDA N ====` |
-| Correr solo en horario laboral (8–18h Chile) | poné `REM ` adelante de `set SKIP_HOUR_CHECK=1` |
+| Correr solo en horario laboral (6–18h Chile) | poné `REM ` adelante de `set SKIP_HOUR_CHECK=1` |
 | Usar tu Chrome instalado | descomentá `set BOT_USE_SYSTEM_CHROME=1` |
 
 **Seguridad incorporada:**
@@ -275,7 +276,7 @@ el 17 de septiembre de 2026**. Los fixes clave, ya presentes en el código:
 | **Límite de sesión** | Por tanda (el `.bat` usa 33; el máximo por defecto es 100) |
 | **Tipeo humano** | Caracteres uno a uno con velocidad variable |
 | **Fingerprint** | User-Agent, viewport, idioma de un Chrome real |
-| **Horario laboral** | 8–18h Chile (se puede omitir con `SKIP_HOUR_CHECK=1`) |
+| **Horario laboral** | 6–18h Chile (se puede omitir con `SKIP_HOUR_CHECK=1`) |
 | **Stealth** | Oculta `navigator.webdriver`, simula plugins de Chrome |
 
 > ⚠️ En julio 2026 un abogado colapsó el sistema con 38.000 escritos automatizados: el
