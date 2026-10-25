@@ -1,23 +1,30 @@
 # 🚀 DEPLOY EN 3 PASOS
 
+> ⚠️ **Antes de empezar — proyecto Supabase correcto:** en este repo aparecieron dos
+> URLs de proyecto en distintos momentos (`cuwuyqpxaibbqjrvamjb` y `ggwpikokzhckjpwyltye`).
+> Verifica en tu panel de Supabase cuál es el proyecto ACTIVO (el que tiene tus causas) y
+> usa SIEMPRE esa URL. Los `https://supabase.com/dashboard/project/<ID>/...` de abajo son
+> plantillas: reemplaza `<ID>` por el tuyo.
+
 ## Paso 1: Crear las tablas en Supabase
 
-1. Abre: https://supabase.com/dashboard/project/cuwuyqpxaibbqjrvamjb/sql/new
-2. Copia todo el contenido de `schema.sql`
+1. Abre: `https://supabase.com/dashboard/project/<ID>/sql/new`
+2. Copia todo el contenido de `db/base/schema.sql`
 3. Pégalo y click **Run**
-4. ✅ Verás "Success" = tablas creadas
+4. Repite con `db/base/schema-bot.sql`
+5. ✅ Verás "Success" = tablas creadas
+
+> Las migraciones históricas (fixes ya aplicados al proyecto en producción) están en
+> `db/migraciones/`. No las corras de nuevo al montar un proyecto limpio desde
+> `db/base/` salvo `db/migraciones/db/migraciones/schema-v2.sql` y las que `BOT-PJUD.md` pida.
 
 ## Paso 2: Obtener la anon key
 
-1. Abre: https://supabase.com/dashboard/project/cuwuyqpxaibbqjrvamjb/settings/api
+1. Abre: `https://supabase.com/dashboard/project/<ID>/settings/api`
 2. Copia la key que dice **"anon"** (la pública, NO la service_role)
 3. La necesitas para el paso 3
 
 ## Paso 3: Deploy en Vercel
-
-Click este botón para deployar automáticamente:
-
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/TU_USUARIO/causaspro&env=NEXT_PUBLIC_SUPABASE_URL,NEXT_PUBLIC_SUPABASE_ANON_KEY,SUPABASE_SERVICE_ROLE_KEY)
 
 O manualmente:
 
@@ -28,12 +35,19 @@ O manualmente:
 
 | Variable | Valor |
 |----------|-------|
-| `NEXT_PUBLIC_SUPABASE_URL` | `https://cuwuyqpxaibbqjrvamjb.supabase.co` |
+| `NEXT_PUBLIC_SUPABASE_URL` | `https://<ID>.supabase.co` (tu proyecto verificado) |
 | `NEXT_PUBLIC_SUPABASE_ANON_KEY` | (la anon key del paso 2) |
 | `SUPABASE_SERVICE_ROLE_KEY` | (tu service role key — Settings → API → `service_role`) |
+| `NEXT_PUBLIC_REPORTE_TOKEN` | secreto largo y aleatorio. Es el token que aceptan los reportes Word **y** las rutas que escriben/borran (`/api/admin/reset`, `/api/upload`, `/api/config`). Va en el bundle del navegador a propósito: es "puerta cerrada", no secreto fuerte. |
+| `REPORTE_API_TOKEN` | (opcional, recomendado) secreto **solo server-side** para llamadas privilegiadas. Si no se define, cae a `BOT_API_TOKEN` → `SUPABASE_SERVICE_ROLE_KEY`. |
 
 > ⚠️ **NUNCA** pegues la `service_role` key en este archivo ni en ningún archivo versionado.
 > Es la llave maestra de tu base de datos. Va solo en las Environment Variables de Vercel.
+> Genera los tokens con: `node -e "console.log(require('crypto').randomBytes(24).toString('hex'))"`
+
+> 🔒 Todas las rutas que borran o escriben en masa son **fail-closed**: si no hay ningún
+> token configurado, rechazan la llamada (ver `src/lib/apiAuth.ts`). Un proyecto desplegado
+> sin `NEXT_PUBLIC_REPORTE_TOKEN` deja el panel sin botón de borrado, no expuesto.
 
 5. Click **Deploy**
 6. ¡Listo! Tu app estará en una URL tipo: `causaspro-xxxxx.vercel.app`
@@ -49,6 +63,9 @@ O manualmente:
 ---
 
 ## 🤖 Ejecutar el Bot PJUD en Windows
+
+El bot se corre **SOLO LOCAL** en la PC: el portal PJUD bloquea IPs de nube, por eso el
+workflow de GitHub Actions quedó sin cron (solo disparo manual de respaldo).
 
 Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key), por eso
 **NO se versionan** (están en `.gitignore`). Se usan plantillas `.bat.example`:
@@ -79,11 +96,11 @@ Los scripts `.bat` contienen secretos (RUT, contraseña PJUD, service role key),
 ### 🔴 IMPORTANTE — Rotar las keys expuestas
 
 Versiones anteriores de estos `.bat` (y del `DEPLOY.md`) tenían la **service role key**
-escrita en texto plano y quedaron en el historial de git. Por seguridad, **rota la key**:
+escrita en texto plano y quedaron en el historial de git. Por seguridad, **rota la key**
+(y verifica si ya se hizo antes de dar el panel público):
 
 1. Supabase → Settings → API → **Reset** de la `service_role` key (genera una nueva).
-2. Actualiza el nuevo valor en: tus `.bat` locales, las env vars de Vercel y los
-   Secrets de GitHub Actions.
+2. Actualiza el nuevo valor en: el `.env` local de la PC y las env vars de Vercel.
 3. La key vieja queda invalidada — aunque siga en el historial, ya no sirve.
 
 > La contraseña de Clave Única no estaba en el repo (era un placeholder `CAMBIAR_*`),

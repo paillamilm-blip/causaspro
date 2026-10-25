@@ -11,7 +11,7 @@
 //   (Cuando quieras pasar a "modo activo", aquí es donde se conectaría la lógica
 //    que aplique los ajustes — pero eso es una decisión explícita, no ahora.)
 //
-// FUENTES DE DATOS (creadas por schema-bot-aprendizaje.sql):
+// FUENTES DE DATOS (creadas por db/migraciones/schema-bot-aprendizaje.sql):
 //   • bot_runs           → métricas por sesión (duración, tasa de éxito, bloqueo)
 //   • bot_step_metrics   → métricas por etapa (dónde se va el tiempo, dónde falla)
 //   • bot_logs           → errores por causa (categorizados)

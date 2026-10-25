@@ -143,7 +143,7 @@ export function detectTrasladoCurador(text: string): boolean {
 /**
  * Prefijos de RIT válidos para la columna `causas.tipo`.
  * FUENTE ÚNICA DE VERDAD: debe coincidir con el CHECK constraint de
- * schema.sql / schema-tipo-fix.sql y con el catálogo src/lib/materiasFamilia.ts.
+ * db/base/schema.sql / db/migraciones/schema-tipo-fix.sql y con el catálogo src/lib/materiasFamilia.ts.
  * Si se agrega un prefijo aquí, hay que ampliar también el CHECK en la BD y el
  * catálogo de materias (y viceversa).
  *

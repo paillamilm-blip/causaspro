@@ -31,7 +31,7 @@ export async function POST(req: NextRequest) {
   try {
     const admin = createAdminClient()
     // CONCURRENTLY: no bloquea las lecturas del dashboard mientras recalcula.
-    // Requiere el índice único idx_mv_causas_ranking_id (creado en schema-vista-materializada.sql).
+    // Requiere el índice único idx_mv_causas_ranking_id (creado en db/migraciones/schema-vista-materializada.sql).
     const { error } = await admin.rpc('refresh_ranking')
     if (error) {
       return NextResponse.json({ error: error.message, code: (error as any).code ?? null }, { status: 500 })

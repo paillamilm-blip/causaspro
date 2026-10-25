@@ -764,7 +764,7 @@ function parseRows(rows: any[][], sheetName: string, filasCerradas?: boolean[]):
   const adultosDedup: AdultoRaw[] = []
   const seenAdultos = new Set<string>()
   for (const a of adultosList) {
-    // Mismo criterio que schema-dedup-hijos.sql: causa + nombre + relación + teléfono.
+    // Mismo criterio que db/migraciones/schema-dedup-hijos.sql: causa + nombre + relación + teléfono.
     const key = `${a._rit}|${a.nombre}|${a.relacion || ''}|${a.telefono || ''}`
     if (!seenAdultos.has(key)) {
       seenAdultos.add(key)

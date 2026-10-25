@@ -78,7 +78,7 @@ export type BotStep =
 
 /**
  * Tipo de error categorizado (no texto libre). Permite AGRUPAR fallos
- * y que el motor de aprendizaje detecte patrones. Ver schema-bot-aprendizaje.sql.
+ * y que el motor de aprendizaje detecte patrones. Ver db/migraciones/schema-bot-aprendizaje.sql.
  */
 export type BotErrorType =
   | 'timeout'

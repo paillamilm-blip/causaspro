@@ -963,7 +963,7 @@ export async function saveBotError(
  * completo de la sesión.
  *
  * Robustez: si las columnas nuevas todavía no existen en la BD (no se corrió
- * schema-bot-aprendizaje.sql), reintenta solo con las columnas base para no perder
+ * db/migraciones/schema-bot-aprendizaje.sql), reintenta solo con las columnas base para no perder
  * el registro de la sesión.
  */
 export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
@@ -1008,7 +1008,7 @@ export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
   if (!error) return
 
   // Solo degradamos a "columnas base" si el error es COLUMNA INEXISTENTE (Postgres 42703),
-  // es decir, todavía no se corrió schema-bot-aprendizaje.sql. Cualquier otro error
+  // es decir, todavía no se corrió db/migraciones/schema-bot-aprendizaje.sql. Cualquier otro error
   // (constraint, red, etc.) se reporta con su mensaje real — no lo ocultamos.
   const esColumnaFaltante = (error as any)?.code === '42703'
   if (!esColumnaFaltante) {
@@ -1020,7 +1020,7 @@ export async function saveBotRunStatus(status: BotRunStatus): Promise<void> {
   if (baseErr) {
     log('warn', `No se pudo guardar estado del bot (columnas base): ${baseErr.message}`)
   } else {
-    log('warn', 'bot_runs guardado sin métricas nuevas (corré schema-bot-aprendizaje.sql para habilitarlas)')
+    log('warn', 'bot_runs guardado sin métricas nuevas (corré db/migraciones/schema-bot-aprendizaje.sql para habilitarlas)')
   }
 }
 

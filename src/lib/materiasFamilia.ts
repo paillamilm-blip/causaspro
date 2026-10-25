@@ -16,7 +16,7 @@
 //   • Genéricos/otros: T, FA, RIT (comodines que el portal puede usar).
 //
 // IMPORTANTE: si se agrega una letra aquí, hay que ampliar también:
-//   - el CHECK constraint causas_tipo_check en la BD (ver schema-tipo-fix.sql),
+//   - el CHECK constraint causas_tipo_check en la BD (ver db/migraciones/schema-tipo-fix.sql),
 //   - TIPOS_RIT_VALIDOS en src/bot/utils/index.ts.
 // De lo contrario, escribir ese tipo en `causas.tipo` violaría el constraint y la
 // fila se descartaría en silencio.

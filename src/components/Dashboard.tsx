@@ -308,7 +308,7 @@ function getSemaforo(nivel: number | null): { color: string; bg: string; texto: 
 }
 
 // Motivo legible de la urgencia, alineado con el semáforo de la vista
-// (schema-semaforo-proteccion.sql). Prioriza la señal más fuerte de la causa.
+// (db/migraciones/schema-semaforo-proteccion.sql). Prioriza la señal más fuerte de la causa.
 // Devuelve un ÍCONO SVG (formal) + el texto; el color lo pone la tarjeta según el nivel.
 function getUrgenciaMotivo(causa: CausaResumen): MotivoUrgencia | null {
   const nivel = causa.nivel_urgencia

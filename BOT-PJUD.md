@@ -66,8 +66,8 @@ npx playwright install chromium
 
 ### Paso 3 — Preparar la base de datos (una sola vez, en Supabase)
 En **Supabase → SQL Editor**, ejecutar (si no se hizo antes):
-- `schema.sql` (tablas base: causas, nna, adultos, audiencias, …)
-- `schema-bot.sql` (tablas `movimientos`, `bot_logs`, `bot_runs` + vista de urgencia)
+- `db/base/schema.sql` (tablas base: causas, nna, adultos, audiencias, …)
+- `db/base/schema-bot.sql` (tablas `movimientos`, `bot_logs`, `bot_runs` + vista de urgencia)
 
 ### Paso 4 — Crear los `.bat` y configurar tus datos (una sola vez)
 ```cmd

@@ -436,7 +436,7 @@ export async function POST(req: NextRequest) {
         totalFilas: parseResult.totalFilas,
       },
       // Detalle de las causas que la BD rechazó (vacío si todo entró bien). Si aquí
-      // aparecen RIT con letra nueva (p. ej. 'A'), falta correr schema-tipo-fix.sql.
+      // aparecen RIT con letra nueva (p. ej. 'A'), falta correr db/migraciones/schema-tipo-fix.sql.
       causasFallidas,
       // El Excel se jubiló: esto es lo que hay que decirle a la usuaria después de la
       // migración, en la propia respuesta, para que no vuelva a subir el archivo.
