@@ -4,7 +4,7 @@
 
 import * as fs from 'fs'
 import * as path from 'path'
-import { ALLOWED_HOURS } from '../config'
+import { ALLOWED_HOURS, ALLOWED_WINDOWS } from '../config'
 import type { BotErrorType } from '../types'
 
 /**
@@ -42,8 +42,8 @@ export async function sleep(ms: number): Promise<void> {
 export function isWithinAllowedHours(): boolean {
   const now = new Date()
   const chileTime = new Date(now.toLocaleString('en-US', { timeZone: ALLOWED_HOURS.timezone }))
-  const hour = chileTime.getHours()
-  return hour >= ALLOWED_HOURS.start && hour < ALLOWED_HOURS.end
+  const minutos = chileTime.getHours() * 60 + chileTime.getMinutes()
+  return ALLOWED_WINDOWS.some(v => minutos >= v.inicio && minutos < v.fin)
 }
 
 /**

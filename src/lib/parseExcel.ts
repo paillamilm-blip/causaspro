@@ -290,15 +290,20 @@ export function colorDominanteFila(celdas: any[]): string | null {
 }
 
 /**
- * Marca, por índice de fila, cuáles están pintadas de azul (= cerradas). El índice coincide
- * con el de `XLSX.utils.sheet_to_json(ws, { header: 1 })`, así que el parser puede cruzarlo
- * directo con `rows[i]`. Hay que leer el archivo con `cellStyles: true` o esto devuelve
- * todo false en silencio.
+ * Marca, por índice de fila, cuáles están CERRADAS en el Excel: fila pintada de AZUL o
+ * fila OCULTA. La curadora saca de su vista diaria las causas que ya no gestiona
+ * ocultando la fila (1089 ocultas en el Excel de oct-2026), así que la fila oculta es
+ * tan cierre como el azul. El índice coincide con el de
+ * `XLSX.utils.sheet_to_json(ws, { header: 1 })`, así que el parser puede cruzarlo
+ * directo con `rows[i]`. Hay que leer el archivo con `cellStyles: true` o el color
+ * devuelve todo false en silencio.
  */
-export function filasCerradasPorColor(ws: XLSX.WorkSheet): boolean[] {
+export function filasCerradasEnExcel(ws: XLSX.WorkSheet): boolean[] {
   const ref = XLSX.utils.decode_range(ws['!ref'] || 'A1')
+  const filas: any[] = (ws as any)['!rows'] || []
   const out: boolean[] = []
   for (let r = 0; r <= ref.e.r; r++) {
+    if (filas[r] && filas[r].hidden) { out.push(true); continue }
     const celdas: any[] = []
     for (let c = 0; c <= ref.e.c; c++) celdas.push(ws[XLSX.utils.encode_cell({ r, c })])
     const color = colorDominanteFila(celdas)
@@ -467,7 +472,7 @@ export function parseExcelBuffer(buffer: ArrayBuffer): ParseResult {
     const ws = wb.Sheets[sheetName]
     const rows: any[][] = XLSX.utils.sheet_to_json(ws, { header: 1, defval: null })
     
-    const result = parseRows(rows, sheetName, filasCerradasPorColor(ws))
+    const result = parseRows(rows, sheetName, filasCerradasEnExcel(ws))
     if (result && result.causas.length > 0) {
       if (!bestResult || result.causas.length > bestResult.causas.length) {
         bestResult = result
@@ -815,8 +820,9 @@ function findRITColumnByContent(rows: any[][]): { col: number; headerRow: number
  * Versión que recibe rows ya parseados (desde el navegador).
  * El frontend usa XLSX.js para leer el archivo y envía los rows como JSON.
  * `filasCerradas` es opcional: un booleano por fila (mismo índice que `rows`) con las que
- * están pintadas de azul en el Excel. Se calcula con filasCerradasPorColor() en el
- * navegador, porque el color no sobrevive al viaje como JSON.
+ * están cerradas según el Excel (fila oculta O pintada de azul). Se calcula con
+ * filasCerradasEnExcel() en el navegador, porque ni el color ni el estado oculto
+ * sobreviven al viaje como JSON.
  */
 export function parseExcelRows(
   rows: any[][],

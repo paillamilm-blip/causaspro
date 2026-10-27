@@ -132,3 +132,31 @@ export const ALLOWED_HOURS = {
   end: horaDelEnv(process.env.BOT_HORA_FIN, 18),       // 6 PM Chile
   timezone: 'America/Santiago',
 } as const
+
+/** Ventana horaria en minutos desde medianoche (hora Chile). */
+export type VentanaHoraria = { inicio: number; fin: number }
+
+/**
+ * Varias ventanas horarias con precisión de minutos, p. ej.
+ * BOT_HORARIOS=06:00-08:30,13:30-17:00,18:00-20:00
+ * Si la variable no está o es inválida, se usa la ventana única de ALLOWED_HOURS.
+ */
+const parseHorarios = (valor: string | undefined): VentanaHoraria[] | null => {
+  if (!valor || !valor.trim()) return null
+  const ventanas: VentanaHoraria[] = []
+  for (const parte of valor.split(',')) {
+    const m = parte.trim().match(/^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/)
+    if (!m) return null
+    const [h1, m1, h2, m2] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])]
+    if (h1 > 23 || h2 > 23 || m1 > 59 || m2 > 59) return null
+    const inicio = h1 * 60 + m1
+    const fin = h2 * 60 + m2
+    if (fin <= inicio) return null
+    ventanas.push({ inicio, fin })
+  }
+  return ventanas.length > 0 ? ventanas : null
+}
+
+export const ALLOWED_WINDOWS: VentanaHoraria[] =
+  parseHorarios(process.env.BOT_HORARIOS) ??
+  [{ inicio: ALLOWED_HOURS.start * 60, fin: ALLOWED_HOURS.end * 60 }]

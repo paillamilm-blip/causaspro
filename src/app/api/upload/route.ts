@@ -22,10 +22,11 @@ export const maxDuration = 60
 //      esas dos tablas tienen un solo escritor (este endpoint). Las audiencias NO se
 //      importan: las escriben también el bot y el pegado de asignaciones, y ahí la fuente
 //      de verdad es el portal — las del Excel son fechas viejas.
-//   2. AZUL = CERRADA. La curadora marca las causas terminadas pintando la fila de azul, y
-//      el color manda sobre el texto de la columna de estado. Se traduce a la marca
-//      [TERMINADA] en `notas` (append-only, mismo canal que usa el botón de monitoreo),
-//      que es lo que la saca de la cola del bot y de la métrica de pendientes.
+//   2. AZUL U OCULTA = CERRADA. La curadora marca las causas terminadas pintando la fila
+//      de azul u ocultándola, y eso manda sobre el texto de la columna de estado. Se
+//      traduce a la marca [TERMINADA] en `notas` (append-only, mismo canal que usa el
+//      botón de monitoreo), que es lo que la saca de la cola del bot y de la métrica
+//      de pendientes.
 //   3. ESCRIBE origen/cola por default: las causas nuevas nacen con
 //      escaneo_estado='pendiente' (default de la BD tras schema-001-cobertura.sql),
 //      así entran solas a la cola del bot.
@@ -84,9 +85,10 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: `El archivo tiene ${rows.length} filas (máximo ${MAX_FILAS}).` }, { status: 413 })
       }
 
-      // El COLOR de la fila no viaja en el JSON: el navegador lee el archivo con cellStyles
-      // y manda un booleano por fila (las azules = causas cerradas). Se valida el largo para
-      // que un body recortado no corra los índices y cierre la causa equivocada.
+      // El COLOR y el estado OCULTO de la fila no viajan en el JSON: el navegador lee el
+      // archivo con cellStyles y manda un booleano por fila (azules u ocultas = causas
+      // cerradas). Se valida el largo para que un body recortado no corra los índices y
+      // cierre la causa equivocada.
       const filasCerradas = Array.isArray(body?.filasCerradas) && body.filasCerradas.length === rows.length
         ? body.filasCerradas.map((x: any) => x === true)
         : undefined
@@ -139,9 +141,9 @@ export async function POST(req: NextRequest) {
     const supabase = createAdminClient()
 
     // La marca de terminada lleva fecha y motivo legibles: dentro de un mes la curadora tiene
-    // que poder distinguir "la cerré yo a mano" de "venía azul en el Excel de la migración".
+    // que poder distinguir "la cerré yo a mano" de "venía azul/oculta en el Excel de la migración".
     const HOY = new Date().toISOString().split('T')[0]
-    const MOTIVO_CIERRE = 'cerrada por la migración del Excel (fila azul)'
+    const MOTIVO_CIERRE = 'cerrada por la migración del Excel (fila azul u oculta)'
 
     // ------------------------------------------------------------
     // 1. ¿Cuáles ya están en la base?
@@ -267,7 +269,7 @@ export async function POST(req: NextRequest) {
         saj: c.saj || null,
         // `notas` es el canal de control del bot ([NO EN PORTAL], [REVISAR…], [VÍNCULO]).
         // Una causa recién creada no tiene nada ahí, así que lo único que se escribe es la
-        // marca de terminada cuando el Excel la traía en azul: es lo que la saca de la cola
+        // marca de terminada cuando el Excel la traía en azul u oculta: es lo que la saca de la cola
         // del bot y de la métrica de pendientes.
         notas: c.cerrada_en_excel ? marcarTerminada(null, HOY, MOTIVO_CIERRE) : (c.notas || null),
         datos_extra: sanitizeJson(c.datos_extra) || {},
@@ -316,7 +318,7 @@ export async function POST(req: NextRequest) {
     // 3. Actualizar las existentes: SOLO campos del Excel.
     //    NO toca `escaneo_estado` (una causa ya escaneada no vuelve a pendiente por subir el
     //    archivo). En `notas` únicamente AGREGA la marca de terminada cuando la fila venía
-    //    azul: las marcas del bot ([NO EN PORTAL], [VÍNCULO], [REVISAR LETRA]) se conservan.
+    //    azul u oculta: las marcas del bot ([NO EN PORTAL], [VÍNCULO], [REVISAR LETRA]) se conservan.
     //    Van en paralelo por lotes — con el Excel real son ~600 existentes y una por una no
     //    entran en el maxDuration de la función.
     // ------------------------------------------------------------
@@ -441,7 +443,7 @@ export async function POST(req: NextRequest) {
       // El Excel se jubiló: esto es lo que hay que decirle a la usuaria después de la
       // migración, en la propia respuesta, para que no vuelva a subir el archivo.
       despues: [
-        `${causasCerradas.length} causas venían en fila azul: quedaron marcadas como TERMINADAS y ya no entran a la cola del bot. Si alguna sigue viva, abrila desde su ficha.`,
+        `${causasCerradas.length} causas venían en fila azul u oculta: quedaron marcadas como TERMINADAS y ya no entran a la cola del bot. Si alguna sigue viva, abrila desde su ficha.`,
         'Las causas que quedaron vivas están PENDIENTES de escaneo: corré bot-mantenimiento.bat y el bot les trae los movimientos del portal.',
         'De acá en más las causas se cargan pegando el correo en /asignaciones. No hace falta volver a subir el Excel.',
       ],
