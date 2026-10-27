@@ -11,7 +11,7 @@ import {
   IconCheck, IconShield, IconSparkles, IconPause,
 } from './icons'
 import CoberturaPanel from './CoberturaPanel'
-import type { ComponentType, SVGProps } from 'react'
+import type { ComponentType, SVGProps, ReactNode } from 'react'
 
 type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 
@@ -20,11 +20,12 @@ type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera'
+type FiltroUrgencia = 'todas' | 'activas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera'
 
 // Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
 // activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
 const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; dotColor: string; tono: TonoBloque; Icono: IconoTipo }> = {
+  activas:     { title: 'Causas activas — por orden de vencimiento', dotColor: 'bg-green-500', tono: 'green', Icono: IconClock },
   traslados:   { title: 'Traslados al curador', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconShield },
   seguimiento: { title: 'Seguimiento del NNA vencido', dotColor: 'bg-rose-500', tono: 'rose', Icono: IconUsers },
   criticas:    { title: 'Críticas — Acción inmediata', dotColor: 'bg-red-500', tono: 'red', Icono: IconAlert },
@@ -383,6 +384,10 @@ export default function Dashboard() {
   const [refreshing, setRefreshing] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [filtroUrgencia, setFiltroUrgencia] = useState<FiltroUrgencia>('todas')
+  // Cuántas causas ve el PORTAL y no están en la base (lo reporta CoberturaPanel, que ya
+  // lee v_conciliacion). null = todavía no se puede afirmar (falta inventario). La agenda
+  // lo usa para la única fila que el Dashboard no puede calcular solo.
+  const [faltanPortal, setFaltanPortal] = useState<number | null>(null)
   // Estado del Asesor IA: la causa cuyo análisis se abrió + carga/resultado/error.
   // null = modal cerrado.
   const [asesorIA, setAsesorIA] = useState<{
@@ -656,15 +661,27 @@ export default function Dashboard() {
       // La vista no trae gestiones, así que las pedimos en bloque (paginado) y calculamos
       // el estado en el cliente. Es una consulta liviana (tabla chica: bitácora de Paula).
       // Si falla, no rompemos el panel: simplemente no se marca ninguna (chip/KPI en 0).
+      //
+      // CERO MENTIRAS: una causa NUNCA ESCANEADA no tiene gestiones porque el bot todavía
+      // no la trajo, no porque Paula nunca entrevistó al NNA. Marcarla "vencida" inflaba el
+      // KPI (801 = todas las activas). Solo marcamos vencido donde HAY datos reales del
+      // portal (escaneo ok o ya fue escaneada alguna vez); las demás quedan sin marcar.
       try {
-        const { data: gest } = await fetchAll('gestiones', 'causa_id, tipo, fecha')
-        // agruparGestionesPorCausa([]) devuelve un Map vacío, así que una causa sin
-        // gestiones cae en `[]` → estadoSeguimientoNna lo marca vencido (nunca se
-        // entrevistó al NNA). No hace falta un caso especial para "sin gestiones".
-        const porCausa = agruparGestionesPorCausa((gest as any[]) || [])
+        const [gestRes, estRes] = await Promise.all([
+          fetchAll('gestiones', 'causa_id, tipo, fecha'),
+          fetchAll('causas', 'id, escaneo_estado, ultima_escaneada'),
+        ])
+        const conDatos = new Set(
+          ((estRes.data as any[]) || [])
+            .filter((c) => c.escaneo_estado === 'ok' || c.ultima_escaneada != null)
+            .map((c) => c.id),
+        )
+        const porCausa = agruparGestionesPorCausa((gestRes.data as any[]) || [])
         data = data.map((c: any) => ({
           ...c,
-          seguimiento_vencido: estadoSeguimientoNna(porCausa.get(c.id) || []).vencido,
+          seguimiento_vencido: conDatos.has(c.id)
+            ? estadoSeguimientoNna(porCausa.get(c.id) || []).vencido
+            : undefined,
         }))
       } catch (e) {
         console.warn('No se pudieron cargar las gestiones para el seguimiento del NNA:', e)
@@ -749,6 +766,71 @@ export default function Dashboard() {
   // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 180 días.
   const seguimientoVencido = causasActivas.filter(c => c.seguimiento_vencido)
 
+  // ACTIVAS POR VENCIMIENTO: el orden de trabajo que pidió la curadora. Primero las que ya
+  // tienen la medida VENCIDA (tiene medida vigente pero sin fecha futura: se pasó), después
+  // por la fecha más próxima entre medida y audiencia, y al final las sin fecha ninguna.
+  const fechaVencimiento = (c: CausaResumen): number | null => {
+    const fechas = [c.proxima_medida_vence, c.proxima_audiencia]
+      .filter((f): f is string => !!f)
+      .map(f => new Date(f).getTime())
+      .filter(t => !Number.isNaN(t))
+    return fechas.length ? Math.min(...fechas) : null
+  }
+  const medidaVencida = (c: CausaResumen): boolean => c.tiene_medida_vigente === true && !c.proxima_medida_vence
+  const causasActivasPorVencimiento = [...causasActivas].sort((a, b) => {
+    const ga = medidaVencida(a) ? 0 : fechaVencimiento(a) !== null ? 1 : 2
+    const gb = medidaVencida(b) ? 0 : fechaVencimiento(b) !== null ? 1 : 2
+    if (ga !== gb) return ga - gb
+    if (ga === 1) {
+      const d = (fechaVencimiento(a) as number) - (fechaVencimiento(b) as number)
+      if (d !== 0) return d
+    }
+    const ua = a.nivel_urgencia ?? 10
+    const ub = b.nivel_urgencia ?? 10
+    if (ua !== ub) return ua - ub
+    return a.id.localeCompare(b.id)
+  })
+
+  // AGENDA DE HOY: las tareas que exigen una acción, en un solo lugar y orden. Se calcula
+  // sobre TODAS las activas (no sobre el filtro de texto): buscar una causa no debe cambiar
+  // la agenda. Un grupo vacío no se muestra; una causa aparece UNA sola vez, en el grupo de
+  // mayor prioridad (audiencia > traslado > seguimiento > crítica), con el botón "Ver todas"
+  // que lleva al corte completo de ese grupo. Cero mentiras: el grupo "seguimiento" solo
+  // contiene causas con datos reales del portal (seguimiento_vencido === true).
+  const causasAgenda = causas.filter(c => !fueraDeMonitoreo(c))
+  const agendaAudiencias = causasAgenda
+    .filter(c => c.dias_para_audiencia != null && c.dias_para_audiencia <= 7)
+    .sort((a, b) => (a.dias_para_audiencia ?? 0) - (b.dias_para_audiencia ?? 0))
+  const agendaTraslados = causasAgenda
+    .filter(c => c.tiene_traslado_curador)
+    .sort((a, b) => (a.nivel_urgencia ?? 10) - (b.nivel_urgencia ?? 10))
+  const agendaSeguimiento = causasAgenda
+    .filter(c => c.seguimiento_vencido === true)
+    .sort((a, b) => (a.nivel_urgencia ?? 10) - (b.nivel_urgencia ?? 10))
+  const agendaCriticas = causasAgenda
+    .filter(c => (c.nivel_urgencia ?? 10) <= 2)
+    .sort((a, b) => (a.dias_para_audiencia ?? 999) - (b.dias_para_audiencia ?? 999))
+  // Dedupe preservando prioridad: cada id queda en el primer grupo donde aparece.
+  const vistosEnAgenda = new Set<string>()
+  const takeAgenda = (lista: CausaResumen[], max: number) => {
+    const out: CausaResumen[] = []
+    for (const c of lista) {
+      if (out.length >= max) break
+      if (!vistosEnAgenda.has(c.id)) { vistosEnAgenda.add(c.id); out.push(c) }
+    }
+    return out
+  }
+  const agenda = {
+    audiencias: takeAgenda(agendaAudiencias, 7),
+    traslados: takeAgenda(agendaTraslados, 3),
+    seguimiento: takeAgenda(agendaSeguimiento, 3),
+    criticas: takeAgenda(agendaCriticas, 3),
+  }
+  const agendaVacia =
+    agendaAudiencias.length === 0 && agendaTraslados.length === 0 &&
+    agendaSeguimiento.length === 0 && agendaCriticas.length === 0 &&
+    !(faltanPortal && faltanPortal > 0)
+
   // Próximas audiencias: causas ACTIVAS con audiencia futura, ordenadas por fecha (la más
   // próxima primero). Base del calendario de audiencias. Se calcula sobre el filtro de texto.
   const proximasAudiencias = causasActivas
@@ -757,6 +839,7 @@ export default function Dashboard() {
 
   // Filtro rápido por urgencia (clic en tarjeta KPI). No afecta los contadores de arriba.
   const causasFiltradas =
+    filtroUrgencia === 'activas' ? causasActivasPorVencimiento :
     filtroUrgencia === 'traslados' ? traslados :
     filtroUrgencia === 'seguimiento' ? seguimientoVencido :
     filtroUrgencia === 'criticas' ? criticas :
@@ -884,24 +967,42 @@ export default function Dashboard() {
         </div>
       </div>
 
+      {/* AGENDA DE HOY: la tarjeta de tarea única, arriba de todo lo demás. Cada línea abre
+          la causa; cada grupo chico se puede expandir con su botón (activa el filtro ya
+          existente, no duplica la lista). */}
+      {!loading && (
+        <AgendaHoy
+          agenda={agenda}
+          totales={{
+            audiencias: agendaAudiencias.length,
+            traslados: agendaTraslados.length,
+            seguimiento: agendaSeguimiento.length,
+            criticas: agendaCriticas.length,
+          }}
+          faltan={faltanPortal}
+          vacia={agendaVacia}
+          onVer={(tipo) => setFiltroUrgencia(filtroUrgencia === tipo ? 'todas' : tipo)}
+        />
+      )}
+
       {/* DISTINCIÓN DE PRIMER NIVEL (pedido de la curadora): Vigentes vs Terminadas.
           Todo lo demás (urgencias, traslados) es un sub-corte de las VIGENTES. Los dos
           botones grandes actúan como filtro maestro; abajo, los sub-filtros de urgencia. */}
       <div className="grid grid-cols-2 gap-3">
         <button
-          onClick={() => setFiltroUrgencia('todas')}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'activas' ? 'todas' : 'activas')}
           className={`rounded-xl p-4 border-2 text-left transition-colors ${
-            filtroUrgencia !== 'fuera'
+            filtroUrgencia === 'activas'
               ? 'border-green-500 bg-green-50'
               : 'border-slate-200 bg-white hover:border-green-300'
           }`}
         >
           <div className="flex items-center gap-2">
             <span className="w-3.5 h-3.5 rounded-full bg-green-500 shadow-sm"></span>
-            <span className="text-sm font-semibold text-slate-700">Causas vigentes</span>
+            <span className="text-sm font-semibold text-slate-700">Causas activas</span>
           </div>
           <div className="mt-1 text-3xl font-bold text-green-700 tabular-nums">{causasActivas.length}</div>
-          <div className="text-xs text-slate-500 mt-0.5">En monitoreo. Mirá abajo las que necesitan acción.</div>
+          <div className="text-xs text-slate-500 mt-0.5">En monitoreo. Apretá para verlas por orden de vencimiento.</div>
         </button>
         <button
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'fuera' ? 'todas' : 'fuera')}
@@ -967,7 +1068,7 @@ export default function Dashboard() {
       {/* COBERTURA DEL BOT — la métrica única ("¿están todas cargadas y al día?"). Va arriba
           del resultado del filtro para que nunca quede enterrada bajo la lista de causas.
           Lee v_cobertura/v_run_activo (cola real del bot), no movimientos. */}
-      <CoberturaPanel fueraDeLaCola={fueraDelPortal} onRunTermino={loadCausas} />
+      <CoberturaPanel fueraDeLaCola={fueraDelPortal} onRunTermino={loadCausas} onFaltanDelPortal={setFaltanPortal} />
 
       {/* Semáforo degradado: si ni la vista ni /api/ranking respondieron, TODO sale "Estable"
           y las urgencias de arriba NO son reales. Hay que decirlo, no dejarlo en silencio. */}
@@ -1516,6 +1617,20 @@ function CausaCard({ causa: c, onToggleMonitoreo }: {
             )}
           </div>
           <div className="text-right text-xs text-slate-500 whitespace-nowrap shrink-0">
+            {c.tiene_medida_vigente && !c.proxima_medida_vence && (
+              <div className="font-bold text-red-600">Medida VENCIDA</div>
+            )}
+            {c.proxima_medida_vence && (
+              <div>
+                <div className="inline-flex items-center gap-1 font-medium text-slate-600">
+                  <IconClock className="w-3.5 h-3.5 text-slate-400" />
+                  Medida: {formatFechaCorta(c.proxima_medida_vence)}
+                </div>
+                <div className={`font-bold ${(c.dias_medida_vence ?? 99) <= 7 ? 'text-red-600' : 'text-slate-600'}`}>
+                  Vence en {c.dias_medida_vence}d
+                </div>
+              </div>
+            )}
             {c.proxima_audiencia ? (
               <div>
                 <div className="inline-flex items-center gap-1 font-medium text-slate-600">
@@ -1567,5 +1682,138 @@ function CausaCard({ causa: c, onToggleMonitoreo }: {
         </div>
       </div>
     </Link>
+  )
+}
+
+// ============================================================
+// AGENDA DE HOY — la tarjeta de tareas única del panel.
+// Grupos en orden de prioridad; un grupo vacío no se dibuja. Cada fila: causa + plazo,
+// clic para abrirla. Si el grupo tiene más causas que las mostradas, un botón activa el
+// corte completo (reusa filtroUrgencia, no duplica datos).
+// ============================================================
+type AgendaTipo = 'traslados' | 'seguimiento' | 'criticas'
+
+function AgendaHoy({
+  agenda, totales, faltan, vacia, onVer,
+}: {
+  agenda: { audiencias: CausaResumen[]; traslados: CausaResumen[]; seguimiento: CausaResumen[]; criticas: CausaResumen[] }
+  totales: { audiencias: number; traslados: number; seguimiento: number; criticas: number }
+  // null = no se puede afirmar todavía (falta inventario del portal): NO se muestra fila.
+  faltan: number | null
+  vacia: boolean
+  onVer: (tipo: AgendaTipo) => void
+}) {
+  const linea = (c: CausaResumen, textoDerecha: ReactNode, derechaClase = 'text-slate-600') => (
+    <li key={c.id}>
+      <Link
+        href={`/causa/${c.id}`}
+        className="flex items-center justify-between gap-3 px-3 py-2 rounded-lg hover:bg-slate-50 transition-colors"
+      >
+        <span className="flex items-baseline gap-2 min-w-0">
+          <span className="font-mono text-xs font-semibold text-slate-700 shrink-0">{c.rit}</span>
+          <span className="text-xs text-slate-500 truncate">{c.caratulado || c.nombres_nna || ''}</span>
+        </span>
+        <span className={`text-xs font-medium shrink-0 text-right ${derechaClase}`}>{textoDerecha}</span>
+      </Link>
+    </li>
+  )
+
+  const grupo = (
+    Icono: IconoTipo,
+    titulo: string,
+    lista: CausaResumen[],
+    total: number,
+    tipo: AgendaTipo,
+    plazo: (c: CausaResumen) => [ReactNode, string],
+  ) => lista.length === 0 ? null : (
+    <div className="mt-3 first:mt-0">
+      <div className="flex items-center justify-between gap-2 px-1">
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+          <Icono className="w-3.5 h-3.5" /> {titulo}
+        </p>
+        {total > lista.length && (
+          <button
+            onClick={() => onVer(tipo)}
+            className="text-[11px] font-medium text-slate-600 hover:text-slate-900 underline decoration-dotted focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded"
+          >
+            Ver las {total}
+          </button>
+        )}
+      </div>
+      <ul className="mt-1 space-y-0.5">
+        {lista.map((c) => {
+          const [texto, clase] = plazo(c)
+          return linea(c, texto, clase)
+        })}
+      </ul>
+    </div>
+  )
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm p-4">
+      <p className="text-sm font-semibold text-slate-700 flex items-center gap-2">
+        <IconCalendar className="w-4 h-4 text-slate-400" />
+        Tu agenda de hoy
+      </p>
+
+      {vacia ? (
+        <p className="mt-2 text-sm text-slate-600">
+          Hoy no hay nada urgente: ninguna audiencia esta semana, ningún traslado pendiente y
+          ninguna causa crítica. El detalle del escaneo sigue más abajo.
+        </p>
+      ) : (
+        <>
+          {/* 1. Audiencias esta semana: se muestran todas (≤7 suelen ser pocas) */}
+          {agenda.audiencias.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 flex items-center gap-1.5">
+                <IconClock className="w-3.5 h-3.5" /> Audiencias esta semana
+              </p>
+              <ul className="mt-1 space-y-0.5">
+                {agenda.audiencias.map((c) => linea(
+                  c,
+                  <>
+                    {formatFechaCorta(c.proxima_audiencia)}
+                    <span className={`ml-2 font-bold ${c.dias_para_audiencia! <= 2 ? 'text-red-600' : 'text-amber-600'}`}>
+                      {etiquetaAudiencia(c.dias_para_audiencia)}
+                    </span>
+                  </>,
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* 2. Traslados al curador (piden pronunciamiento) */}
+          {grupo(IconShield, 'Traslados al curador', agenda.traslados, totales.traslados, 'traslados',
+            () => ['Requiere tu pronunciamiento', 'text-violet-700'])}
+
+          {/* 3. Seguimiento del NNA vencido — solo causas CON datos del portal */}
+          {grupo(IconUsers, 'Ver al NNA (seguimiento vencido)', agenda.seguimiento, totales.seguimiento, 'seguimiento',
+            () => ['+180 días sin entrevista', 'text-rose-700'])}
+
+          {/* 4. Críticas sin causa anterior más específica */}
+          {grupo(IconAlert, 'Acción inmediata', agenda.criticas, totales.criticas, 'criticas',
+            (c) => [c.dias_para_audiencia != null ? etiquetaAudiencia(c.dias_para_audiencia) : 'Revisar hoy', 'text-red-600'])}
+
+          {/* 5. Causas que el portal muestra y la base no (la única que el Dashboard no sabe sola) */}
+          {faltan != null && faltan > 0 && (
+            <div className="mt-3 border-t border-slate-100 pt-2">
+              <p className="text-xs text-amber-800 flex items-center justify-between gap-2 flex-wrap">
+                <span className="inline-flex items-center gap-1.5 font-semibold">
+                  <IconInbox className="w-3.5 h-3.5" />
+                  Faltan {faltan} {faltan === 1 ? 'causa' : 'causas'} que el portal te asignó
+                </span>
+                <Link
+                  href="/asignaciones"
+                  className="text-[11px] font-medium underline decoration-dotted hover:text-amber-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300 rounded"
+                >
+                  Pegar correos de asignación →
+                </Link>
+              </p>
+            </div>
+          )}
+        </>
+      )}
+    </div>
   )
 }

@@ -1,7 +1,7 @@
 'use client'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { supabase } from '@/lib/supabase'
-import { IconRefresh, IconAlert, IconCheck, IconDownload, IconInbox, IconClock, IconChevron } from './icons'
+import { IconRefresh, IconAlert, IconCheck, IconInbox, IconClock, IconChevron } from './icons'
 
 // ============================================================
 // COBERTURA — la métrica única del sistema
@@ -25,6 +25,13 @@ import { IconRefresh, IconAlert, IconCheck, IconDownload, IconInbox, IconClock, 
 // NO puede saber qué pasa si el bot está apagado. Mientras corre, el bot publica progreso
 // (bot_runs + bot_run_items) y este panel lo consulta cada 5 s; apagado, cada 60 s solo
 // para detectar que arrancó.
+//
+// ARQUITECTURA DE INFORMACIÓN (aprobada por la curadora, 27-10):
+//   1. ¿Está mi base completa? — una línea de estado + progreso + cuándo se actualizó.
+//   2. Solo lo que requiere ACCIÓN suya (faltan causas del portal, errores que esperan decisión).
+//   3. Todo lo técnico (chips, cuenta grande, cola, corrida en vivo) dentro de <details>,
+//      escondido por default. Cero números inflados: si no hay datos, se dice "no lo puedo
+//      afirmar" en vez de mostrar algo que parece verdad.
 // ============================================================
 
 interface CoberturaFila {
@@ -113,6 +120,13 @@ function haceCuantoCorto(desdeIso: string | null, ahora: number): string {
   return `hace ${Math.round(horas / 24)} días`
 }
 
+// Fecha legible corta (dd/mm/aaaa hh:mm) para "Última actualización".
+function formateaFechaHora(iso: string): string {
+  return new Date(iso).toLocaleString('es-CL', {
+    day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  })
+}
+
 // ¿Es LA corrida que está corriendo ahora mismo? finished_at NULL no alcanza: si mataron el
 // bot con CTRL+C la fila queda sin finished_at para siempre y el panel mostraría "en curso"
 // eterno. La señal real de vida es que escribió algo hace poco (publica progreso cada 5
@@ -132,9 +146,12 @@ interface Props {
   // Se llama cuando una corrida que estaba en curso termina: el Dashboard recarga las causas
   // para que los movimientos recién raspados aparezcan sin esperar el auto-refresco de 5 min.
   onRunTermino?: () => void
+  // Reporta al Dashboard cuántas causas ve el portal y no están en la base (null = no se
+  // puede afirmar aún). La agenda de hoy es la única que necesita este número del panel.
+  onFaltanDelPortal?: (n: number | null) => void
 }
 
-export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
+export default function CoberturaPanel({ fueraDeLaCola, onRunTermino, onFaltanDelPortal }: Props) {
   const [modo, setModo] = useState<Modo>('cargando')
   const [cob, setCob] = useState<CoberturaFila | null>(null)
   const [runs, setRuns] = useState<RunFila[]>([])
@@ -240,6 +257,14 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
     cargar()
   }, [cargar])
 
+  // Reportar el resultado de la conciliación al Dashboard (para su agenda). Misma regla que
+  // abajo: sin inventario corrido (o sin migración) no se puede afirmar → null.
+  useEffect(() => {
+    if (!onFaltanDelPortal) return
+    const hay = !!conc?.corrida_en && !concSinMigrar
+    onFaltanDelPortal(hay ? (conc!.faltan_en_bd || 0) : null)
+  }, [conc, concSinMigrar, onFaltanDelPortal])
+
   // La corrida viva se recalcula contra `ahora` para que un bot colgado deje de contar como
   // "en curso" aunque nadie recargue los datos.
   const runVivo = modo === 'listo' ? runs.find((r) => corridaViva(r, ahora)) || null : null
@@ -334,55 +359,65 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
   const hayInventario = !!conc?.corrida_en && !concSinMigrar
   const faltanDelPortal = hayInventario ? (conc!.faltan_en_bd || 0) : null
 
+  const completa = pendientes === 0
+  // "Última actualización" con certeza: el bot escribe su progreso en cada causa, así que
+  // lo último que efectivamente cambió en la base es la mayor fecha entre el fin de la
+  // última corrida terminada y el ítem más reciente de la que está corriendo ahora.
+  const ultimaEscritura = [ultimoRun?.finished_at || null, runVivo?.ultimo_item_en || null]
+    .filter((f): f is string => !!f)
+    .sort()
+    .reverse()[0] || null
+
   return (
     <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden">
       <div className="p-4">
+        {/* ===== 1. ESTADO DE LA BASE (la primera pregunta, en una línea) ===== */}
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <span className="inline-flex items-center gap-2 text-sm font-medium text-slate-700">
-              <IconDownload className="w-4 h-4 text-slate-400" />
-              Estado del escaneo del portal
-            </span>
-            <div className="mt-1 flex items-baseline gap-2">
+            <div className="flex items-center gap-2">
               <span
-                className={`text-4xl font-bold tabular-nums ${
-                  pendientes === 0 ? 'text-green-700' : pendientes > 20 ? 'text-amber-600' : 'text-slate-900'
-                }`}
-              >
-                {pendientes}
-              </span>
-              <span className="text-sm font-medium text-slate-600">
-                {pendientes === 1 ? 'causa pendiente de escaneo' : 'causas pendientes de escaneo'}
-              </span>
+                aria-hidden
+                className={`w-3 h-3 rounded-full shrink-0 ${completa ? 'bg-green-500' : 'bg-amber-500'}`}
+              />
+              <p className="text-base font-semibold text-slate-800">
+                {completa
+                  ? faltanDelPortal === 0
+                    ? 'Tu base está completa y al día'
+                    : 'Tus causas cargadas están al día'
+                  : 'Tu base se está completando'}
+              </p>
             </div>
-            <p className="text-xs text-slate-500 mt-1">
-              {pendientes === 0 ? (
+            <p className="text-sm text-slate-600 mt-1">
+              {completa ? (
                 faltanDelPortal === 0 ? (
-                  <span className="inline-flex items-center gap-1 text-green-700">
-                    <IconCheck className="w-3.5 h-3.5" /> Están todas y al día. No hace falta correr el bot.
-                  </span>
+                  'El portal no muestra ninguna causa que te falte y ninguna está desactualizada. No hace falta correr el bot.'
                 ) : (
-                  <span className="inline-flex items-center gap-1 text-green-700">
-                    <IconCheck className="w-3.5 h-3.5" /> Al día las causas cargadas.{' '}
+                  <>
+                    {alDia} de {universo} causas al día.{' '}
                     {faltanDelPortal == null
-                      ? 'Aún no puedo afirmar que están TODAS (falta el inventario del portal).'
-                      : `Pero faltan ${faltanDelPortal} por cargar: veo más abajo.`}
-                  </span>
+                      ? 'Para afirmar que están TODAS necesito un inventario del portal (está en "Ver detalles" más abajo).'
+                      : `Faltan ${faltanDelPortal} por cargar: está en "Ver detalles" más abajo.`}
+                  </>
                 )
+              ) : runVivo ? (
+                <>
+                  El bot está leyendo el portal ahora: {runVivo.procesadas || 0} de{' '}
+                  {runVivo.total_causas || 0} causas de esta corrida. {alDia} de {universo} al día
+                  ({pct}%).
+                </>
               ) : (
                 <>
-                  {(cob.nunca_escaneadas || 0) > 0 && (
-                    <span className="text-amber-700">{cob.nunca_escaneadas} nunca fueron escaneadas. </span>
-                  )}
-                  {alDia} de {universo} al día ({pct}%).{' '}
-                  {rezago != null && rezago > 7 && (
-                    <span className="text-slate-500">La más atrasada hace {Math.round(rezago)} días.</span>
-                  )}
+                  {alDia} de {universo} al día ({pct}%). Faltan refrescar {pendientes}.
+                  {rezago != null && rezago > 7 && ` La más atrasada hace ${Math.round(rezago)} días.`}
                 </>
               )}
             </p>
+            <p className="text-xs text-slate-500 mt-1">
+              {ultimaEscritura
+                ? `Actualizado ${haceCuantoCorto(ultimaEscritura, ahora)} (${formateaFechaHora(ultimaEscritura)})`
+                : 'Todavía no hay corridas registradas en esta base.'}
+            </p>
           </div>
-
           <div className="flex flex-col items-end gap-1 shrink-0">
             <button
               onClick={() => cargar(true)}
@@ -392,151 +427,19 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
               <IconRefresh className={`w-3.5 h-3.5 ${refrescando ? 'animate-spin motion-reduce:animate-none' : ''}`} />
               Verificar ahora
             </button>
-            <span className="text-[11px] text-slate-400">
-              {cob.medido_en ? `Contado ${haceCuantoCorto(cob.medido_en, ahora)}` : ''}
-            </span>
           </div>
         </div>
 
         <div className="mt-3 w-full bg-slate-100 rounded-full h-2 overflow-hidden">
           <div
             className={`h-2 rounded-full transition-[width] duration-500 ease-out ${
-              pendientes === 0 ? 'bg-green-500' : 'bg-slate-800'
+              completa ? 'bg-green-500' : 'bg-slate-800'
             }`}
             style={{ width: `${pct}%` }}
           />
         </div>
 
-        {/* Desglose: ningún número sin explicación (tooltip = qué significa y si preocupa) */}
-        <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
-          <Chip etiqueta="Al día" valor={alDia} clase="bg-green-50 text-green-700 border-green-200"
-            ayuda="El bot las escaneó en los últimos 7 días. Incluye causas escaneadas que no tienen movimientos (archivadas o dormidas)." />
-          {(cob.pendientes || 0) > 0 && (
-            <Chip etiqueta="Pendientes" valor={cob.pendientes} clase="bg-amber-50 text-amber-700 border-amber-200"
-              ayuda="En la cola: las va a buscar el próximo lote del bot." />
-          )}
-          {vencidas > 0 && (
-            <Chip etiqueta="Vencidas (+7 días)" valor={vencidas} clase="bg-orange-50 text-orange-700 border-orange-200"
-              ayuda="Escaneadas hace más de 7 días: el portal puede tener movimientos nuevos (audiencias, traslados) que todavía no están acá. Es lo que hay que refrescar." />
-          )}
-          {enProgreso > 0 && (
-            <Chip etiqueta="En curso" valor={enProgreso} clase="bg-violet-50 text-violet-700 border-violet-200"
-              ayuda="El bot las está trayendo ahora. Si el bot NO está corriendo, quedaron colgadas de una corrida cortada: la próxima corrida las retoma solas." />
-          )}
-          {conError > 0 && (
-            <Chip etiqueta="Con error" valor={conError} clase="bg-red-50 text-red-700 border-red-200"
-              ayuda="El último intento falló (sesión, captcha, RIT cambiado). El bot reintenta solo; las que ya necesitan tu decisión están en el chip amarillo y NO cuentan en el número grande." />
-          )}
-          {fuera > 0 && (
-            <Chip etiqueta="Fuera del portal" valor={fuera} clase="bg-slate-100 text-slate-500 border-slate-200"
-              ayuda="Ya no aparecen en tu lista del portal (te relevaron la curaduría o se cerraron). No se escanean ni se cuentan." />
-          )}
-          {(bloqueadas > 0 || (fueraDeLaCola > 0 && fueraDeLaCola !== fuera)) && (
-            <Chip etiqueta="Esperan tu decisión" valor={bloqueadas > 0 ? bloqueadas : fueraDeLaCola}
-              clase="bg-amber-50 text-amber-700 border-amber-200"
-              ayuda="El bot las marcó y ya NO las reintenta, porque ninguna corrida las puede resolver: el RIT de la base no coincide con el del portal ([REVISAR LETRA]), o están en cuarentena tras varios fallos ([REVISAR: no scrapeada]), o vos las cerraste ([TERMINADA]). Por eso no cuentan en el número grande." />
-          )}
-        </div>
-
-        {/* ¿ESTÁN TODAS? — conciliación contra el portal. Sin esto, "0 pendientes" solo
-            significa "lo que cargaste está al día", que es otra pregunta. */}
-        {concSinMigrar ? (
-          <p className="mt-3 text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
-            Para comparar contra el portal falta volver a correr{' '}
-            <span className="font-mono">schema-001-cobertura.sql</span> (agrega las vistas de
-            conciliación). Sin eso este panel no puede decir si te faltan causas.
-          </p>
-        ) : !hayInventario ? (
-          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-medium text-slate-700">
-              <IconInbox className="w-3.5 h-3.5 inline mr-1 text-slate-400" />
-              Nunca corrí un inventario del portal
-            </p>
-            <p className="text-[11px] text-slate-500 mt-1">
-              El número de arriba cuenta <span className="font-medium">tus causas cargadas</span>.
-              Una causa que el portal te asignó y nunca pegaste es invisible para él, así que
-              «0 pendientes» no significa «están todas». Para saberlo: doble clic en{' '}
-              <span className="font-mono">bot-inventario.bat</span> (tarda minutos, una vez por
-              mes alcanza).
-            </p>
-          </div>
-        ) : (
-          <div
-            className={`mt-3 rounded-lg border p-3 ${
-              faltanDelPortal && faltanDelPortal > 0
-                ? 'border-amber-200 bg-amber-50'
-                : 'border-green-200 bg-green-50'
-            }`}
-          >
-            <p
-              className={`text-sm font-semibold ${
-                faltanDelPortal && faltanDelPortal > 0 ? 'text-amber-800' : 'text-green-800'
-              }`}
-            >
-              {faltanDelPortal && faltanDelPortal > 0 ? (
-                <>
-                  {faltanDelPortal} {faltanDelPortal === 1 ? 'causa está' : 'causas están'} en el
-                  portal y no en tu base
-                </>
-              ) : (
-                <>Están todas: el portal no muestra ninguna causa que no tengas cargada</>
-              )}
-            </p>
-            <p
-              className={`text-[11px] mt-1 ${
-                faltanDelPortal && faltanDelPortal > 0 ? 'text-amber-800/80' : 'text-green-800/80'
-              }`}
-            >
-              Comparado con el inventario de {haceCuantoCorto(conc!.corrida_en, ahora)}:{' '}
-              {conc!.rits_portal || 0} causas visibles en Mis Causas. Si el inventario es viejo,
-              lo que se asignó después no está contabilizado.
-            </p>
-
-            {faltanDelPortal && faltanDelPortal > 0 && faltan.length > 0 && (
-              <>
-                <button
-                  onClick={() => setFaltanAbiertas((v) => !v)}
-                  aria-expanded={faltanAbiertas}
-                  className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-950 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
-                >
-                  <IconChevron
-                    className={`w-3.5 h-3.5 transition-transform duration-200 ${faltanAbiertas ? 'rotate-90' : ''}`}
-                  />
-                  {faltanAbiertas ? 'Ocultar' : 'Ver'} cuáles son
-                </button>
-                {faltanAbiertas && (
-                  <ul className="mt-2 space-y-1 max-h-56 overflow-auto">
-                    {faltan.map((f, i) => (
-                      <li key={`${f.rit}-${i}`} className="flex items-baseline gap-2 text-xs">
-                        <span className="font-mono text-amber-900 shrink-0">{f.rit}</span>
-                        <span className="text-amber-800/70 truncate">{f.caratulado || ''}</span>
-                      </li>
-                    ))}
-                  </ul>
-                )}
-                <p className="text-[11px] text-amber-800/80 mt-2">
-                  Solución: buscá el correo de ASIGNACIONES que las menciona y pegalo en la
-                  pantalla Asignaciones. El bot no crea causas, solo las actualiza.
-                </p>
-              </>
-            )}
-
-            {(conc!.letra_distinta || 0) > 0 && (
-              <p className="text-[11px] text-slate-600 mt-1">
-                {conc!.letra_distinta} con el mismo número pero otra letra en el portal (P↔X). Se
-                arreglan con el mantenimiento de letra.
-              </p>
-            )}
-            {(conc!.en_bd_no_vistas_en_portal || 0) > 0 && (
-              <p className="text-[11px] text-slate-600 mt-1">
-                {conc!.en_bd_no_vistas_en_portal} en tu base que el portal ya no muestra en Mis
-                Causas. Pueden estar archivadas o relevadas: revisar antes de darlas de baja.
-              </p>
-            )}
-          </div>
-        )}
-
-        {/* CORRIDA EN VIVO: lo que la curadora quiere ver moverse */}
+        {/* CORRIDA EN VIVO: el progreso que la curadora quiere VER moverse (arriba, no escondido) */}
         {runVivo && (
           <div className="mt-3 rounded-lg border border-violet-200 bg-violet-50 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -569,7 +472,154 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
           </div>
         )}
 
-        {/* ÚLTIMA CORRIDA: sirve para detectar que el bot se cortó a mitad */}
+        {/* ===== 2. LO QUE REQUIERE UNA ACCIÓN TUYA (nada más se muestra abierto) ===== */}
+        {faltanDelPortal != null && faltanDelPortal > 0 && (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+            <p className="text-sm font-semibold text-amber-800">
+              Faltan {faltanDelPortal} {faltanDelPortal === 1 ? 'causa' : 'causas'} en tu base
+            </p>
+            <button
+              onClick={() => setFaltanAbiertas((v) => !v)}
+              aria-expanded={faltanAbiertas}
+              className="mt-1.5 inline-flex items-center gap-1.5 text-xs font-medium text-amber-800 hover:text-amber-950 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-amber-300"
+            >
+              <IconChevron
+                className={`w-3.5 h-3.5 transition-transform duration-200 ${faltanAbiertas ? 'rotate-90' : ''}`}
+              />
+              {faltanAbiertas ? 'Ocultar' : 'Ver'} cuáles {faltanDelPortal === 1 ? 'es' : 'son'}
+            </button>
+            {faltanAbiertas && (
+              <ul className="mt-2 space-y-1 max-h-56 overflow-auto">
+                {faltan.map((f, i) => (
+                  <li key={`${f.rit}-${i}`} className="flex items-baseline gap-2 text-xs">
+                    <span className="font-mono text-amber-900 shrink-0">{f.rit}</span>
+                    <span className="text-amber-800/70 truncate">{f.caratulado || ''}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <p className="text-[11px] text-amber-800/80 mt-2">
+              Buscá el correo de ASIGNACIONES que las menciona y pegalo en la pantalla
+              Asignaciones. El bot no crea causas, solo las actualiza.
+            </p>
+          </div>
+        )}
+
+        {conError > 0 && !runVivo && (
+          <p className="mt-3 text-xs text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+            {conError} {conError === 1 ? 'causa quedó' : 'causas quedaron'} con error al leer el
+            portal. El bot reintenta solo en la próxima corrida; si persiste, está la lista en
+            "Ver detalles técnicos".
+          </p>
+        )}
+
+        {!completa && !runVivo && (
+          <p className="mt-3 text-xs text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            Para poner al día las {pendientes} pendientes, ejecutá{' '}
+            <span className="font-mono">bot-mantenimiento.bat</span> en tu computadora.
+          </p>
+        )}
+
+        {/* ===== 3. DETALLES TÉCNICOS (todo lo demás, escondido por default) ===== */}
+        <details className="mt-3 group">
+          <summary className="cursor-pointer list-none inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-800 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 rounded">
+            <IconChevron className="w-3.5 h-3.5 transition-transform duration-200 group-open:rotate-90" />
+            Ver detalles técnicos
+          </summary>
+          <div className="mt-3">
+            <div className="flex items-baseline gap-2">
+              <span
+                className={`text-3xl font-bold tabular-nums ${
+                  completa ? 'text-green-700' : 'text-amber-600'
+                }`}
+              >
+                {pendientes}
+              </span>
+              <span className="text-sm font-medium text-slate-600">
+                causas pendientes de escaneo
+              </span>
+            </div>
+
+            {/* Desglose: ningún número sin explicación (tooltip = qué significa y si preocupa) */}
+            <div className="mt-3 flex flex-wrap gap-1.5 text-[11px]">
+          <Chip etiqueta="Al día" valor={alDia} clase="bg-green-50 text-green-700 border-green-200"
+            ayuda="El bot las escaneó en los últimos 7 días. Incluye causas escaneadas que no tienen movimientos (archivadas o dormidas)." />
+          {(cob.pendientes || 0) > 0 && (
+            <Chip etiqueta="Pendientes" valor={cob.pendientes} clase="bg-amber-50 text-amber-700 border-amber-200"
+              ayuda="En la cola: las va a buscar el próximo lote del bot." />
+          )}
+          {vencidas > 0 && (
+            <Chip etiqueta="Vencidas (+7 días)" valor={vencidas} clase="bg-orange-50 text-orange-700 border-orange-200"
+              ayuda="Escaneadas hace más de 7 días: el portal puede tener movimientos nuevos (audiencias, traslados) que todavía no están acá. Es lo que hay que refrescar." />
+          )}
+          {enProgreso > 0 && (
+            <Chip etiqueta="En curso" valor={enProgreso} clase="bg-violet-50 text-violet-700 border-violet-200"
+              ayuda="El bot las está trayendo ahora. Si el bot NO está corriendo, quedaron colgadas de una corrida cortada: la próxima corrida las retoma solas." />
+          )}
+          {conError > 0 && (
+            <Chip etiqueta="Con error" valor={conError} clase="bg-red-50 text-red-700 border-red-200"
+              ayuda="El último intento falló (sesión, captcha, RIT cambiado). El bot reintenta solo; las que ya necesitan tu decisión están en el chip amarillo y NO cuentan en el número grande." />
+          )}
+          {fuera > 0 && (
+            <Chip etiqueta="Fuera del portal" valor={fuera} clase="bg-slate-100 text-slate-500 border-slate-200"
+              ayuda="Ya no aparecen en tu lista del portal (te relevaron la curaduría o se cerraron). No se escanean ni se cuentan." />
+          )}
+          {(bloqueadas > 0 || (fueraDeLaCola > 0 && fueraDeLaCola !== fuera)) && (
+            <Chip etiqueta="Esperan tu decisión" valor={bloqueadas > 0 ? bloqueadas : fueraDeLaCola}
+              clase="bg-amber-50 text-amber-700 border-amber-200"
+              ayuda="El bot las marcó y ya NO las reintenta, porque ninguna corrida las puede resolver: el RIT de la base no coincide con el del portal ([REVISAR LETRA]), o están en cuarentena tras varios fallos ([REVISAR: no scrapeada]), o vos las cerraste ([TERMINADA]). Por eso no cuentan en el número grande." />
+              )}
+            </div>
+
+            {/* Conciliación: la comparación bruta contra el inventario del portal. El resultado
+                accionable ("faltan N") ya se mostró arriba; acá queda el detalle de cuándo se
+                corrió y las otras dos diferencias. */}
+            {concSinMigrar ? (
+              <p className="mt-3 text-[11px] text-slate-500 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+                Para comparar contra el portal falta volver a correr{' '}
+                <span className="font-mono">schema-001-cobertura.sql</span> (agrega las vistas de
+                conciliación). Sin eso este panel no puede decir si te faltan causas.
+              </p>
+            ) : !hayInventario ? (
+              <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-medium text-slate-700">
+                  <IconInbox className="w-3.5 h-3.5 inline mr-1 text-slate-400" />
+                  Nunca corrí un inventario del portal
+                </p>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  El número de arriba cuenta <span className="font-medium">tus causas cargadas</span>.
+                  Una causa que el portal te asignó y nunca pegaste es invisible para él, así que
+                  «0 pendientes» no significa «están todas». Para saberlo: doble clic en{' '}
+                  <span className="font-mono">bot-inventario.bat</span> (tarda minutos, una vez por
+                  mes alcanza).
+                </p>
+              </div>
+            ) : (
+              <div className="mt-3 text-[11px] text-slate-600 space-y-1">
+                <p>
+                  Comparado con el inventario de {haceCuantoCorto(conc!.corrida_en, ahora)}:{' '}
+                  {conc!.rits_portal || 0} causas visibles en Mis Causas.
+                  {faltanDelPortal === 0
+                    ? ' El portal no muestra ninguna causa que no tengas cargada.'
+                    : ''}
+                  Si el inventario es viejo, lo que se asignó después no está contabilizado.
+                </p>
+                {(conc!.letra_distinta || 0) > 0 && (
+                  <p>
+                    {conc!.letra_distinta} con el mismo número pero otra letra en el portal (P↔X). Se
+                    arreglan con el mantenimiento de letra.
+                  </p>
+                )}
+                {(conc!.en_bd_no_vistas_en_portal || 0) > 0 && (
+                  <p>
+                    {conc!.en_bd_no_vistas_en_portal} en tu base que el portal ya no muestra en Mis
+                    Causas. Pueden estar archivadas o relevadas: revisar antes de darlas de baja.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* ÚLTIMA CORRIDA: sirve para detectar que el bot se cortó a mitad */}
         {!runVivo && ultimoRun && ultimoRun.finished_at && (
           <div className="mt-3 text-xs text-slate-500 flex flex-wrap items-center gap-x-2 gap-y-1">
             <IconClock className="w-3.5 h-3.5 text-slate-400 shrink-0" />
@@ -620,19 +670,13 @@ export default function CoberturaPanel({ fueraDeLaCola, onRunTermino }: Props) {
             <IconInbox className="w-3.5 h-3.5" /> Cola vacía: el bot no tiene nada que traer.
           </p>
         )}
-      </div>
 
-      {/* Nota de honestidad: el bot es local, el panel no puede inventar actividad */}
-      <div className="px-4 py-2 bg-slate-50 border-t border-slate-100">
-        <p className="text-[11px] text-slate-500">
+        {/* Nota de honestidad: el bot es local, el panel no puede inventar actividad */}
+        <p className="mt-3 text-[11px] text-slate-400">
           El bot corre en tu computadora: si no está corriendo, no llega información nueva del portal.
-          {pendientes > 0 && !runVivo && (
-            <span className="font-medium text-slate-700">
-              {' '}Para poner al día las {pendientes} pendientes, ejecutá{' '}
-              <span className="font-mono">bot-mantenimiento.bat</span>.
-            </span>
-          )}
         </p>
+          </div>{/* cierra wrapper de detalles */}
+        </details>
       </div>
     </div>
   )

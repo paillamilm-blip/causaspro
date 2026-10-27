@@ -2,7 +2,7 @@
 import { useState, useCallback } from 'react'
 import Link from 'next/link'
 import * as XLSX from 'xlsx'
-import { filasCerradasPorColor } from '@/lib/parseExcel'
+import { filasCerradasEnExcel } from '@/lib/parseExcel'
 
 interface Stats {
   causas: number
@@ -133,7 +133,7 @@ export default function UploadExcel({ onSuccess }: { onSuccess: () => void }) {
         rows,
         sheetName,
         fileName: file.name,
-        filasCerradas: filasCerradasPorColor(ws),
+        filasCerradas: filasCerradasEnExcel(ws),
       }
       setFilas(datos)
 
