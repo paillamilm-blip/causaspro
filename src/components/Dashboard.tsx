@@ -8,7 +8,7 @@ import { estaTerminada, MARCA_TERMINADA, ETAPA_TERMINADA } from '@/lib/monitoreo
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconChevron, IconClock, IconInbox,
-  IconCheck, IconShield, IconSparkles, IconPause,
+  IconCheck, IconShield, IconSparkles, IconPause, IconLink,
 } from './icons'
 import CoberturaPanel from './CoberturaPanel'
 import type { ComponentType, SVGProps, ReactNode } from 'react'
@@ -20,7 +20,7 @@ type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'activas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera'
+type FiltroUrgencia = 'todas' | 'activas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera' | 'vinculantes'
 
 // Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
 // activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
@@ -33,6 +33,7 @@ const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; 
   revisar:     { title: 'Revisar — Seguimiento pendiente', dotColor: 'bg-orange-400', tono: 'orange', Icono: IconPause },
   estables:    { title: 'Estables — Sin urgencia inmediata', dotColor: 'bg-green-500', tono: 'green', Icono: IconCheck },
   fuera:       { title: 'Causas terminadas', dotColor: 'bg-slate-500', tono: 'slate', Icono: IconInbox },
+  vinculantes: { title: 'Vinculantes — P que vincula a una X', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconLink },
 }
 
 // Color del chip de materia según su grupo práctico.
@@ -76,6 +77,10 @@ interface CausaResumen {
   // aparece en "Mis Causas" del portal (típicamente porque a Paula le relevaron la
   // curaduría). Se usa para marcarla "fuera de mi lista" y NO generar alarmas sobre ella.
   notas?: string | null
+  // Demás expedientes anotados en la MISMA celda del Excel ("X-3615-2022//P-7664-2022").
+  // El parser lo guarda en causas.datos_extra.rits_vinculados; el panel lo crucea en el
+  // cliente para marcar las vinculantes (criterio de la curadora: P vincula a X).
+  rits_vinculados?: string | null
   // Marca calculada EN EL CLIENTE (no viene de la vista): el seguimiento del NNA está
   // vencido (>180 días sin "Entrevista al NNA", o nunca se registró una). Se completa en
   // loadCausas cruzando las causas con las gestiones. undefined hasta ese cruce.
@@ -191,6 +196,35 @@ function fueraDeMonitoreo(c: CausaResumen): boolean {
   return !estadoCausa(c).vigente
 }
 
+// VÍNCULO P↔X (criterio de la curadora, 27-10-2026): cuando el Excel anotó dos expedientes
+// en una misma celda, la causa de PROTECCIÓN (P) VINCULA a la de VARIOS (X). Se revisan
+// juntas, así que ambas se marcan desde la pantalla principal.
+function ritVinculadosLista(c: CausaResumen): string[] {
+  const raw = c.rits_vinculados
+    ?? (typeof (c as any).datos_extra?.rits_vinculados === 'string' ? (c as any).datos_extra.rits_vinculados : null)
+  if (!raw) return []
+  return String(raw).split(',').map((s: string) => s.trim()).filter(Boolean)
+}
+// Si es P y entre sus vinculados hay una X, devuelve esa X (es VINCULANTE).
+function xVinculadaPorP(c: CausaResumen): string | null {
+  if (!c.rit.toUpperCase().startsWith('P-')) return null
+  return ritVinculadosLista(c).find((r) => r.toUpperCase().startsWith('X-')) ?? null
+}
+// Si es X y entre sus vinculados hay una P, devuelve esa P (está VINCULADA por ella).
+function pQueVinculaX(c: CausaResumen): string | null {
+  if (!c.rit.toUpperCase().startsWith('X-')) return null
+  return ritVinculadosLista(c).find((r) => r.toUpperCase().startsWith('P-')) ?? null
+}
+function chipVinculo(c: CausaResumen): Chip | null {
+  const x = xVinculadaPorP(c)
+  if (x) return { texto: `Vinculante ↔ ${x}`, clase: 'bg-violet-200 text-violet-800',
+    ayuda: `Causa de protección que vincula a ${x}. Son el mismo caso: se revisan juntas.` }
+  const p = pQueVinculaX(c)
+  if (p) return { texto: `Vinculada por ${p}`, clase: 'bg-indigo-100 text-indigo-700',
+    ayuda: `${p} (protección) vincula a esta de varios. Comparten NNA y hechos.` }
+  return null
+}
+
 // Chips de señales de curaduría que se muestran en cada tarjeta de causa.
 // Cada uno resume una alerta de cumplimiento en un badge compacto y legible.
 // Un chip: texto corto + color + explicación (tooltip) de qué significa y qué hacer.
@@ -205,7 +239,10 @@ function chipsSenales(c: CausaResumen): Chip[] {
   const estado = estadoCausa(c)
   if (!estado.vigente && estado.motivo) {
     const m = MOTIVO_TERMINO[estado.motivo]
-    return [{ texto: m.texto, clase: 'bg-slate-600 text-white', ayuda: m.ayuda }]
+    // El vínculo P↔X NO se pierde al terminarse: la curadora igual necesita saber con qué
+    // expediente hermano estaba atada esta causa.
+    const vinc = chipVinculo(c)
+    return [{ texto: m.texto, clase: 'bg-slate-600 text-white', ayuda: m.ayuda }, ...(vinc ? [vinc] : [])]
   }
 
   // VIGENTE: sus alertas, ordenadas de más a menos urgente. Terminología técnica (Paula
@@ -231,6 +268,12 @@ function chipsSenales(c: CausaResumen): Chip[] {
     chips.push({ texto: `Estancada ${Math.round(c.dias_sin_actividad / 30)} meses`, clase: 'bg-orange-100 text-orange-700',
       ayuda: `Sin movimiento hace ~${Math.round(c.dias_sin_actividad / 30)} meses. Corresponde impulsar o solicitar estado de la causa.` })
   }
+
+  // Vinculante/Vinculada al final: no es una urgencia, es información de con qué causa hermana
+  // hay que mirar ésta (criterio de la curadora: P vincula a X).
+  const vinc = chipVinculo(c)
+  if (vinc) chips.push(vinc)
+
   return chips
 }
 
@@ -269,6 +312,8 @@ function LeyendaChips() {
               {item('bg-amber-100 text-amber-700', 'No adherencia del programa', 'El programa informó inasistencia o abandono. Evaluar reunión técnica o re-derivación.')}
               {item('bg-sky-100 text-sky-700', 'Citación a audiencia', 'Hay citación reciente. Verificar fecha.')}
               {item('bg-orange-100 text-orange-700', 'Estancada N meses', 'Sin movimiento hace meses. Corresponde impulsar o solicitar estado.')}
+              {item('bg-violet-200 text-violet-800', 'Vinculante ↔ X-…', 'Causa de protección (P) que vincula a una de varios (X): se revisan juntas.')}
+              {item('bg-indigo-100 text-indigo-700', 'Vinculada por P-…', 'Una causa de protección vincula a esta de varios: comparten NNA y hechos.')}
             </div>
           </div>
           <div>
@@ -669,12 +714,18 @@ export default function Dashboard() {
       try {
         const [gestRes, estRes] = await Promise.all([
           fetchAll('gestiones', 'causa_id, tipo, fecha'),
-          fetchAll('causas', 'id, escaneo_estado, ultima_escaneada'),
+          // rits_vinculados vive en el JSONB datos_extra; PostgREST lo expone como columna plana.
+          fetchAll('causas', 'id, escaneo_estado, ultima_escaneada, datos_extra->>rits_vinculados'),
         ])
         const conDatos = new Set(
           ((estRes.data as any[]) || [])
             .filter((c) => c.escaneo_estado === 'ok' || c.ultima_escaneada != null)
             .map((c) => c.id),
+        )
+        const vinculosPorId = new Map<string, string>(
+          ((estRes.data as any[]) || [])
+            .filter((c) => c.rits_vinculados)
+            .map((c) => [c.id, c.rits_vinculados as string]),
         )
         const porCausa = agruparGestionesPorCausa((gestRes.data as any[]) || [])
         data = data.map((c: any) => ({
@@ -682,6 +733,7 @@ export default function Dashboard() {
           seguimiento_vencido: conDatos.has(c.id)
             ? estadoSeguimientoNna(porCausa.get(c.id) || []).vencido
             : undefined,
+          rits_vinculados: vinculosPorId.get(c.id) ?? null,
         }))
       } catch (e) {
         console.warn('No se pudieron cargar las gestiones para el seguimiento del NNA:', e)
@@ -765,6 +817,9 @@ export default function Dashboard() {
   // Seguimiento del NNA vencido: corte transversal (como Traslados) — una causa acá puede
   // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 180 días.
   const seguimientoVencido = causasActivas.filter(c => c.seguimiento_vencido)
+  // Vinculantes: causas de protección (P) que en el Excel aparecieron atadas a una de
+  // varios (X) en la misma celda. Corte transversal, como Traslados.
+  const vinculantes = causasActivas.filter(c => xVinculadaPorP(c) !== null)
 
   // ACTIVAS POR VENCIMIENTO: el orden de trabajo que pidió la curadora. Primero las que ya
   // tienen la medida VENCIDA (tiene medida vigente pero sin fecha futura: se pasó), después
@@ -847,6 +902,7 @@ export default function Dashboard() {
     filtroUrgencia === 'revisar' ? revisar :
     filtroUrgencia === 'estables' ? estables :
     filtroUrgencia === 'fuera' ? fueraMonitoreo :
+    filtroUrgencia === 'vinculantes' ? vinculantes :
     causasPorTexto
 
   // Resumen ejecutivo: la frase que Paula lee primero.
@@ -1061,6 +1117,12 @@ export default function Dashboard() {
           active={filtroUrgencia === 'estables'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'estables' ? 'todas' : 'estables')}
           tone="green" Icono={IconCheck}
+        />
+        <KpiCard
+          label="Vinculantes" value={vinculantes.length}
+          active={filtroUrgencia === 'vinculantes'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'vinculantes' ? 'todas' : 'vinculantes')}
+          tone="purple" Icono={IconLink}
         />
       </div>
       )}
@@ -1452,6 +1514,14 @@ function BloqueCausasColapsable({
                 <Link href={`/causa/${c.id}`} className="min-w-0 group flex-1">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className={`font-mono font-bold ${t.rit} group-hover:underline`}>{c.rit}</span>
+                    {(() => {
+                      // En las filas de bloques (sin chips) el vínculo va como texto breve:
+                      // "P-7664 ↔ X-3615" para ver el hermano sin abrir la causa.
+                      const hermano = xVinculadaPorP(c) ?? pQueVinculaX(c)
+                      return hermano ? (
+                        <span className="text-[11px] font-mono text-violet-600">↔ {hermano}</span>
+                      ) : null
+                    })()}
                     {c.caratulado && <span className="text-slate-700 truncate">{c.caratulado}</span>}
                   </div>
                   {c.nombres_nna && (
