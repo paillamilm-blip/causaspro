@@ -457,25 +457,42 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
     // 0) CAMINO NUEVO: cola oficial por escaneo_estado (requiere schema-001-cobertura.sql).
     //    'pendiente'/'error' primero, nunca escaneadas antes que escaneadas hace mucho.
     //    Si la columna no existe todavía (42703), seguimos con el camino legacy abajo.
+    //
+    // POR QUÉ SE PAGINA (arreglado 29-10-2026): el filtro de ruido va del lado del cliente,
+    // así que un `.limit(limit)` a secas leía SOLO los primeros 33 de la cola. Esos 33 los
+    // ocupaban causas descartadas ([NO EN PORTAL]/[REVISAR]/[TERMINADA], que ordenan primero
+    // por no tener nunca_escaneada), la selección filtrada quedaba debajo del cupo y la tanda
+    // caía al camino legacy — que re-escanea causas YA cargadas. Medido: 1198 en cola, 1151
+    // descartables, 47 pendientes reales que NUNCA llegaban a procesarse; por_escanear clavado
+    // en ~50 con corridas "33/33 exitosas". Se lee en bloques de 1000 hasta juntar `limit`
+    // candidatos válidos (tope de 6 bloques = 6000 filas, holgado para la cola real).
     const seleccionCola: CausaToScrape[] = []
-    const { data: cola, error: errCola } = await sb
-      .from('causas')
-      .select('id, rit, notas')
-      .in('escaneo_estado', ['pendiente', 'error'])
-      .order('ultima_escaneada', { ascending: true, nullsFirst: true })
-      .order('pendientes_desde', { ascending: true, nullsFirst: false })
-      .limit(limit)
-    if (!errCola && errCola === null) {
-      for (const c of (cola || [])) {
+    let colaError: { code?: string; message?: string } | null = null
+    for (let desde = 0, bloque = 0; seleccionCola.length < limit && bloque < 6; desde += 1000, bloque++) {
+      const { data, error } = await sb
+        .from('causas')
+        .select('id, rit, notas')
+        .in('escaneo_estado', ['pendiente', 'error'])
+        .order('ultima_escaneada', { ascending: true, nullsFirst: true })
+        .order('pendientes_desde', { ascending: true, nullsFirst: false })
+        .range(desde, desde + 999)
+      if (error) { colaError = error as any; break }
+      const lote = data || []
+      for (const c of lote) {
         if (esRuidoNotas((c as any).notas ?? null)) continue
         seleccionCola.push({ id: c.id, rit: c.rit })
+        if (seleccionCola.length >= limit) break
       }
+      if (lote.length < 1000) break
+    }
+
+    if (!colaError) {
       if (seleccionCola.length >= limit) {
         log('info', `  Cola oficial: ${seleccionCola.length} pendientes/error (las más antiguas primero).`)
         return seleccionCola.slice(0, limit)
       }
-    } else if ((errCola as any)?.code !== '42703') {
-      log('warn', `  Consulta de cola falló (${errCola?.message}); usando selección legacy.`)
+    } else if (colaError.code !== '42703') {
+      log('warn', `  Consulta de cola falló (${colaError.message}); usando selección legacy.`)
     }
 
     // 1) (legacy/complemento) ids de causas que YA tienen movimientos, para refresco.
