@@ -4,11 +4,15 @@ import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, agruparGestionesPorCausa } from '@/lib/seguimientoNna'
+import {
+  MARCA_ESCRITO_TRASLADO, TIPO_ESCRITO, DIAS_PLAZO_CIERRE,
+  escritoTrasladoMasReciente, estadoCierreTraslado, textoCierreTraslado, textoChipCierre,
+} from '@/lib/cierreTraslado'
 import { estaTerminada, MARCA_TERMINADA, ETAPA_TERMINADA } from '@/lib/monitoreo'
 import {
   IconRefresh, IconSearch, IconX, IconUsers, IconCalendar,
   IconAlert, IconChevron, IconClock, IconInbox,
-  IconCheck, IconShield, IconSparkles, IconPause, IconLink,
+  IconCheck, IconShield, IconSparkles, IconPause, IconLink, IconHourglass,
 } from './icons'
 import CoberturaPanel from './CoberturaPanel'
 import type { ComponentType, SVGProps, ReactNode } from 'react'
@@ -20,13 +24,14 @@ type IconoTipo = ComponentType<SVGProps<SVGSVGElement>>
 interface MotivoUrgencia { Icono: IconoTipo; texto: string }
 
 // Filtro rápido activo desde las tarjetas KPI. 'todas' = sin filtro por urgencia.
-type FiltroUrgencia = 'todas' | 'activas' | 'traslados' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera' | 'vinculantes'
+type FiltroUrgencia = 'todas' | 'activas' | 'traslados' | 'cierre' | 'seguimiento' | 'criticas' | 'atencion' | 'revisar' | 'estables' | 'fuera' | 'vinculantes'
 
 // Título y color de punto para la sección única que se muestra cuando hay un filtro rápido
 // activo (clic en un KPI). 'todas' no aplica: en ese caso se muestran las secciones por nivel.
 const FILTRO_SECCION: Record<Exclude<FiltroUrgencia, 'todas'>, { title: string; dotColor: string; tono: TonoBloque; Icono: IconoTipo }> = {
   activas:     { title: 'Causas activas — por orden de vencimiento', dotColor: 'bg-green-500', tono: 'green', Icono: IconClock },
-  traslados:   { title: 'Traslados al curador', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconShield },
+  traslados:   { title: 'Traslados al curador — sin responder', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconShield },
+  cierre:      { title: 'Esperando cierre del tribunal', dotColor: 'bg-violet-500', tono: 'violet', Icono: IconHourglass },
   seguimiento: { title: 'Seguimiento del NNA vencido', dotColor: 'bg-rose-500', tono: 'rose', Icono: IconUsers },
   criticas:    { title: 'Críticas — Acción inmediata', dotColor: 'bg-red-500', tono: 'red', Icono: IconAlert },
   atencion:    { title: 'Atención — Revisar esta semana', dotColor: 'bg-amber-400', tono: 'amber', Icono: IconClock },
@@ -89,6 +94,13 @@ interface CausaResumen {
   // movimiento con etapa "Terminada"). La vista expone el `tramite` del último movimiento
   // pero no su `etapa`, así que se cruza aparte en loadCausas. undefined hasta ese cruce.
   terminada_portal?: boolean
+  // Calculada en el cliente: fecha (ISO) en que la curadora marcó "Escrito enviado" al
+  // traslado. Sale de la bitácora (gestiones tipo 'Presentación de escrito' con la marca
+  // [ESCRITO TRASLADO]); la marca se puede deshacer y eso borra la gestión. undefined hasta
+  // el cruce de gestiones en loadCausas.
+  traslado_escrito_fecha?: string | null
+  // Id de ESA gestión concreta (la más reciente), para poder borrarla al desmarcar.
+  traslado_escrito_gestion_id?: string | null
 }
 
 // ¿La causa ya NO está en la lista del portal del curador? El bot marca [NO EN PORTAL] en
@@ -252,8 +264,23 @@ function chipsSenales(c: CausaResumen): Chip[] {
   if (c.tiene_orden_busqueda) chips.push({ texto: 'Orden de búsqueda', clase: 'bg-red-100 text-red-700',
     ayuda: 'El tribunal decretó orden de búsqueda: el NNA no está ubicado. Máxima urgencia.' })
 
-  if (c.tiene_traslado_curador) chips.push({ texto: 'Traslado al curador', clase: 'bg-violet-100 text-violet-700',
-    ayuda: 'El tribunal confirió traslado al curador (últimos 30 días). Requiere que te pronuncies.' })
+  if (c.tiene_traslado_curador) {
+    if (c.traslado_escrito_fecha) {
+      // La curadora YA respondió el traslado: deja de ser un pendiente y pasa a esperar
+      // el cierre del tribunal (plazo de 14 días desde el envío, criterio de Paula).
+      const e = estadoCierreTraslado(c.traslado_escrito_fecha)
+      chips.push({
+        texto: textoChipCierre(e),
+        clase: e.vencido ? 'bg-red-100 text-red-700' : e.diasRestantes === 0 ? 'bg-amber-100 text-amber-700' : 'bg-emerald-100 text-emerald-700',
+        ayuda: e.vencido
+          ? `Escrito enviado el ${formatFechaDia(c.traslado_escrito_fecha)}; superó los ${DIAS_PLAZO_CIERRE} días de cierre y el portal no registra resolución. Preguntar al tribunal.`
+          : `Escrito enviado el ${formatFechaDia(c.traslado_escrito_fecha)}. El tribunal cierra en ~${DIAS_PLAZO_CIERRE} días (${textoCierreTraslado(e)}).`,
+      })
+    } else {
+      chips.push({ texto: 'Traslado al curador', clase: 'bg-violet-100 text-violet-700',
+        ayuda: 'El tribunal confirió traslado al curador (últimos 30 días). Requiere que te pronuncies.' })
+    }
+  }
 
   if (c.seguimiento_vencido) chips.push({ texto: 'Seguimiento NNA vencido', clase: 'bg-rose-100 text-rose-700',
     ayuda: 'Más de 180 días sin entrevista al NNA (o sin registro). Corresponde diligencia de seguimiento.' })
@@ -308,6 +335,8 @@ function LeyendaChips() {
             <div className="space-y-2">
               {item('bg-red-100 text-red-700', 'Orden de búsqueda', 'El NNA no está ubicado. Máxima urgencia.')}
               {item('bg-violet-100 text-violet-700', 'Traslado al curador', 'El tribunal confirió traslado: requiere que te pronuncies.')}
+              {item('bg-emerald-100 text-emerald-700', 'Cierre en N días', 'Ya enviaste el escrito; el tribunal cierra en ~14 días. Nada que hacer hasta que venza.')}
+              {item('bg-red-100 text-red-700', 'Cierre vencido — revisar', 'Pasaron los 14 días del cierre sin resolución registrada. Preguntar al tribunal.')}
               {item('bg-rose-100 text-rose-700', 'Seguimiento NNA vencido', 'Más de 180 días sin entrevista al NNA. Corresponde diligencia de seguimiento.')}
               {item('bg-amber-100 text-amber-700', 'No adherencia del programa', 'El programa informó inasistencia o abandono. Evaluar reunión técnica o re-derivación.')}
               {item('bg-sky-100 text-sky-700', 'Citación a audiencia', 'Hay citación reciente. Verificar fecha.')}
@@ -393,6 +422,17 @@ function formatFecha(iso: string | null): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return 'Sin fecha'
   return d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+// Fecha para columnas DATE puras de Postgres ("2026-10-27", sin hora ni zona). formatFecha
+// arriba NO sirve acá: new Date('2026-10-27') se interpreta como medianoche UTC y en Chile
+// (UTC-3) muestra un día antes — habría dicho "enviado 26-10" de un escrito mandado el 27.
+// Se parsea como fecha LOCAL, igual que hace el módulo de cierre.
+function formatFechaDia(iso: string | null): string {
+  if (!iso) return 'Sin fecha'
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})/)
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`
+  return formatFecha(iso)
 }
 
 // Etiqueta temporal de una audiencia según cuántos días faltan. Compartida por el
@@ -484,6 +524,43 @@ export default function Dashboard() {
       const json = await res.json()
       if (!res.ok) {
         alert(json?.error || `No se pudo guardar (error ${res.status}).`)
+        return
+      }
+      await loadCausas()
+    } catch (e: any) {
+      alert(e?.message || 'No se pudo conectar con el servidor.')
+    }
+  }
+
+  // Marca/desmarca "Escrito enviado" en un traslado. NO toca las causas: agrega (o borra)
+  // una gestión a la bitácora de la causa — tipo 'Presentación de escrito' con la marca
+  // [ESCRITO TRASLADO] y fecha de hoy. Misma tabla y mismo mecanismo que la ficha de causa,
+  // así la bitácora queda a la vista y el historial manda: si se desmarca, se borra solo
+  // la fila que marcó este botón (traslado_escrito_gestion_id), nunca otra gestión.
+  async function toggleEscrito(causaId: string, enviado: boolean, gestionId?: string | null, rit?: string) {
+    try {
+      let err: { message: string } | null = null
+      if (enviado) {
+        const hoy = new Date().toISOString().slice(0, 10)
+        const { error } = await supabase
+          .from('gestiones')
+          .insert({
+            causa_id: causaId,
+            tipo: TIPO_ESCRITO,
+            fecha: hoy,
+            contenido: `${MARCA_ESCRITO_TRASLADO} Escrito de respuesta al traslado conferido por el tribunal. Enviado y firmado por la curadora.`,
+          })
+        err = error
+      } else {
+        if (!gestionId) {
+          alert('No encontré el registro del escrito en la bitácora, así que no puedo deshacerlo. Revisalo desde la ficha de la causa.')
+          return
+        }
+        const { error } = await supabase.from('gestiones').delete().eq('id', gestionId)
+        err = error
+      }
+      if (err) {
+        alert(`No se pudo guardar (error ${err.message || 'desconocido'}).`)
         return
       }
       await loadCausas()
@@ -713,7 +790,8 @@ export default function Dashboard() {
       // portal (escaneo ok o ya fue escaneada alguna vez); las demás quedan sin marcar.
       try {
         const [gestRes, estRes] = await Promise.all([
-          fetchAll('gestiones', 'causa_id, tipo, fecha'),
+          // contenido: necesario para reconocer la marca [ESCRITO TRASLADO] (idem id).
+          fetchAll('gestiones', 'id, causa_id, tipo, fecha, contenido'),
           // rits_vinculados vive en el JSONB datos_extra; PostgREST lo expone como columna plana.
           fetchAll('causas', 'id, escaneo_estado, ultima_escaneada, datos_extra->>rits_vinculados'),
         ])
@@ -727,13 +805,30 @@ export default function Dashboard() {
             .filter((c) => c.rits_vinculados)
             .map((c) => [c.id, c.rits_vinculados as string]),
         )
-        const porCausa = agruparGestionesPorCausa((gestRes.data as any[]) || [])
+        const gestionesPorCausa = agruparGestionesPorCausa((gestRes.data as any[]) || [])
+        // Escrito de traslado enviado (cuadradito "Escrito enviado"): se agrupan las gestiones
+        // COMPLETAS (con contenido e id) y el módulo puro elige la marcada más reciente.
+        const crudosPorCausa = new Map<string, { id: string | null; tipo: string | null; fecha: string | null; contenido: string | null }[]>()
+        for (const g of (gestRes.data as any[]) || []) {
+          if (!g.causa_id) continue
+          const lista = crudosPorCausa.get(g.causa_id)
+          const item = { id: g.id ?? null, tipo: g.tipo ?? null, fecha: g.fecha ?? null, contenido: g.contenido ?? null }
+          if (lista) lista.push(item)
+          else crudosPorCausa.set(g.causa_id, [item])
+        }
+        const escritosPorCausa = new Map<string, { id: string | null; fecha: string }>()
+        for (const [causaId, gs] of crudosPorCausa) {
+          const e = escritoTrasladoMasReciente(gs)
+          if (e) escritosPorCausa.set(causaId, e)
+        }
         data = data.map((c: any) => ({
           ...c,
           seguimiento_vencido: conDatos.has(c.id)
-            ? estadoSeguimientoNna(porCausa.get(c.id) || []).vencido
+            ? estadoSeguimientoNna(gestionesPorCausa.get(c.id) || []).vencido
             : undefined,
           rits_vinculados: vinculosPorId.get(c.id) ?? null,
+          traslado_escrito_fecha: escritosPorCausa.get(c.id)?.fecha ?? null,
+          traslado_escrito_gestion_id: escritosPorCausa.get(c.id)?.id ?? null,
         }))
       } catch (e) {
         console.warn('No se pudieron cargar las gestiones para el seguimiento del NNA:', e)
@@ -811,9 +906,15 @@ export default function Dashboard() {
   const atencion = causasActivas.filter(c => (c.nivel_urgencia || 10) > 2 && (c.nivel_urgencia || 10) <= 4)
   const revisar = causasActivas.filter(c => (c.nivel_urgencia || 10) > 4 && (c.nivel_urgencia || 10) <= 6)
   const estables = causasActivas.filter(c => (c.nivel_urgencia || 10) > 6)
-  // Traslados al curador: lo más difícil/prioritario para Paula. Tienen su propia tarjeta.
-  // Es un corte transversal (una causa con traslado puede ser crítica o de atención).
-  const traslados = causasActivas.filter(c => c.tiene_traslado_curador)
+  // Traslados al curador POR RESPONDER: lo más prioritario para Paula. Tienen su propia
+  // tarjeta. Es un corte transversal (puede ser crítica o de atención). Una vez que la
+  // curadora marca "Escrito enviado" deja de estar acá y pasa a ESPERANDO CIERRE abajo —
+  // si no, el KPI seguiría contando trabajo que ya está hecho (cero mentiras).
+  const traslados = causasActivas.filter(c => c.tiene_traslado_curador && !c.traslado_escrito_fecha)
+  // Esperando cierre del tribunal: traslado ya respondido con escrito; quedan ~14 días de
+  // plazo (criterio de Paula). Vencido el plazo la causa SE QUEDA acá con chip rojo —
+  // no vuelve a Traslados: el trabajo de la curadora está hecho, lo que falta es del tribunal.
+  const cierrePendiente = causasActivas.filter(c => !!c.traslado_escrito_fecha)
   // Seguimiento del NNA vencido: corte transversal (como Traslados) — una causa acá puede
   // ser de cualquier nivel de urgencia. Es el recordatorio de "ver al NNA" cada 180 días.
   const seguimientoVencido = causasActivas.filter(c => c.seguimiento_vencido)
@@ -857,7 +958,7 @@ export default function Dashboard() {
     .filter(c => c.dias_para_audiencia != null && c.dias_para_audiencia <= 7)
     .sort((a, b) => (a.dias_para_audiencia ?? 0) - (b.dias_para_audiencia ?? 0))
   const agendaTraslados = causasAgenda
-    .filter(c => c.tiene_traslado_curador)
+    .filter(c => c.tiene_traslado_curador && !c.traslado_escrito_fecha)
     .sort((a, b) => (a.nivel_urgencia ?? 10) - (b.nivel_urgencia ?? 10))
   const agendaSeguimiento = causasAgenda
     .filter(c => c.seguimiento_vencido === true)
@@ -896,6 +997,7 @@ export default function Dashboard() {
   const causasFiltradas =
     filtroUrgencia === 'activas' ? causasActivasPorVencimiento :
     filtroUrgencia === 'traslados' ? traslados :
+    filtroUrgencia === 'cierre' ? cierrePendiente :
     filtroUrgencia === 'seguimiento' ? seguimientoVencido :
     filtroUrgencia === 'criticas' ? criticas :
     filtroUrgencia === 'atencion' ? atencion :
@@ -1081,12 +1183,18 @@ export default function Dashboard() {
           cortes transversales (una causa puede caer en ellos con cualquier nivel). Todos
           operan solo sobre vigentes. */}
       {filtroUrgencia !== 'fuera' && (
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-8 gap-3">
         <KpiCard
           label="Traslados curador" value={traslados.length}
           active={filtroUrgencia === 'traslados'}
           onClick={() => setFiltroUrgencia(filtroUrgencia === 'traslados' ? 'todas' : 'traslados')}
           tone="purple" Icono={IconShield}
+        />
+        <KpiCard
+          label="Esperando cierre" value={cierrePendiente.length}
+          active={filtroUrgencia === 'cierre'}
+          onClick={() => setFiltroUrgencia(filtroUrgencia === 'cierre' ? 'todas' : 'cierre')}
+          tone="emerald" Icono={IconHourglass}
         />
         <KpiCard
           label="Seguimiento vencido" value={seguimientoVencido.length}
@@ -1171,6 +1279,7 @@ export default function Dashboard() {
               Icono={FILTRO_SECCION[filtroUrgencia].Icono}
               defaultOpen={true}
               onAsesorIA={filtroUrgencia === 'traslados' ? abrirAsesorIA : undefined}
+              onToggleEscrito={filtroUrgencia === 'traslados' || filtroUrgencia === 'cierre' ? toggleEscrito : undefined}
               onToggleMonitoreo={toggleMonitoreo}
             />
           ) : (
@@ -1200,6 +1309,18 @@ export default function Dashboard() {
           tono="violet"
           Icono={IconShield}
           onAsesorIA={abrirAsesorIA}
+          onToggleEscrito={toggleEscrito}
+        />
+      )}
+
+      {cierrePendiente.length > 0 && filtroUrgencia === 'todas' && (
+        <BloqueCausasColapsable
+          titulo="Esperando cierre del tribunal"
+          subtitulo={`escrito enviado; cierra en ~${DIAS_PLAZO_CIERRE} días`}
+          causas={cierrePendiente}
+          tono="violet"
+          Icono={IconHourglass}
+          onToggleEscrito={toggleEscrito}
         />
       )}
 
@@ -1377,7 +1498,7 @@ function KpiCard({
   value: number
   active: boolean
   onClick: () => void
-  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green' | 'purple' | 'rose'
+  tone: 'neutral' | 'red' | 'amber' | 'orange' | 'green' | 'purple' | 'rose' | 'emerald'
   Icono?: IconoTipo
 }) {
   const tones: Record<typeof tone, { dot: string; num: string; ring: string; activeBg: string; icon: string }> = {
@@ -1388,6 +1509,7 @@ function KpiCard({
     green:   { dot: 'bg-green-500', num: 'text-green-700', ring: 'focus-visible:ring-green-400', activeBg: 'bg-green-50 border-green-400',  icon: 'text-green-500' },
     purple:  { dot: 'bg-violet-500',num: 'text-violet-700',ring: 'focus-visible:ring-violet-400',activeBg: 'bg-violet-50 border-violet-400',icon: 'text-violet-600' },
     rose:    { dot: 'bg-rose-500',  num: 'text-rose-700',  ring: 'focus-visible:ring-rose-400',  activeBg: 'bg-rose-50 border-rose-400',   icon: 'text-rose-600' },
+    emerald: { dot: 'bg-emerald-500', num: 'text-emerald-700', ring: 'focus-visible:ring-emerald-400', activeBg: 'bg-emerald-50 border-emerald-400', icon: 'text-emerald-600' },
   }
   const t = tones[tone]
   return (
@@ -1475,7 +1597,7 @@ const PALETA_BLOQUE: Record<TonoBloque, {
 }
 
 function BloqueCausasColapsable({
-  titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, onToggleMonitoreo, maximo = 50,
+  titulo, subtitulo, causas, tono, Icono, defaultOpen = true, onAsesorIA, onToggleMonitoreo, onToggleEscrito, maximo = 50,
 }: {
   titulo: string
   subtitulo?: string
@@ -1485,6 +1607,7 @@ function BloqueCausasColapsable({
   defaultOpen?: boolean
   onAsesorIA?: (causaId: string, rit: string) => void
   onToggleMonitoreo?: (causaId: string, terminada: boolean) => void
+  onToggleEscrito?: (causaId: string, enviado: boolean, gestionId?: string | null, rit?: string) => void
   maximo?: number
 }) {
   const [abierto, setAbierto] = useState(defaultOpen)
@@ -1541,6 +1664,38 @@ function BloqueCausasColapsable({
                     Estrategias del Asesor IA
                   </button>
                 )}
+                {/* Cuadradito "Escrito enviado" (traslados). Se muestra SIEMPRE que la causa
+                    tenga traslado, incluso en bloques sin este callback (filtro "todas"), para
+                    que el estado nunca quede invisible: sin callback solo no se puede tocar. */}
+                {c.tiene_traslado_curador && (() => {
+                  const enviado = !!c.traslado_escrito_fecha
+                  const e = enviado ? estadoCierreTraslado(c.traslado_escrito_fecha as string) : null
+                  return (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!onToggleEscrito) return
+                        const hoy = new Date().toLocaleDateString('es-CL', { day: 'numeric', month: 'short', year: 'numeric' })
+                        const pregunta = enviado
+                          ? `¿Deshacer "Escrito enviado" de ${c.rit}?\n\nVuelve a la lista de traslados pendientes y se quita el registro de la bitácora.`
+                          : `¿Marcar que YA enviaste el escrito de ${c.rit}?\n\nQueda registrado con fecha ${hoy} en la bitácora de la causa y empieza el plazo de ${DIAS_PLAZO_CIERRE} días de cierre del tribunal.`
+                        if (window.confirm(pregunta)) onToggleEscrito(c.id, !enviado, c.traslado_escrito_gestion_id ?? null, c.rit)
+                      }}
+                      className={`shrink-0 inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-lg border transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 ${
+                        enviado
+                          ? 'border-emerald-300 bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          : 'border-slate-300 bg-white text-slate-600 hover:bg-emerald-50 hover:border-emerald-300'
+                      }`}
+                    >
+                      <span className={`w-3.5 h-3.5 rounded border flex items-center justify-center shrink-0 ${enviado ? 'bg-emerald-500 border-emerald-500' : 'border-slate-400 bg-white'}`}>
+                        {enviado && <IconCheck className="w-2.5 h-2.5 text-white" />}
+                      </span>
+                      {enviado && e
+                        ? `${textoCierreTraslado(e)} · enviado ${formatFechaDia(c.traslado_escrito_fecha as string)}`
+                        : 'Escrito enviado'}
+                    </button>
+                  )
+                })()}
                 {/* Sacar/volver a monitoreo. Importa especialmente en el filtro "Fuera de
                     monitoreo": es desde donde la curadora reactiva una causa que cerró por
                     error. Acá el botón está FUERA del <Link>, así que no hace falta frenar
