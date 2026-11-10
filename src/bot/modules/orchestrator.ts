@@ -119,8 +119,10 @@ export async function runBotSession(
     // 0. Verificar horario
     if (!process.env.SKIP_HOUR_CHECK && !isWithinAllowedHours()) {
       log('warn', 'Fuera de horario permitido. Usa SKIP_HOUR_CHECK=1 para ignorar.')
-      status.detenido_por = 'error_critico'
-      status.errores.push('Fuera de horario permitido')
+      // NO es 'error_critico': es el horario que no deja arrancar. Registrarlo como error
+      // hacía que el panel mostrara "se cortó por un error del bot" en una tanda que nunca
+      // empezó (y esa era la corrida "0 causas / error_critico" que nadie sabía explicar).
+      status.detenido_por = 'fuera_de_horario'
       return { status, data: results }
     }
     
@@ -408,6 +410,15 @@ async function runBusquedaPorRit(
   const PANEL_FALLOS_PARA_CORTAR = 3
 
   for (const [idx, causa] of causas.entries()) {
+    // El horario se vuelve a mirar POR CAUSA, no solo al arrancar: con el tope puesto en
+    // "toda la cola", la tanda tiene que pararse sola al cierre de la ventana y dejar el
+    // resto 'pendiente' para la próxima, en vez de pasarse la noche en el portal.
+    if (!process.env.SKIP_HOUR_CHECK && !isWithinAllowedHours()) {
+      log('warn', `  ⏰ Se cerró la ventana horaria: quedan ${causas.length - idx} causa(s) pendientes para la próxima tanda.`)
+      status.detenido_por = 'fuera_de_horario'
+      break
+    }
+
     // Las causas de BOT_RIT que no están en la BD llegan con id "temp-*": NO es un UUID,
     // así que no puede escribirse en ninguna FK. Se registra el rastro sin causa_id y
     // NO se le cambia el estado de cola (no tiene).
@@ -714,7 +725,8 @@ async function runBusquedaPorRit(
   // definitivo, pero esto deja la corrida legible aunque el proceso tarde en cerrar).
   await upsertBotRunProgreso(status).catch(() => {})
 
-  status.detenido_por = 'completado'
+  // No pisar el motivo real si la tanda se cortó antes (horario, sesión perdida).
+  if (!status.detenido_por) status.detenido_por = 'completado'
 }
 
 // ============================================================

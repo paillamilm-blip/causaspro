@@ -480,6 +480,11 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
     // descartables, 47 pendientes reales que NUNCA llegaban a procesarse; por_escanear clavado
     // en ~50 con corridas "33/33 exitosas". Se lee en bloques de 1000 hasta juntar `limit`
     // candidatos válidos (tope de 6 bloques = 6000 filas, holgado para la cola real).
+    // colaLeidaHastaElFinal: la cola real es MÁS chica que el cupo (típico cuando
+    // BOT_MAX_CAUSAS se pone en "toda la cola"). Sin este flag, el criterio
+    // `seleccionCola.length >= limit` de abajo no se cumple y la tanda cae al camino
+    // legacy, que re-escanea causas ya cargadas.
+    let colaLeidaHastaElFinal = false
     const seleccionCola: CausaToScrape[] = []
     let colaError: { code?: string; message?: string } | null = null
     for (let desde = 0, bloque = 0; seleccionCola.length < limit && bloque < 6; desde += 1000, bloque++) {
@@ -497,11 +502,11 @@ export async function getCausasToScrape(limit: number, priorizarUrgentes: boolea
         seleccionCola.push({ id: c.id, rit: c.rit })
         if (seleccionCola.length >= limit) break
       }
-      if (lote.length < 1000) break
+      if (lote.length < 1000) { colaLeidaHastaElFinal = true; break }
     }
 
     if (!colaError) {
-      if (seleccionCola.length >= limit) {
+      if (seleccionCola.length >= limit || colaLeidaHastaElFinal) {
         log('info', `  Cola oficial: ${seleccionCola.length} pendientes/error (las más antiguas primero).`)
         return seleccionCola.slice(0, limit)
       }
