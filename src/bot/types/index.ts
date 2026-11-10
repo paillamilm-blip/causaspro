@@ -106,7 +106,10 @@ export interface BotRunStatus {
   // 'sesion_perdida': se cortó la tanda porque el panel de Familia dejó de estar accesible
   // en varias causas seguidas (sesión del portal caída). Las causas que faltaban NO se
   // penalizan: quedan intactas en la cola para la próxima corrida.
-  detenido_por?: 'completado' | 'limite_sesion' | 'error_critico' | 'captcha' | 'bloqueado' | 'sesion_perdida'
+  // 'fuera_de_horario': la ventana horaria se cerró a mitad de la tanda (el tope ahora es
+  // "toda la cola", así que la corrida puede durar más que el horario). Lo que no se alcanzó
+  // a procesar sigue 'pendiente', no se penaliza.
+  detenido_por?: 'completado' | 'limite_sesion' | 'error_critico' | 'captcha' | 'bloqueado' | 'sesion_perdida' | 'fuera_de_horario'
   errores: string[]
   // --- Métricas de auto-aprendizaje (modo conservador: solo se registran) ---
   /** Duración total de la sesión en ms (finished - started) */

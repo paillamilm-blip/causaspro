@@ -104,6 +104,7 @@ const MOTIVOS_DETENCION: Record<string, string> = {
   error_critico: 'se cortó por un error del bot',
   captcha: 'el portal pidió captcha',
   bloqueado: 'el portal bloqueó el acceso',
+  fuera_de_horario: 'se cerró el horario de trabajo: lo que faltó queda para la próxima tanda',
 }
 
 function haceCuantoCorto(desdeIso: string | null, ahora: number): string {
