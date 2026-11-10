@@ -2,6 +2,7 @@
 import { useEffect, useState, useRef } from 'react'
 import { supabase } from '@/lib/supabase'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import { materiaDeTipo, materiaDeRit, type GrupoMateria } from '@/lib/materiasFamilia'
 import { estadoSeguimientoNna, agruparGestionesPorCausa } from '@/lib/seguimientoNna'
 import {
@@ -128,6 +129,41 @@ function noCargablePorBot(c: CausaResumen): boolean {
     || n.includes('[REVISAR: NO SCRAPEADA]')
     || n.includes('[REVISAR LETRA]')
     || n.includes(MARCA_TERMINADA)   // la curadora la cerró: el bot ya no la revisa
+}
+
+// Causa encontrada por el buscador directo por RIT. Se lee de la tabla `causas`, NO de
+// v_causas_ranking: la vista es una foto materializada y una causa recién ingresada puede
+// no estar ahí todavía. Por eso el buscador consulta la tabla en vivo.
+interface SugerenciaRit {
+  id: string
+  rit: string
+  caratulado: string | null
+  tipo: string | null
+  estado: string | null
+  notas: string | null
+  total_nna: number
+  proxima_audiencia: string | null
+}
+
+function normalizaRit(s: string): string {
+  return (s || '').toUpperCase().replace(/[^A-Z0-9]/g, '')
+}
+
+// Puntaje de coincidencia para ordenar: RIT idéntico > RIT que contiene lo tipeado >
+// coincidencia por dígitos (el caso normal: pegar "4596" sin la letra ni el año).
+function pesoRit(rit: string, consulta: string): number {
+  const q = normalizaRit(consulta)
+  const r = normalizaRit(rit)
+  if (!q) return 0
+  if (r === q) return 3
+  if (r.includes(q)) return 2
+  return 1
+}
+
+// Solo el chip del desplegable: con los campos que trae la fila alcanza para saber si la
+// causa sigue vigente o ya se cerró.
+function sugerenciaCerrada(s: SugerenciaRit): boolean {
+  return estaTerminada(s.notas) || /TERMINAD|CERRAD|ARCHIVAD/i.test(s.estado || '')
 }
 
 // ¿La causa tiene SENTENCIA DE RECHAZO? En ese caso la protección se rechazó: la causa
@@ -464,11 +500,17 @@ function haceCuanto(desde: Date | null, ahora: number): string {
 }
 
 export default function Dashboard() {
+  const router = useRouter()
   const [causas, setCausas] = useState<CausaResumen[]>([])
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [filtroUrgencia, setFiltroUrgencia] = useState<FiltroUrgencia>('todas')
+  // Coincidencias del buscador por RIT, para el acceso rápido pegado al buscador.
+  const [sugerencias, setSugerencias] = useState<SugerenciaRit[]>([])
+  const [buscandoRit, setBuscandoRit] = useState(false)
+  // Secuencia de búsquedas: descarta respuestas viejas si el texto ya cambió.
+  const busquedaSeq = useRef(0)
   // Cuántas causas ve el PORTAL y no están en la base (lo reporta CoberturaPanel, que ya
   // lee v_conciliacion). null = todavía no se puede afirmar (falta inventario). La agenda
   // lo usa para la única fila que el Dashboard no puede calcular solo.
@@ -589,8 +631,9 @@ export default function Dashboard() {
   // "Reloj" que refresca solo el TEXTO "hace X min" (no recarga datos). Tick cada 30s.
   const [ahora, setAhora] = useState<number>(() => Date.now())
 
-  // Cada cuánto se refresca solo el dashboard (ms). 5 minutos.
-  const AUTO_REFRESH_MS = 5 * 60 * 1000
+  // Cada cuánto se refresca solo el dashboard (ms). 2 minutos: el bot refresca la vista
+  // materializada cada 5 causas, así que este es el único tramo de latencia que queda.
+  const AUTO_REFRESH_MS = 2 * 60 * 1000
 
   useEffect(() => {
     loadCausas()
@@ -639,6 +682,74 @@ export default function Dashboard() {
     const t = setInterval(() => setAhora(Date.now()), 30 * 1000)
     return () => clearInterval(t)
   }, [])
+
+  // Buscador por RIT: consulta la tabla `causas` (no la vista materializada) para encontrar
+  // también causas recién ingresadas que el panel todavía no muestra. Espera 250 ms desde la
+  // última tecla y descarta respuestas viejas si el texto ya cambió.
+  useEffect(() => {
+    const texto = filtro.trim()
+    const digitos = texto.replace(/\D/g, '')
+    const seq = ++busquedaSeq.current
+    if (digitos.length < 2) {
+      setSugerencias([])
+      setBuscandoRit(false)
+      return
+    }
+    setBuscandoRit(true)
+    const t = setTimeout(async () => {
+      const sinResultados = () => {
+        if (seq !== busquedaSeq.current) return
+        setSugerencias([])
+        setBuscandoRit(false)
+      }
+      try {
+        const { data, error: err } = await supabase
+          .from('causas')
+          .select('id, rit, caratulado, tipo, estado, notas')
+          .ilike('rit', `%${digitos}%`)
+          .limit(10)
+        if (seq !== busquedaSeq.current) return
+        if (err) { sinResultados(); return }
+
+        const filas = (data || []) as Omit<SugerenciaRit, 'total_nna' | 'proxima_audiencia'>[]
+        if (filas.length === 0) { sinResultados(); return }
+
+        const ids = filas.map((f) => f.id)
+        const [nnas, audiencias] = await Promise.all([
+          // Solo el vínculo, para contarlos: los datos del NNA no viajan acá.
+          supabase.from('nna').select('causa_id').in('causa_id', ids),
+          supabase
+            .from('audiencias')
+            .select('causa_id, fecha')
+            .in('causa_id', ids)
+            .gte('fecha', new Date().toISOString())
+            .order('fecha', { ascending: true }),
+        ])
+        if (seq !== busquedaSeq.current) return
+
+        const cuentaNna = new Map<string, number>()
+        for (const n of (nnas.data || []) as { causa_id: string }[]) {
+          cuentaNna.set(n.causa_id, (cuentaNna.get(n.causa_id) || 0) + 1)
+        }
+        const proxima = new Map<string, string>()
+        for (const a of (audiencias.data || []) as { causa_id: string; fecha: string }[]) {
+          if (!proxima.has(a.causa_id)) proxima.set(a.causa_id, a.fecha)
+        }
+
+        const completas: SugerenciaRit[] = filas.map((f) => ({
+          ...f,
+          total_nna: cuentaNna.get(f.id) || 0,
+          proxima_audiencia: proxima.get(f.id) || null,
+        }))
+        completas.sort((a, b) => pesoRit(b.rit, texto) - pesoRit(a.rit, texto))
+        setSugerencias(completas.slice(0, 3))
+        setBuscandoRit(false)
+      } catch {
+        sinResultados()
+      }
+    }, 250)
+    return () => clearTimeout(t)
+  }, [filtro])
 
   // Trae TODAS las filas de una tabla/vista paginando de a 1000 (límite por request de
   // Supabase/PostgREST). Antes se usaba .limit(500), que ocultaba causas: si había 633,
@@ -886,6 +997,10 @@ export default function Dashboard() {
     )
   })
 
+  // Buscador por RIT: se activa desde 2 dígitos (con texto libre por caratulado no consulta).
+  const digitosFiltro = filtro.replace(/\D/g, '')
+  const buscadorRitActivo = digitosFiltro.length >= 2
+
   // Causas que el bot NO puede cargar (fuera de su cola). Se pasa al panel de cobertura solo
   // como referencia: explica por qué el total de la barra es menor que la lista de la curadora.
   // La métrica de escaneo REAL (pendientes/ok/error) la lee el panel de v_cobertura, no de acá:
@@ -1111,6 +1226,18 @@ export default function Dashboard() {
             placeholder="Buscar por RIT, caratulado, NNA, programa…"
             value={filtro}
             onChange={(e) => setFiltro(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') { setFiltro(''); return }
+              // Enter abre la primera coincidencia, como si se hubiera hecho clic.
+              if (e.key === 'Enter' && sugerencias.length > 0) {
+                e.preventDefault()
+                router.push(`/causa/${sugerencias[0].id}`)
+              }
+            }}
+            aria-label="Buscar causas"
+            aria-autocomplete="list"
+            aria-controls="sugerencias-rit"
+            aria-expanded={buscadorRitActivo}
             className="w-full pl-10 pr-10 py-3 rounded-xl border border-slate-200 bg-white shadow-sm text-slate-800 placeholder:text-slate-400 focus:ring-2 focus:ring-slate-300 focus:border-slate-400 outline-none"
           />
           {filtro && (
@@ -1123,6 +1250,54 @@ export default function Dashboard() {
             </button>
           )}
         </div>
+
+        {/* Acceso directo por RIT: aparece pegado al buscador y empuja el contenido.
+            La fila entera lleva a la ficha de la causa. */}
+        {buscadorRitActivo && (
+          <div id="sugerencias-rit" role="listbox" aria-label="Causas encontradas" className="mt-2 bg-white border border-slate-200 rounded-xl shadow-lg overflow-hidden">
+            {sugerencias.map((s, i) => {
+              const cerrada = sugerenciaCerrada(s)
+              return (
+                <Link
+                  key={s.id}
+                  href={`/causa/${s.id}`}
+                  role="option"
+                  aria-selected={i === 0}
+                  className={`flex items-center gap-3 px-3.5 py-3 border-t border-slate-100 first:border-t-0 hover:bg-slate-50 focus:outline-none focus-visible:bg-slate-50 ${i === 0 ? 'bg-slate-50/70' : ''}`}
+                >
+                  <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${cerrada ? 'bg-slate-400' : 'bg-green-500'}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <span className="font-mono font-bold text-sm text-slate-900">{s.rit}</span>
+                      <span className={`text-[10.5px] font-semibold px-2 py-0.5 rounded-full border ${cerrada ? 'bg-slate-100 text-slate-600 border-slate-200' : 'bg-green-50 text-green-700 border-green-200'}`}>
+                        {cerrada ? 'Terminada' : 'Vigente'}
+                      </span>
+                      {s.caratulado && <span className="text-sm font-semibold text-slate-700 truncate">{s.caratulado}</span>}
+                    </span>
+                    <span className="mt-0.5 flex items-center gap-3 text-xs text-slate-500 flex-wrap">
+                      <span>{s.total_nna} NNA</span>
+                      <span>{s.proxima_audiencia ? `Próxima audiencia ${formatFechaCorta(s.proxima_audiencia)}` : 'Sin audiencia'}</span>
+                    </span>
+                  </span>
+                  <IconChevron className="w-4 h-4 text-slate-400 shrink-0" />
+                </Link>
+              )
+            })}
+            {sugerencias.length === 0 && (
+              <div className="px-3.5 py-3 text-sm text-slate-500">
+                {buscandoRit
+                  ? 'Buscando en la base…'
+                  : <>No encontré <span className="font-mono font-semibold text-slate-700">{filtro.trim()}</span> en tus causas.</>}
+              </div>
+            )}
+            {sugerencias.length > 0 && (
+              <div className="px-3.5 py-1.5 bg-slate-50 border-t border-slate-100 text-[11.5px] text-slate-400 flex justify-between gap-2">
+                <span>Enter abre la primera</span>
+                <span>Esc limpia</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* AGENDA DE HOY: la tarjeta de tarea única, arriba de todo lo demás. Cada línea abre

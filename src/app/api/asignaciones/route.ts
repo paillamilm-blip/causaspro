@@ -179,6 +179,16 @@ export async function POST(req: NextRequest) {
       fecha: new Date().toISOString().split('T')[0],
       remitente: 'pegado manualmente en CausasPro',
     }, { descartes })
+
+    // El panel lee v_causas_ranking, que es una vista materializada. Sin este refresco,
+    // las causas recién pegadas no aparecen hasta el próximo refresh del cron o del bot.
+    try {
+      const { error: refreshErr } = await sb.rpc('refresh_ranking')
+      if (refreshErr) console.warn('[asignaciones] refresh_ranking:', refreshErr.message)
+    } catch (e: any) {
+      console.warn('[asignaciones] refresh_ranking no disponible:', e?.message || e)
+    }
+
     return NextResponse.json({
       modo: 'guardado',
       origen: mejor.origen,

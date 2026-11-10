@@ -161,8 +161,12 @@ export async function upsertBotRunProgreso(status: BotRunStatus): Promise<void> 
   }
 }
 
+/** Causas guardadas desde el último refresh del ranking en esta corrida. */
+let guardadasDesdeRefresh = 0
+
 /** Refresca el ranking al terminar la corrida: mata los 15 min de latencia del cron. */
 export async function refrescarRanking(): Promise<void> {
+  guardadasDesdeRefresh = 0
   const sb = initSupabase()
   try {
     const { error } = await sb.rpc('refresh_ranking')
@@ -170,6 +174,16 @@ export async function refrescarRanking(): Promise<void> {
   } catch {
     // función inexistente → el pg_cron de 15 min sigue cubriendo
   }
+}
+
+/**
+ * Refresca el ranking cada `cada` causas guardadas, sin esperar al final de la tanda.
+ * La foto que lee el panel quedaría congelada hasta el cierre de la corrida (~30-40 min).
+ */
+export async function refrescarRankingCada(cada = 5): Promise<void> {
+  guardadasDesdeRefresh++
+  if (guardadasDesdeRefresh < cada) return
+  await refrescarRanking()
 }
 
 /**

@@ -11,7 +11,7 @@ import { navigateToConsulta, searchByYear, searchByRitExacto, navigateToCausaDet
 import { scrapeCausaCompleta } from './scraper'
 import { volcarDetalleParaDiagnostico } from './diagnostico'
 import { analyzeCausaUrgency, generateAlertSummary } from './detection'
-import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos, setEscaneoEstado, logRunItem, upsertBotRunProgreso, refrescarRanking, reclamarColaAbandonada, reencolarVencidas, guardarInventarioPortal, marcarDesaparecidas, getRitsSinLetraEnBd, ritSinLetra } from './supabaseSync'
+import { saveCausaData, saveBotRunStatus, markCausaScraped, initSupabase, getCausasToScrape, saveBotError, saveStepMetric, getCausasToFixLetras, updateCausaRitYTipo, marcarRevisionLetra, upsertCausaHermana, vincularCausaEnNotas, marcarCausaNoEnPortal, limpiarMarcasNoEnPortal, registrarIntentoFallido, borrarContadorIntentos, setEscaneoEstado, logRunItem, upsertBotRunProgreso, refrescarRanking, refrescarRankingCada, reclamarColaAbandonada, reencolarVencidas, guardarInventarioPortal, marcarDesaparecidas, getRitsSinLetraEnBd, ritSinLetra } from './supabaseSync'
 import { humanDelay, sleep, isWithinAllowedHours, generateRunId, log, inferirTipoRIT, parseRIT, categorizarError, capturaPath, calcularTasaExito, esPosibleCausaHermana } from '../utils'
 import { analizarHistorial, logDiagnostico } from './learningEngine'
 import type { BotStep, BotErrorType } from '../types'
@@ -644,6 +644,8 @@ async function runBusquedaPorRit(
           // marque de más en el futuro.
           await borrarContadorIntentos(causa.id).catch(() => {})
           status.exitosas++
+          // Refresco cada 5 causas: si no, el panel no ve nada nuevo hasta el final de la tanda.
+          await refrescarRankingCada().catch(() => {})
         }
         await logRunItem(
           status.run_id, causaId, causa.rit,
@@ -1265,6 +1267,7 @@ async function runListadoMasivo(
             await saveCausaData(scrapedData, analysis)
             results.push(scrapedData)
             await markCausaScraped(causaDb.id, scrapedData.movimientos.length, status.run_id)
+            await refrescarRankingCada().catch(() => {})
 
             if (analysis.requiere_accion_inmediata) {
               log('warn', `  ${generateAlertSummary(analysis)}`)

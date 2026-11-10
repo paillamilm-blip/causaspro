@@ -420,6 +420,15 @@ export async function POST(req: NextRequest) {
       ].slice(0, 200),
     }).then(r => !r.error, () => false)
 
+    // La vista materializada del panel se refresca acá: si no, las causas recién subidas
+    // quedarían invisibles hasta el próximo refresh del bot o del cron.
+    try {
+      const { error: refreshErr } = await supabase.rpc('refresh_ranking')
+      if (refreshErr) console.warn('[upload] refresh_ranking:', refreshErr.message)
+    } catch (e: any) {
+      console.warn('[upload] refresh_ranking no disponible:', e?.message || e)
+    }
+
     return NextResponse.json({
       ok: true,
       modo: 'guardado',

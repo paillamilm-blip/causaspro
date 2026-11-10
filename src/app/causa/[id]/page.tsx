@@ -65,6 +65,9 @@ export default function CausaDetalle() {
   const [ritsVinculados, setRitsVinculados] = useState<string[]>([])
   const [hermanas, setHermanas] = useState<Hermana[]>([])
   const [loading, setLoading] = useState(true)
+  // Hora en que esta pantalla consultó los datos. La ficha lee las tablas en vivo (no la
+  // foto del panel), así que mostrarlo deja claro que lo que se ve es de recién.
+  const [consultadoEn, setConsultadoEn] = useState<Date | null>(null)
   // Formulario de nueva gestión de curaduría.
   const [gestionTipo, setGestionTipo] = useState<string>(TIPOS_GESTION[0])
   const [gestionFecha, setGestionFecha] = useState<string>(() => new Date().toISOString().slice(0, 10))
@@ -142,6 +145,18 @@ export default function CausaDetalle() {
     if (id) loadData()
   }, [id])
 
+  // Volver con el botón "atrás" puede restaurar la página desde la caché del navegador
+  // (bfcache) sin volver a montarla, y los datos quedarían congelados. En ese caso se
+  // consulta de nuevo.
+  useEffect(() => {
+    const onPageShow = (e: PageTransitionEvent) => {
+      if (e.persisted) loadData()
+    }
+    window.addEventListener('pageshow', onPageShow)
+    return () => window.removeEventListener('pageshow', onPageShow)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   async function loadData() {
     setLoading(true)
     const [c, n, a, au, g, m] = await Promise.all([
@@ -181,6 +196,7 @@ export default function CausaDetalle() {
     if (au.data) setAudiencias(au.data)
     if (g.data) setGestiones(g.data as Gestion[])
     if (m.data) setMovimientos(m.data as Movimiento[])
+    setConsultadoEn(new Date())
     setLoading(false)
   }
 
@@ -290,6 +306,18 @@ export default function CausaDetalle() {
       </header>
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
+        {/* Frescura: esta ficha consulta las tablas al abrirse, no la foto materializada
+            que muestra el panel. La hora lo deja a la vista. */}
+        <div className="flex justify-end">
+          <span
+            title="Esta ficha lee los datos en vivo al abrirse; no es la foto que muestra el panel."
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full"
+          >
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
+            {consultadoEn ? `Consultada al abrir · ${formatHora(consultadoEn)}` : 'Consultando…'}
+          </span>
+        </div>
+
         {/* AVISO: seguimiento del NNA vencido (Feature 1/5). Se muestra arriba de todo
             cuando pasaron más de 180 días desde la última "Entrevista al NNA" o cuando
             nunca se registró una. Es el recordatorio central de la curaduría: ver al NNA. */}
@@ -672,4 +700,8 @@ function formatFecha(iso: string | null): string {
     : new Date(iso)
   if (isNaN(d.getTime())) return iso
   return d.toLocaleDateString('es-CL', { day: '2-digit', month: '2-digit', year: 'numeric' })
+}
+
+function formatHora(d: Date): string {
+  return d.toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })
 }
