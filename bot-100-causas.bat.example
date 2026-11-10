@@ -42,19 +42,20 @@ findstr /b /c:"PJUD_RUT=" ".env" >nul 2>nul
 if errorlevel 1 goto :falta_config
 
 REM --- LOCK: evitar dos bots corriendo a la vez (marca al bot en el portal) ---
-REM Si existe el lock, verificamos si de verdad hay un bot corriendo (proceso node).
-REM Si NO hay ninguno, el lock quedo HUERFANO de una corrida que se corto (Ctrl+C,
-REM ventana cerrada, PC apagada) -> lo limpiamos solo y seguimos, en vez de bloquear.
+REM Si existe el lock, verificamos si de verdad hay un BOT corriendo: un node cuya
+REM linea de comando sea el bot (src/bot o tsx). Cualquier otro node (el editor, Qoder)
+REM NO cuenta, porque si no, con Qoder abierto el candado nunca se limpia.
+REM Si no hay bot, el lock quedo HUERFANO de un corte (Ctrl+C, ventana cerrada, PC
+REM apagada) -> lo limpiamos solo y seguimos, en vez de bloquear para siempre.
 if exist "bot-100-causas.lock" (
-  tasklist /fi "imagename eq node.exe" 2>nul | find /i "node.exe" >nul
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process -Filter 'name=''node.exe''' | Where-Object { $_.CommandLine -match 'src[/\\]bot|tsx' }) { exit 1 }" 2>nul
   if errorlevel 1 (
-    echo Lock huerfano detectado ^(no hay bot corriendo^). Se limpia y continua.
-    del "bot-100-causas.lock" 2>nul
-  ) else (
     echo Ya hay una tanda corriendo de verdad. Se cancela esta.
     pause
     exit /b 0
   )
+  echo Lock huerfano detectado ^(no hay bot corriendo^). Se limpia y continua.
+  del "bot-100-causas.lock" 2>nul
 )
 echo running > "bot-100-causas.lock"
 

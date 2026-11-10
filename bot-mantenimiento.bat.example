@@ -146,12 +146,12 @@ REM ---------- 5) Candado: que no corran dos bots a la vez ----------
 REM Comparte candado con bot-100-causas.bat: dos bots con el mismo RUT a la
 REM vez es justo lo que hace que el portal marque el bot.
 if exist "bot-100-causas.lock" (
-  tasklist /fi "imagename eq node.exe" 2>nul | find /i "node.exe" >nul
+  REM Un candado solo es valido si de verdad hay un bot corriendo. Buscamos un node
+  REM cuya linea de comando sea el bot (src/bot o tsx); cualquier otro node (el editor,
+  REM Qoder) NO cuenta. Si no hay bot, el candado quedo huerfano de un corte abrupto
+  REM (ventana cerrada, PC apagada) y bloquearia todos los lanzamientos siguientes.
+  powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Get-CimInstance Win32_Process -Filter 'name=''node.exe''' | Where-Object { $_.CommandLine -match 'src[/\\]bot|tsx' }) { exit 1 }" 2>nul
   if errorlevel 1 (
-    echo Habia un candado viejo de una corrida que se corto. Lo limpio y sigo.
-    del "bot-100-causas.lock" 2>nul
-    echo.
-  ) else (
     echo ------------------------------------------------------------
     echo   YA HAY UN BOT CORRIENDO
     echo ------------------------------------------------------------
@@ -160,6 +160,9 @@ if exist "bot-100-causas.lock" (
     pause
     exit /b 0
   )
+  echo Habia un candado viejo de una corrida que se corto. Lo limpio y sigo.
+  del "bot-100-causas.lock" 2>nul
+  echo.
 )
 echo running > "bot-100-causas.lock"
 
