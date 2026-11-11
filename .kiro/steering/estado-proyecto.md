@@ -146,7 +146,8 @@ números cada minuto — una hora antes estaba en 1366 pendientes / 476 ok):
 
 ## Historial de decisiones y avances (reciente → antiguo)
 
-- **11-nov-2026 — auditoría de toda la app + docs corregidas** (rama de docs, sin fusionar):
+- **11-nov-2026 — auditoría de toda la app + docs corregidas** (**PR #110**, rama
+  `docs/estado-proyecto-y-horarios-reales`):
   se actualizan `BOT-PJUD.md` (decía "6–18 h" y "la ventana se cambia en el .bat": son
   ventanas `BOT_HORARIOS` del `.env`, con fallback 6–18) y `.vercelignore` (pedía excluir
   7 rutas inexistentes y **no** excluía el `.env` ni los `.bat` con credenciales). Se
@@ -154,7 +155,9 @@ números cada minuto — una hora antes estaba en 1366 pendientes / 476 ok):
   RIT sin letra).
 - **PR #109** (10-nov) — `BOT_MAX_CAUSAS=9999` en `bot-carga-max.bat` + **chequeo de hora
   por causa**: la tanda se para sola al cerrar la ventana y deja el resto en `pendiente`.
-  Antes el corte era solo al arrancar, por eso una corrida se quedó 19 h en el portal.
+  Antes el corte era solo al arrancar. ⚠️ Aclaración medida el 11-nov sobre el log de esa
+  corrida de 19 h: **16 de esas 19 h fueron un bloqueo** en `Seleccionando tab Familia`, no
+  espera de ventana (ver P1). El chequeo por causa no sirve mientras la página esté trabada.
 - **PR #24** — 🟢 **BUG DE FONDO RESUELTO**: `ReferenceError: __name is not defined` en
   `page.evaluate` (tsx/esbuild con keepNames inserta `__name()`, inexistente en el navegador).
   Shim `window.__name` global vía `addInitScript`. Esto era lo que rompía "Activando filtros"
@@ -194,8 +197,17 @@ números cada minuto — una hora antes estaba en 1366 pendientes / 476 ok):
 
 ### 🟠 P1 — Robustez y trazabilidad del bot
 
-- **Ningún run registra las ventanas horarias que usó** (ni en `bot_runs` ni en consola).
-  Es lo que impide explicar los cortes fuera de ventana. Arreglar esto primero.
+- **Ningún run registra las ventanas horarias que usó** (ni en `bot_runs` ni en consola: el
+  arranque imprime `Modo` y `Max causas`, nunca el horario). Es lo que impide explicar los
+  cortes fuera de ventana. Arreglar esto primero.
+  Medido el 11-nov: las tandas **programadas** calzan exactas con el `.env` (`mllt`
+  07:17→08:31, `vhko` 13:30 en curso). Las **manuales** no: `tanda-ahora` cortó a las 13:00
+  en punto habiendo arrancado a las 11:25, y ninguna ventana de ningún archivo de ninguna
+  copia cubre ese tramo (lo revisamos: ningún `.bat` fija `BOT_HORARIOS`, `.env.local` no lo
+  tiene). Como `SKIP_HOUR_CHECK` desactiva también el chequeo por causa (`orchestrator.ts:120`
+  y `:416`) y esas dos tandas imprimieron "se cerró la ventana", es seguro que **no**
+  corrieron con skip: el horario lo traían a mano en la consola, y `loadEnv.ts:69` deja
+  ganar al entorno sobre el `.env`. Ese `.bat` ya no existe, así que no se puede probar.
 - `retryWithBackoff` (`src/bot/utils/index.ts:216`) **no se llama en ningún lado**: una
   búsqueda que falla no reintenta dentro de la corrida.
 - Selectores de CAPTCHA definidos (`src/bot/config/index.ts:94`) y **nunca usados**: el
@@ -208,8 +220,16 @@ números cada minuto — una hora antes estaba en 1366 pendientes / 476 ok):
   lanzadores que dejaron `tanda-ahora-log.txt` / `carga-ahora-log.txt` **no existen como
   `.bat`** en ninguna parte: ni en git ni en la copia viva. Queda solo su output, así que la
   forma en que corrieron esas dos tandas no está escrita en ningún archivo revisable.
-- Detalles abiertos desde sep-2026, **sin re-verificar**: `⚠️ Familia no confirmado en tabla`
-  al volver de cada causa (≈20 s perdidos), y "No se encontró sección de audiencias".
+- Detalles abiertos desde sep-2026, **re-verificados el 11-nov-2026 sobre los logs**:
+  `⚠️ Familia no confirmado en tabla` ya no es de "≈20 s". En `tanda-ahora-log.txt`
+  (11-nov, 11:25→13:00) no aparece ni una vez y no hay ningún silencio ≥5 min. En
+  `carga-ahora-log.txt` (10-nov) hay **3 silencios que suman 16 h** dentro del mismo paso:
+  14 min en `Seleccionando tab Familia`, **586 min** (línea 3702→3703) y **360 min**
+  (3704→3705) después de `Tab Familia: link: #familiaTab`, y la corrida cierra con
+  `bot_error_familia_fail.png`. Un click en una pestaña se comió media jornada de cola, y
+  mientras está colgado el bot **no evalúa el horario**: por eso esa tanda "se cortó" a las
+  07:16 del día siguiente. El patrón (una línea y horas de silencio) es más compatible con
+  el PC dormido que con el portal lento; revisar la energía de Windows en horas de tanda.
 
 ### 🟡 P2 — Reproducibilidad
 
