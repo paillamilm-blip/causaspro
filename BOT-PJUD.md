@@ -127,9 +127,22 @@ Al terminar, revisá el panel en **https://causaspro.vercel.app**.
 Cuando la base ya está cargada, para el **día a día** usá `bot-mantenimiento.bat`:
 
 - Corre **UNA tanda de 25 causas** (trae las nuevas + refresca las más viejas).
-- **Solo corre entre 6 y 18 h (hora Chile)**: fuera de ese horario se auto-cancela.
-  Correr "de día, como una persona" reduce el riesgo de que el portal marque el bot.
-  La ventana se cambia en el `.bat` (`BOT_HORA_INICIO` / `BOT_HORA_FIN`), sin tocar el código.
+- **Solo corre dentro de tus ventanas horarias**: fuera de ellas se auto-cancela, y si la
+  ventana se cierra a mitad de la tanda, la tanda se para sola y deja el resto en
+  `pendiente` para la próxima. Correr "de día, como una persona" reduce el riesgo de que
+  el portal marque el bot.
+- Las ventanas se definen en el **`.env`** con `BOT_HORARIOS`, separadas por coma y con
+  precisión de minutos. Así, tal como está hoy tu `.env`:
+
+  ```
+  BOT_HORARIOS=06:00-08:30,13:30-17:00,18:00-20:00
+  ```
+
+  Si la variable no está, o tiene un formato inválido, el bot cae en la **ventana única
+  6–18 h** (`BOT_HORA_INICIO` / `BOT_HORA_FIN`, en horas sin minutos). Ojo: una variable
+  que ya venga puesta en la consola **gana** sobre el `.env` (el cargador del bot no pisa
+  lo que el entorno ya tiene), así que un `set BOT_HORARIOS=...` suelto en esa ventana de
+  terminal cambia el horario de esa corrida sin dejar rastro en ningún archivo.
 - Bajo perfil: sin ráfagas de 100. Ideal **1 vez al día**.
 
 Se configura solo: la primera vez que le hacés doble clic te pide los 3 datos (Paso 4).
@@ -161,7 +174,8 @@ no existe para el sistema.
 - Compara contra tu base y el panel muestra, bajo la métrica única, si el portal tiene
   causas que vos no (`faltan N`), con cuáles son para que las pegues en **Asignaciones**.
 - Como lista sin entrar a detalles, tarda minutos y no consume el límite de 25 causas.
-- Reutiliza el mismo lock y el horario 6–18 h de `bot-mantenimiento.bat`.
+- Reutiliza el mismo lock y las mismas ventanas horarias (`BOT_HORARIOS` del `.env`) que
+  `bot-mantenimiento.bat`.
 
 **Protecciones del modo** (por qué no puede guardar cualquier cosa):
 
@@ -185,7 +199,8 @@ no existe para el sistema.
 | Cambiar el tamaño de tanda | `set BOT_MAX_CAUSAS=33` |
 | Cambiar el descanso | los `timeout /t 900` (900 s = 15 min) |
 | Más / menos tandas | copiá o borrá un bloque `==== TANDA N ====` |
-| Correr solo en horario laboral (6–18h Chile) | poné `REM ` adelante de `set SKIP_HOUR_CHECK=1` |
+| Correr al margen de tus ventanas horarias | dejar `set SKIP_HOUR_CHECK=1` (ya viene así en este `.bat`) |
+| Respetar solo las ventanas del `.env` | poné `REM ` adelante de `set SKIP_HOUR_CHECK=1` |
 | Usar tu Chrome instalado | descomentá `set BOT_USE_SYSTEM_CHROME=1` |
 
 **Seguridad incorporada:**
@@ -276,7 +291,7 @@ el 17 de septiembre de 2026**. Los fixes clave, ya presentes en el código:
 | **Límite de sesión** | Por tanda (el `.bat` usa 33; el máximo por defecto es 100) |
 | **Tipeo humano** | Caracteres uno a uno con velocidad variable |
 | **Fingerprint** | User-Agent, viewport, idioma de un Chrome real |
-| **Horario laboral** | 6–18h Chile (se puede omitir con `SKIP_HOUR_CHECK=1`) |
+| **Horario laboral** | Tus ventanas de `BOT_HORARIOS` (`.env`); sin esa variable, 6–18 h Chile. Se puede omitir con `SKIP_HOUR_CHECK=1` |
 | **Stealth** | Oculta `navigator.webdriver`, simula plugins de Chrome |
 
 > ⚠️ En julio 2026 un abogado colapsó el sistema con 38.000 escritos automatizados: el
@@ -290,7 +305,9 @@ el 17 de septiembre de 2026**. Los fixes clave, ya presentes en el código:
 |-------|----------|
 | "CAPTCHA detectado" | Cerrar el bot, esperar 1–2 horas (o al día siguiente) y reintentar. |
 | "No hay causas cargadas" | La tabla `causas` está vacía → subí tu Excel desde la app primero. |
-| "Fuera de horario permitido" | Agregá `set SKIP_HOUR_CHECK=1` (ya viene en el `.bat`). |
+| "Fuera de horario permitido" (no arrancó) | Es que la hora actual no cae en ninguna ventana de `BOT_HORARIOS`. O esperás a la próxima ventana, o corré desde `bot-100-causas.bat` / `bot-carga-100.bat` (esos ya traen `set SKIP_HOUR_CHECK=1`; `bot-carga-max.bat` y `bot-mantenimiento.bat` **no**). |
+| La tanda se cortó antes de la hora que esperabas | El corte lo fija la ventana en la que estabas, no un temporizador. Mirá en el `.env` qué ventana cubría esa hora. Si el corte no coincide con ninguna ventana del `.env`, es que esa corrida salió de una consola que traía `BOT_HORARIOS` (o `SKIP_HOUR_CHECK`) puesta a mano: esa variable de la consola gana sobre el `.env` y no queda escrita en ningún archivo. |
+| La tanda avanzó poquísimo y cortó a una hora rara | Mirá el log: un salto de horas entre dos líneas (ej. `Seleccionando tab Familia` 15:30 y la siguiente 01:16) significa que el bot estuvo trabado, no contando causas; esas horas se pierden igual. Pasó: una corrida del 10-nov dejó **16 h** en ese paso y cerró con `bot_error_familia_fail.png`. Suele ser el PC dormido o una pestaña del portal que no respondió. |
 | Descarga de Chromium falla | `set BOT_USE_SYSTEM_CHROME=1` (usa tu Chrome instalado). |
 | "Login fallido" | Verificá RUT/clave. Probá login manual en el portal 1 vez. |
 | Queda en "Corte Suprema" / 0 resultados | Reintentar; el bot ancla a `#familiaTab`. Si persiste, el portal cambió el HTML → avisar. |

@@ -1,10 +1,18 @@
+# Solo el frontend (Next.js) debe subir a Vercel.
+# Los lanzadores .bat y el .env llevan credenciales: nunca deben viajar.
+
 src/bot/
-src/email/
-ejecutar-bot.bat
-ejecutar-todo-el-dia.bat
+db/
+schema-*.sql
+*.bat
+*.bat.example
+.env
+.env.*
+*-log.txt
+*-err.txt
+*.lock
+bot-capturas/
+semantic-review/
+.kiro/
 BOT-PJUD.md
-schema-bot.sql
-schema-email.sql
-schema-config.sql
-schema-flex.sql
-schema-v2.sql
+PLAN-ARQUITECTURA.md
