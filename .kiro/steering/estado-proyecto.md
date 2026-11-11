@@ -111,26 +111,37 @@ Flujo implementado y verificado:
 ## Estado operativo (medido en vivo el 11-nov-2026, 14:23 Chile)
 
 Corrida en curso `run_20261111_1630_vhko` (lanzada 13:30 por la tarea `CausasPro-CargaMax`):
-**330 causas en cola, 55 procesadas, 55 ok, 0 fallidas**, ritmo 1,0 min/causa. La ventana
+a las **15:06** llevaba 100 procesadas, 99 ok y 1 fallida, ritmo 1,0 min/causa. La ventana
 cierra a las 17:00 con ~120 pendientes → las alcanza justas en la ventana de 18:00–20:00.
 **No hay margen: cualquier retraso se arrastra al día siguiente.**
 
-`v_cobertura` al mismo instante:
+`v_cobertura` a las 15:06 de ese mismo día (foto, no constante: la corrida mueve los
+números cada minuto — una hora antes estaba en 1366 pendientes / 476 ok):
 
 | total | ok | sin_datos | error | descatalogadas | vencidas | fuera de cola | por escanear | nunca escaneadas | rezago máx |
 |---|---|---|---|---|---|---|---|---|---|
-| 1975 | 476 | 32 | 60 | 41 | 19 | 1153 | 292 | 935 | **61,4 días** |
+| 1975 | 522 | 32 | 61 | 41 | 43 | 1154 | 269 | 935 | **61,5 días** |
 
-- "1.423 pendientes" es **cobertura sana**: 1153 llevan marcas intencionales de ruido
-  (`[TERMINADA]`, `[NO EN PORTAL]`, `[REVISAR]`) y la cola real es 292. Nunca escaneada sin
-  marca = 0.
+- De dónde sale cada número (y no se suman entre sí):
+  - **1.423** = filas de `v_cola_escaneo` (la vista de cola, que todavía arrastra las causas
+    marcadas como ruido). **NO** es `v_cobertura.pendientes`.
+  - **pendientes** (`v_cobertura`) = solo `escaneo_estado='pendiente'`; iba 1366 → 1319
+    mientras la corrida avanzaba.
+  - **por escanear** 269 y **fuera de cola** 1154 son baldes de la misma vista y ya
+    descuentan el ruido (`[TERMINADA]`, `[NO EN PORTAL]`, `[REVISAR: no scrapeada]`,
+    `[REVISAR LETRA]` — los cuatro literales están en `supabaseSync.ts:47-62`).
+  - Conclusión igual que antes: **"1.423 pendientes" no es un agujero de cobertura**; la cola
+    real eran ~270-292 y nunca-escaneada-sin-marca = 0. Pero al citarlo hay que decir **de
+    qué vista** sale, porque las tres cifras se parecen y no son la misma cuenta.
 - Lo que sí duele: una causa con último escaneo del 11-sep (**61 días**) y 935 que el portal
   conoce pero la cola aún no prioriza.
 - Corridas raras del 10 y 11-nov (`_1425_i0pr` 11:25→13:00 y `_1525_sume` 12:25→07:16)
   arrancaron y se cortaron en horas que **no caen en ninguna ventana del `.env`**. Son las
-  dos manuales (dejan `tanda-ahora-log.txt` / `carga-ahora-log.txt`). La explicación más
-  probable: esa consola traía `BOT_HORARIOS` puesta a mano, y el cargador del `.env`
-  (`src/bot/loadEnv.ts:69`) **no pisa** lo que el entorno ya tiene.
+  dos que dejaron `tanda-ahora-log.txt` / `carga-ahora-log.txt` en la copia viva. Ojo: **el
+  `.bat` que las lanzó no existe ni en la copia viva ni en git** (solo quedan sus logs), así
+  que nadie sabe qué variables le pasó. La explicación más probable: esa consola traía
+  `BOT_HORARIOS` puesta a mano, y el cargador del `.env` (`src/bot/loadEnv.ts:69`) **no pisa**
+  lo que el entorno ya tiene.
   Queda sin confirmación porque **ningún run guarda las ventanas que usó** → ver Pendientes.
 
 ## Historial de decisiones y avances (reciente → antiguo)
@@ -193,8 +204,10 @@ cierra a las 17:00 con ~120 pendientes → las alcanza justas en la ventana de 1
 - Falsas "no encontradas" por la letra del RIT (regex estricta en `src/bot/modules/search.ts`).
 - `searchByYear` sigue limpiando el RUT (`src/bot/modules/search.ts:611`), teoría opuesta a
   la confirmada. Inofensivo mientras `BOT_SEARCH_MODE=rit`.
-- Lock de tanda con revisión-escritura no atómicas (`bot-carga-max.bat:20-29`) y dos
-  lanzadores manuales que no están en git ni documentados.
+- Lock de tanda con revisión-escritura no atómicas (`bot-carga-max.bat:20-29`). Y los dos
+  lanzadores que dejaron `tanda-ahora-log.txt` / `carga-ahora-log.txt` **no existen como
+  `.bat`** en ninguna parte: ni en git ni en la copia viva. Queda solo su output, así que la
+  forma en que corrieron esas dos tandas no está escrita en ningún archivo revisable.
 - Detalles abiertos desde sep-2026, **sin re-verificar**: `⚠️ Familia no confirmado en tabla`
   al volver de cada causa (≈20 s perdidos), y "No se encontró sección de audiencias".
 
